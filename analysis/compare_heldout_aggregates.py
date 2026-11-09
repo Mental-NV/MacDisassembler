@@ -21,18 +21,18 @@ from macscope.macho import thin
 ROUTINES = ("heldout_packet", "heldout_checked")
 BUILDS = tuple(product(("arm64", "x86_64"), ("O0", "O2")))
 STATES = ("sym", "stripped")
-SOURCE = "heldout_aggregate.c"
+SOURCES = {"aggregate": "heldout_aggregate.c", "arithmetic": "heldout_arithmetic.c"}
 HEADER = "heldout_aggregate.h"
 HARNESS = "compare_heldout_aggregate_harness.c"
 COMPAT = "aggregate_compat.h"
-FROZEN = (SOURCE, HEADER, HARNESS, COMPAT, "aggregate_compat.py", "compare_heldout_aggregates.py",
+FROZEN = (HEADER, HARNESS, COMPAT, "aggregate_compat.py", "compare_heldout_aggregates.py",
           "compare_heldout_switch.py", "recovered_compare.py")
 
 
-def freeze():
+def freeze(source):
     revision = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
     files = {}
-    for name in FROZEN:
+    for name in (source, *FROZEN):
         committed = subprocess.check_output(["git", "-C", ROOT, "show", f"{revision}:analysis/{name}"])
         if committed != read_bytes(ROOT / "analysis" / name):
             raise ValueError("The held-out contract must match a committed revision: " + name)
@@ -40,8 +40,8 @@ def freeze():
     return revision, files
 
 
-def build(evaluator, inputs, files, compiler, sdk):
-    for name in (SOURCE, HEADER):
+def build(evaluator, inputs, files, source, compiler, sdk):
+    for name in (source, HEADER):
         (evaluator / name).write_bytes(files[name])
     digests = {}
     for arch, opt in BUILDS:
@@ -50,7 +50,7 @@ def build(evaluator, inputs, files, compiler, sdk):
         directory.mkdir()
         flags = ["-arch", arch, "-isysroot", sdk]
         subprocess.run([compiler, *flags, "-std=c11", "-g", "-" + opt, "-DHELDOUT_LINK_IMAGE",
-                        "-c", f"../{SOURCE}", "-o", "Fixture.o"], cwd=directory, check=True, timeout=30)
+                        "-c", f"../{source}", "-o", "Fixture.o"], cwd=directory, check=True, timeout=30)
         subprocess.run([compiler, *flags, "Fixture.o", "-o", "Fixture"], cwd=directory, check=True, timeout=30)
         subprocess.run([xcrun("--find", "dsymutil"), "Fixture"], cwd=directory, check=True, timeout=30)
         target = inputs / variant
@@ -103,16 +103,16 @@ def capture(output, evaluator, inputs, ghidra, java_home):
             for variant, state, profile_name, name in paths]
 
 
-def evaluate(directory, routine, record, source, compiler, sdk, files):
+def evaluate(directory, routine, record, definitions, compiler, sdk, files, source):
     try:
-        lowered, dependencies = lower_closure(record["name"], source, 2)
+        lowered, dependencies = lower_closure(record["name"], definitions, 2)
     except Unsupported as error:
         return {"status": "not_testable", "reason": str(error)}
     directory.mkdir()
     (directory / "candidate.c").write_text(lowered)
     flags = ["-fsanitize=address", f"-DRECOVERED={record['name']}", f"-DCHECKED={int(routine == ROUTINES[1])}"]
-    result = run_candidate(directory, compiler, sdk, files[HARNESS], {n: files[n] for n in (SOURCE, HEADER, COMPAT)},
-                           flags, reference_source=SOURCE)
+    result = run_candidate(directory, compiler, sdk, files[HARNESS], {n: files[n] for n in (source, HEADER, COMPAT)},
+                           flags, reference_source=source)
     result.update(lowered_sha256=sha(lowered.encode()), captured_definitions=dependencies)
     counts = result.get("results")
     if counts is not None:
@@ -125,7 +125,7 @@ def evaluate(directory, routine, record, source, compiler, sdk, files):
     return result
 
 
-def score(output, evaluator, inputs, compiler, sdk, files):
+def score(output, evaluator, inputs, compiler, sdk, files, source):
     plan = read_json(output / "frozen-plan.json")
     frozen = read_json(output / "frozen-captures.json")
     truth = {}
@@ -156,13 +156,14 @@ def score(output, evaluator, inputs, compiler, sdk, files):
             raise ValueError("Export differs from the frozen capture")
         records = {f["entry_va"]: f for f in snapshot["functions"] if complete(f)}
         addresses = truth[variant]
-        source = {records[entry]["name"]: records[entry]["pseudocode"] for entry in addresses.values() if entry in records}
+        definitions = {records[entry]["name"]: records[entry]["pseudocode"]
+                       for entry in addresses.values() if entry in records}
         for routine, entry in addresses.items():
             record = records.get(entry)
             result = {"status": "not_testable", "reason": "Missing complete pseudocode"}
             if record is not None:
                 directory = output / (Path(row["file"]).stem + "-" + routine)
-                result = evaluate(directory, routine, record, source, compiler, sdk, files)
+                result = evaluate(directory, routine, record, definitions, compiler, sdk, files, source)
                 result["pseudocode_sha256"] = sha(record["pseudocode"].encode())
             results.append(dict(row, analysis_id=snapshot["analysis_id"], routine=routine, entry=entry, **result))
     counts = dict(Counter(row["status"] for row in results))
@@ -176,6 +177,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for field in ("output-dir", "ghidra", "java-home"):
         parser.add_argument("--" + field, type=Path, required=True)
+    parser.add_argument("--fixture", choices=SOURCES, default="aggregate")
     parser.add_argument("--experimental-trusted-input", action="store_true")
     args = parser.parse_args()
     if not args.experimental_trusted_input:
@@ -184,22 +186,24 @@ def main():
     scratch = Path("/tmp").resolve()
     if output == scratch or not output.is_relative_to(scratch):
         parser.error("Choose a new output directory under canonical /tmp")
-    revision, files = freeze()
+    source = SOURCES[args.fixture]
+    revision, files = freeze(source)
     compiler, sdk = xcrun("--find", "clang"), xcrun("--sdk", "macosx", "--show-sdk-path")
     ghidra, java_home = args.ghidra.resolve(), args.java_home.resolve()
     output.mkdir(mode=0o700)
     evaluator, inputs = output / "evaluator", output / "inputs"
     evaluator.mkdir()
     inputs.mkdir()
-    digests = build(evaluator, inputs, files, compiler, sdk)
+    digests = build(evaluator, inputs, files, source, compiler, sdk)
     write_new_json(output / "frozen-plan.json", {
-        "revision": revision, "policy": POLICY, "files_sha256": {name: sha(data) for name, data in files.items()},
+        "revision": revision, "policy": POLICY, "source": source,
+        "files_sha256": {name: sha(data) for name, data in files.items()},
         "compiler_sha256": engine.digest(Path(compiler)), "sdk_version": xcrun("--sdk", "macosx", "--show-sdk-version"),
         "native_sha256": engine.digest(ghidra / "Ghidra/Features/Decompiler/os/mac_arm_64/decompile"),
         "inputs": digests,
     })
     write_new_json(output / "frozen-captures.json", capture(output, evaluator, inputs, ghidra, java_home))
-    report = score(output, evaluator, inputs, compiler, sdk, files)
+    report = score(output, evaluator, inputs, compiler, sdk, files, source)
     write_new_json(output / "report.json", report)
     print(json.dumps({key: report[key] for key in ("status", "counts")}))
     return 0 if report["status"] == "passed" else 6
