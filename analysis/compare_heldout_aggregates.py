@@ -84,9 +84,11 @@ def capture(output, evaluator, inputs, ghidra, java_home):
         for (arch, opt), state in product(BUILDS, STATES):
             variant = f"{arch}-{opt}"
             label = f"{variant}-{state}"
-            project = ["--project", str(projects / label)]
+            project_path = str(projects / label)
+            project = ["--project", project_path]
             worker = ["--ghidra", str(ghidra), "--java-home", str(java_home), "--timeout", "120",
                       "--experimental-trusted-input"]
+            invoke(output / (label + "-create.json"), ["project", "create", project_path])
             invoke(output / (label + "-import.json"), ["import", str(inputs / variant / state), *project, *worker])
             for profile_name in PROFILES:
                 if profile_name != "baseline":
