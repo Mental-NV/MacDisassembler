@@ -59,7 +59,12 @@ collections exceed documented bounds despite successful pseudocode output.
   accounts for the 28 missing instruction records across two captures.
 - [x] Report that conflicting boundary in cached, fresh and replayed
   queries. The owned live test preserved the archived Program and snapshot.
-- [ ] Recover the split stripped arm64 O2 app-main function body.
+- [x] Recover all 23 instructions in both profiles on disposable Program
+  copies using the saved binary-derived boundary evidence. The
+  [control comparison](phase1-findings.md#temporary-split-body-recovery)
+  matched all 196 other functions per profile.
+- [ ] Validate split-body recovery against a held-out variation and decide
+  how the production CLI should apply it.
 - [ ] Measure controlled data-reference completeness.
 - [x] Match three normalized exports per case and profile on the owned
   patched app and tool matrix. The [determinism run](parameter-inference.md#three-run-determinism)

@@ -126,6 +126,30 @@ The separate app-main discovery report matched all 880 independently
 confirmed entries and 870 exact body extents. Its SHA-256 is
 `057e2d05f2ec341417c7ea296691273ebb36e77b0aa20dfe4bf1a049b9f7e8b0`.
 
+### Temporary split-body recovery
+
+A separate planner reproduced the candidate from the binary-only saved
+exports and linker starts. It found the same split in both profiles and
+no candidate in the other 30 app and tool captures. The research script
+`analysis/scripts/JoinUnconfirmedFallthrough.java` ran on read-only
+Program copies. It checked the adjacent fallthrough, the default symbol
+source, the next linker start and incoming references before joining the
+body. It used the next linker start as a bound and derived the joined
+extent from Ghidra's two saved bodies.
+
+The evaluator matched all 23 recovered instruction starts and bytes
+against LLVM in both profiles. Each separate unmodified read-only control
+matched the joined output for the body ranges, disassembly, CFG,
+pseudocode and decompile status of all 196 other functions. The archived
+and disposable Program digests stayed intact. Production queries still
+report the conflicting boundary as partial. A held-out test and a
+production repair policy remain open.
+
+The recovery report SHA-256 is
+`eb4dbc98c09216b083ee0f1f0339f417337dfeb260876f66e5c484bfb86e8ebd`.
+The control report SHA-256 is
+`54298809ec08c85a22847e1db0d72d788b0b0076cadf62295bbecc5b3e2142c8`.
+
 ## Post-review semantics and harness
 
 Semantics **v1.1**, committed separately, fixes controller chain-history
