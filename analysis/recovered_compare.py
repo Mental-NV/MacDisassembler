@@ -52,7 +52,7 @@ def eligible(text, routine, argument):
     return cursor==len(body) and depth==0
 
 
-def matrix_exports(root, *, symbols="sym"):
+def matrix_exports(root, *, symbols="sym", kind="tool"):
     report = read_json(root/"report.json")
     if report.get("status")!="passed":
         raise ValueError("Requires a completed owned profile matrix")
@@ -64,7 +64,7 @@ def matrix_exports(root, *, symbols="sym"):
             label = Path(argv[argv.index("--project")+1]).name
             exports[label].append(root/f"{index:03}.stdout")
     for case in CASES:
-        label = case+"-"+symbols+"-tool"
+        label = case+"-"+symbols+"-"+kind
         if label not in cases or len(exports[label])<2:
             raise ValueError("Missing baseline and inference exports for "+label)
         yield case,cases[label],exports[label][:2]

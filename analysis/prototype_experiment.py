@@ -29,21 +29,23 @@ PARAMETER_MARKER = '"macscope-binary-only-parameters/1"'
 OPTION_POINT = "            Map<String, String> effective = getCurrentAnalysisOptionsAndValues(currentProgram);"
 
 
-def fixture_input(build, case):
-    if case not in CASES:
+def fixture_input(build, case, *, symbols="sym", kind="tool"):
+    if case not in CASES or symbols not in ("sym", "stripped") or kind not in ("tool", "app"):
         raise ValueError("Unsupported fixture case")
     build = Path(build).resolve()
     manifest = read_json(build / "manifest.json")
     if manifest.get("schema") != "macscope-phase1-manifest/2":
         raise ValueError("A source-recorded schema-2 fixture manifest is required")
     config, arch = case.split("-", 1)
+    name = "CorpusFixture" if kind == "tool" else "CalculatorFixture"
     records = [r for r in manifest["artifacts"]
                if (r.get("name"), r.get("config"), r.get("arch"),
                    r.get("symbols"), r.get("container")) ==
-                  ("CorpusFixture", config, arch, "sym", "thin")]
+                  (name, config, arch, symbols, "thin")]
     if len(records) != 1:
         raise ValueError("Missing or ambiguous owned calculator artifact")
-    path = build / "analyst" / (case + "-sym") / "CorpusFixture"
+    executable = name if kind == "tool" else f"{name}.app/Contents/MacOS/{name}"
+    path = build / "analyst" / (case + "-" + symbols) / executable
     if path.is_symlink() or not path.resolve().is_relative_to(build):
         raise ValueError("Fixture input must remain inside its build tree")
     data = read_bytes(path)

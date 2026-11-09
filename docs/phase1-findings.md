@@ -110,6 +110,22 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/audit_core_in
 The measured report SHA-256 is
 `5859c98f8c2be6664f0bddfca4164dbdd9bb3968fd2af4a0e8c59d552a2d3d0a`.
 
+The same audit with `--kind app` matched 13,872 of 13,900 instruction starts
+and byte records in the owned app main. All 2,732 encoded direct targets
+and all 256 direct call references matched. The stripped arm64 O2 app
+omits 14 instructions from the reported `calc_dispatch_table` function
+in each profile. At `0x100000ebc`, a normal fallthrough enters a block at
+`0x100000ec0` that Ghidra treats as a second function. The linker confirms
+the true entry at `0x100000e9c` and records no function start at the split.
+DWARF and LLVM confirm one contiguous function through `0x100000ef8`
+exclusive. The symbol-bearing counterpart retains the whole body.
+
+The app-main instruction report SHA-256 is
+`7143b3c2d12a0f035c5e58035035291e740524ecec44e1026f7a72a9964d31f9`.
+The separate app-main discovery report matched all 880 independently
+confirmed entries and 870 exact body extents. Its SHA-256 is
+`057e2d05f2ec341417c7ea296691273ebb36e77b0aa20dfe4bf1a049b9f7e8b0`.
+
 ## Post-review semantics and harness
 
 Semantics **v1.1**, committed separately, fixes controller chain-history

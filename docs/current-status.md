@@ -54,6 +54,10 @@ collections exceed documented bounds despite successful pseudocode output.
   [the instruction audit](phase1-findings.md#controlled-core-instruction-audit).
 - [x] Match all 256 outgoing direct call references in the controlled tool
   core and verify that the 16 encoded indirect calls have no reported target.
+- [x] Audit the owned app-main core across both architectures and profiles.
+  All 2,732 direct targets matched. A stripped arm64 O2 function boundary
+  accounts for the 28 missing instruction records across two captures.
+- [ ] Recover the split stripped arm64 O2 app-main function body.
 - [ ] Measure controlled data-reference completeness.
 - [x] Match three normalized exports per case and profile on the owned
   patched app and tool matrix. The [determinism run](parameter-inference.md#three-run-determinism)
@@ -104,8 +108,8 @@ collections exceed documented bounds despite successful pseudocode output.
   records signed overflow and caller arity failures separately from
   recovered control flow.
 - [x] Inventory all 26 public routines across the 16 patched calculator
-  captures and test unmodified comparisons and history routines against the
-  reference. See [recovered core behavior](semantics.md#recovered-core-behavior)
+  captures and test unmodified comparison, history and state routines against
+  the reference. See [recovered core behavior](semantics.md#recovered-core-behavior)
   for instruction-byte denominators and the distinct blockers.
 - [ ] Meet the recovered-C behavior and testability gates across the full
   core. Aggregate returns, state-machine harnesses and recovered signed

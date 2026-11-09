@@ -152,25 +152,27 @@ def text_bytes(data, metadata):
     return (va, va + size), data[offset:offset + size]
 
 
-def verified_captures(build, matrix):
+def verified_captures(build, matrix, *, kind="tool"):
     build, matrix = build.resolve(), matrix.resolve()
     states = ("sym", "stripped")
     paired = {
-        state: {case: (prior, paths) for case, prior, paths in matrix_exports(matrix, symbols=state)}
+        state: {case: (prior, paths) for case, prior, paths in matrix_exports(matrix, symbols=state, kind=kind)}
         for state in states
     }
     if paired["sym"].keys() != paired["stripped"].keys():
         raise ValueError("Fixture cohort mismatch")
     for case in paired["sym"]:
-        _, symbol_binary, manifest = fixture_input(build, case)
+        _, symbol_binary, manifest = fixture_input(build, case, kind=kind)
         metadata = thin(symbol_binary)
         text_range, code = text_bytes(symbol_binary, metadata)
         starts = metadata["loader"]["function_starts"]
         if not starts or starts["status"] != "complete":
             raise ValueError("Missing independent linker function starts")
         linker = {int(va, 16) for va in starts["addresses"]}
-        config, arch = case.split("-", 1)
-        dwarf = build / "evaluator" / case / "CorpusFixture.dSYM/Contents/Resources/DWARF/CorpusFixture"
+        arch = case.split("-", 1)[1]
+        dwarf_path = ("CorpusFixture.dSYM/Contents/Resources/DWARF/CorpusFixture" if kind == "tool"
+                      else "CalculatorFixture.app.dSYM/Contents/Resources/DWARF/CalculatorFixture")
+        dwarf = build / "evaluator" / case / dwarf_path
         if dwarf.is_symlink() or not dwarf.resolve().is_relative_to(build):
             raise ValueError("Evaluator DWARF must remain in the owned build tree")
         uuid = re.search(r"UUID: ([0-9A-Fa-f-]+) \(([^)]+)\)", tool_output("--uuid", dwarf))
@@ -182,19 +184,10 @@ def verified_captures(build, matrix):
         truth, exclusions = dwarf_functions(dwarf_text, linker, text_range)
         for state in states:
             prior, exports = paired[state][case]
-            binary_path = build / "analyst" / f"{case}-{state}" / "CorpusFixture"
-            if binary_path.is_symlink() or not binary_path.resolve().is_relative_to(build):
-                raise ValueError("Fixture input must remain inside its build tree")
-            binary = read_bytes(binary_path)
-            case_records = [
-                r for r in manifest["artifacts"]
-                if (r["name"], r["config"], r["arch"], r["symbols"], r["container"])
-                == ("CorpusFixture", config, arch, state, "thin")
-            ]
+            _, binary, _ = fixture_input(build, case, kind=kind, symbols=state)
             observed = thin(binary)
             digest = sha(binary)
-            if (len(case_records) != 1 or case_records[0]["sha256"] != digest
-                    or prior["input_sha256"] != digest or text_bytes(binary, observed) != (text_range, code)
+            if (prior["input_sha256"] != digest or text_bytes(binary, observed) != (text_range, code)
                     or observed["uuid"] != metadata["uuid"]):
                 raise ValueError("Symbol/stripped text or build identity mismatch")
             for profile, path in zip(PROFILES, exports):
@@ -212,13 +205,14 @@ def verified_captures(build, matrix):
                 yield provenance, snapshot, truth, linker, manifest
 
 
-def run(build, matrix):
+def run(build, matrix, kind="tool"):
+    population = "calculator tools" if kind == "tool" else "calculator app mains"
     report = {
         "schema": "macscope-discovery-dwarf/1", "status": "measured", "cases": [],
-        "scope": "Source-aware evaluator comparison of saved binary-only discovery in calculator tools",
+        "scope": "Source-aware evaluator comparison of saved binary-only discovery in " + population,
         "matrix_report_sha256": sha(read_bytes(matrix / "report.json")),
     }
-    for provenance, snapshot, truth, linker, _ in verified_captures(build, matrix):
+    for provenance, snapshot, truth, linker, _ in verified_captures(build, matrix, kind=kind):
         report["cases"].append(dict(score(snapshot, truth, linker), **provenance))
     return report
 
@@ -227,9 +221,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture-build-root", type=Path, required=True)
     parser.add_argument("--profile-matrix", type=Path, required=True)
+    parser.add_argument("--kind", choices=("tool", "app"), default="tool")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    report = run(args.fixture_build_root, args.profile_matrix)
+    report = run(args.fixture_build_root, args.profile_matrix, args.kind)
     write_new_json(args.output, report)
     print(json.dumps({"status": report["status"], "cases": len(report["cases"])}))
     return 0

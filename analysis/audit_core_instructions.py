@@ -53,8 +53,8 @@ def recovered_branch(instruction):
     return kind, target(operands)
 
 
-def llvm_stubs(build, case, decoder):
-    path, _, _ = fixture_input(build, case)
+def llvm_stubs(build, case, decoder, *, kind="tool"):
+    path, _, _ = fixture_input(build, case, kind=kind)
     output = subprocess.check_output([decoder, "--macho", "--indirect-symbols", str(path)], timeout=30)
     if len(output) > 16 << 20:
         raise ValueError("Oversized LLVM indirect symbol evidence")
@@ -185,17 +185,17 @@ def summary(rows):
     )
 
 
-def run(build, matrix):
+def run(build, matrix, kind="tool"):
     decoder = xcrun("--find", "llvm-objdump")
     decodes, stubs = {}, {}
     captures = []
-    for provenance, snapshot, truth, _, _ in verified_captures(build, matrix):
+    for provenance, snapshot, truth, _, _ in verified_captures(build, matrix, kind=kind):
         case = provenance["case"]
         arch = case.split("-", 1)[1]
         extents = core_extents(truth)
         if case not in decodes:
-            decodes[case] = llvm_instructions(build, case, decoder, extents)
-            stubs[case] = llvm_stubs(build, case, decoder)
+            decodes[case] = llvm_instructions(build, case, decoder, extents, kind=kind)
+            stubs[case] = llvm_stubs(build, case, decoder, kind=kind)
         decoded = decodes[case]
         rows, records = inventory(snapshot, extents, decoded)
         for routine, row in rows.items():
@@ -216,7 +216,7 @@ def run(build, matrix):
             row["status"] == "matched" and row.get("call_references", {}).get("status") == "matched"
             for row in rows
         ) else "partial",
-        "scope": "LLVM instruction bytes, direct targets and outgoing call references within the owned tool core",
+        "scope": f"LLVM instruction bytes, direct targets and outgoing call references within the owned {kind} core",
         "matrix_report_sha256": sha(read_bytes(matrix / "report.json")),
         "decoder_sha256": engine.digest(Path(decoder)),
         "summary": summary(rows), "captures": captures,
@@ -227,9 +227,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture-build-root", type=Path, required=True)
     parser.add_argument("--profile-matrix", type=Path, required=True)
+    parser.add_argument("--kind", choices=("tool", "app"), default="tool")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    report = run(args.fixture_build_root, args.profile_matrix)
+    report = run(args.fixture_build_root, args.profile_matrix, args.kind)
     write_new_json(args.output, report)
     print(json.dumps({"status": report["status"], **report["summary"]}))
     return 0 if report["status"] == "matched" else 6

@@ -20,20 +20,22 @@ from macscope.macho import thin
 SCALARS = {name[1:]: argument for name, argument in ROUTINES}
 HISTORY = {name: index for index, name in enumerate(
     ("calc_history_init", "calc_history_push", "calc_history_len", "calc_history_get"), 1)}
+STATE = {"calc_state_init": 1, "calc_engine_clear": 2, "calc_engine_sign_toggle": 3}
 AGGREGATES = frozenset("""
 calc_add calc_sub calc_mul calc_div calc_negate calc_abs_checked calc_pow_checked
 calc_apply_op calc_dispatch_table calc_parse_digits calc_digit_append calc_sign_toggle calc_history_sum
 """.split())
 HISTORY_HARNESS = ROOT / "analysis/compare_history_harness.c"
+STATE_HARNESS = ROOT / "analysis/compare_state_harness.c"
 HISTORY_PARAMETERS = (
     (r"void", (r"long|void\s*\*",)),
     (r"void", (r"long", r"undefined8", r"undefined1", r"undefined8", r"undefined8")),
     (r"undefined8|ulong", (r"long",)),
     (r"long", (r"long", r"ulong")),
 )
-TYPES = frozenset("void long int ulong uint undefined1 undefined8".split())
+TYPES = frozenset("void long int ulong uint undefined1 undefined4 undefined8".split())
 ZERO_ROUTINES = frozenset(("_bzero", "___bzero", "___memset_chk"))
-TOKEN = re.compile(r"\s+|(?:0[xX][0-9a-fA-F]+|[0-9]+)[UL]*|[A-Za-z_]\w*|[{}\[\]();=<>!+,:&|^~*/%\-]",
+TOKEN = re.compile(r"\s+|(?:0[xX][0-9a-fA-F]+|[0-9]+)[UL]*|'\\0'|[A-Za-z_]\w*|[{}\[\]();=<>!+,:&|^~*/%\-]",
                    re.ASCII)
 DECODER_LINE = re.compile(r"^\s*([0-9a-f]+): ([0-9a-f]{8}|[0-9a-f]{2}(?: [0-9a-f]{2})*)\s+(\S+)(.*)$")
 
@@ -46,9 +48,16 @@ def recovered_name(record, routine):
 
 
 def history_declaration(text, name, kind, dependency_names):
+    result_type, argument_types = HISTORY_PARAMETERS[kind - 1]
+    allowed = set(dependency_names)
+    if kind == 1:
+        allowed |= ZERO_ROUTINES
+    return bounded_declaration(text, name, result_type, argument_types, allowed)
+
+
+def bounded_declaration(text, name, result_type, argument_types, extras):
     if not 0 < len(text) <= 16384:
         return None
-    result_type, argument_types = HISTORY_PARAMETERS[kind - 1]
     parameters = r"\s*,\s*".join(rf"(?:{p})\s*(param_[0-9]+)" for p in argument_types)
     declaration = re.fullmatch(
         rf"\s*(?:{result_type})\s+{re.escape(name)}\(\s*({parameters})\s*\)\s*\{{(.*)\}}\s*",
@@ -56,9 +65,7 @@ def history_declaration(text, name, kind, dependency_names):
     )
     if declaration is None:
         return None
-    allowed = TYPES | {"if", "else", "return"} | set(dependency_names)
-    if kind == 1:
-        allowed |= ZERO_ROUTINES
+    allowed = TYPES | {"if", "else", "return", "char"} | extras
     body = declaration.groups()[-1]
     cursor = depth = 0
     for token in TOKEN.finditer(body):
@@ -74,7 +81,7 @@ def history_declaration(text, name, kind, dependency_names):
         cursor = token.end()
     if cursor != len(body) or depth:
         return None
-    return "pointer" if declaration[1].startswith("void") else "integer"
+    return "pointer" if "*" in declaration[1] else "integer"
 
 
 def complete(record):
@@ -124,6 +131,40 @@ def compare_history(directory, routine, record, records, compiler, sdk, harness,
     return measured
 
 
+def compare_state(directory, routine, record, records, compiler, sdk, harness, references):
+    kind = STATE[routine]
+    name = recovered_name(record, routine)
+    text = record["pseudocode"]
+    if re.search(r"\._[0-9]+_[0-9]+_", text):
+        return {"status": "unsupported_aggregate_subfields"}
+    argument = (r"long|undefined8|(?:long|undefined8)\s*\*",)
+    dependencies = {}
+    if kind == STATE["calc_engine_clear"]:
+        init = records.get("calc_state_init")
+        if complete(init):
+            init_name = recovered_name(init, "calc_state_init")
+            if re.search(rf"\b{re.escape(init_name)}\s*\(", text):
+                body = init["pseudocode"]
+                if not bounded_declaration(body, init_name, "void", argument, ZERO_ROUTINES):
+                    return {"status": "unsupported_recovered_dependency"}
+                dependencies[init_name] = body
+    allowed = ZERO_ROUTINES | {"SBORROW8"} | dependencies.keys()
+    declaration = bounded_declaration(text, name, "void", argument, allowed)
+    if declaration is None:
+        return {"status": "unsupported_state_declaration_or_body"}
+    directory.mkdir(mode=0o700)
+    (directory / "candidate.c").write_bytes("\n".join([*dependencies.values(), text]).encode())
+    flags = [
+        "-fsanitize=address", "-fno-strict-aliasing", f"-DRECOVERED={name}",
+        f"-DSTATE_KIND={kind}", f"-DPOINTER_STATE={int(declaration == 'pointer')}",
+    ]
+    measured = run_candidate(directory, compiler, sdk, harness, references, flags)
+    measured["dependency_sha256"] = {name: sha(body.encode()) for name, body in dependencies.items()}
+    if "results" in measured:
+        measured["status"] = count_status(measured["results"], 145, 10000)
+    return measured
+
+
 def core_extents(truth):
     extents = {}
     for entry, (end, names) in truth.items():
@@ -134,8 +175,8 @@ def core_extents(truth):
     return extents
 
 
-def llvm_instructions(build, case, decoder, extents):
-    path, binary, _ = fixture_input(build, case)
+def llvm_instructions(build, case, decoder, extents, *, kind="tool"):
+    path, binary, _ = fixture_input(build, case, kind=kind)
     metadata = thin(binary)
     (text_start, _), code = text_bytes(binary, metadata)
     section, = [s for s in metadata["sections"] if (s["segment"], s["name"]) == ("__TEXT", "__text")]
@@ -241,6 +282,7 @@ def run(args):
     references = {name: read_bytes(ROOT / name) for name in SOURCE_FILES}
     source_hashes = {name: sha(data) for name, data in references.items()}
     scalar_harness, history_harness = read_bytes(HARNESS), read_bytes(HISTORY_HARNESS)
+    state_harness = read_bytes(STATE_HARNESS)
     compiler, decoder = xcrun("--find", "clang"), xcrun("--find", "llvm-objdump")
     sdk = xcrun("--sdk", "macosx", "--show-sdk-path")
     output.mkdir(mode=0o700)
@@ -249,6 +291,7 @@ def run(args):
         "schema": "macscope-core-behavior/1", "status": "failed", "captures": captures,
         "matrix_report_sha256": sha(read_bytes(matrix / "report.json")), "source_sha256": source_hashes,
         "scalar_harness_sha256": sha(scalar_harness), "history_harness_sha256": sha(history_harness),
+        "state_harness_sha256": sha(state_harness),
         "compiler_sha256": engine.digest(Path(compiler)), "decoder_sha256": engine.digest(Path(decoder)),
     }
     try:
@@ -272,6 +315,9 @@ def run(args):
                 elif routine in HISTORY:
                     row.update(compare_history(directory, routine, record, records, compiler, sdk,
                                                history_harness, references))
+                elif routine in STATE:
+                    row.update(compare_state(directory, routine, record, records, compiler, sdk,
+                                             state_harness, references))
                 else:
                     row["status"] = "harness_unimplemented"
             captures.append(dict(
