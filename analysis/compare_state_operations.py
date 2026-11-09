@@ -26,7 +26,42 @@ HARNESS = ROOT / "analysis" / "compare_state_operations_harness.c"
 FORMAT_HARNESS = ROOT / "analysis" / "compare_format_harness.c"
 FORMAT = "calc_format_int64"
 GUARD = re.compile(r"\bPTR____stack_chk_guard_([0-9a-f]{1,16})\b")
+RETURN_ADDRESS = re.compile(r"\b(uStack_[0-9a-f]+)\s*=\s*&UNK_([0-9a-f]{1,16})\s*;")
 STACK_CHECK_LIBRARY = "/usr/lib/libSystem.B.dylib"
+
+
+def bind_return_address(text, binary, image, decoded, binds):
+    """Verify a printed x86 CALL return PC against the imported failure stub."""
+    matches = list(RETURN_ADDRESS.finditer(text))
+    if not matches:
+        return text, (), None
+    if image["arch"] != "x86_64" or len(matches) != 1:
+        raise Unsupported("unverified_stack_return_address")
+    match, = matches
+    variable, literal = match.groups()
+    if (not re.search(rf"\bundefined8\s+{variable}\s*;", text)
+            or len(re.findall(rf"\b{variable}\b", text)) != 2):
+        raise Unsupported("unverified_stack_return_address")
+    address = int(literal, 16)
+    pc = address - 5
+    raw, mnemonic, _ = decoded.get(pc, (b"", "", ""))
+    if mnemonic != "callq" or len(raw) != 5 or raw[0] != 0xe8:
+        raise Unsupported("unverified_stack_return_address")
+    target = address + int.from_bytes(raw[1:], "little", signed=True)
+    section = next((s for s in image["sections"] if s["name"] == "__stubs"
+                    and int(s["va"], 16) <= target <= int(s["va"], 16) + int(s["size"], 16) - 6), None)
+    if section is None:
+        raise Unsupported("unverified_stack_return_address")
+    offset = int(section["file_offset"], 16) + target - int(section["va"], 16)
+    stub = binary[offset:offset+6]
+    if len(stub) != 6 or stub[:2] != b"\xff\x25":
+        raise Unsupported("unverified_stack_return_address")
+    slot = target + 6 + int.from_bytes(stub[2:], "little", signed=True)
+    if not any(row["symbol"] == "___stack_chk_fail" and int(row["va"], 16) == slot for row in binds):
+        raise Unsupported("unverified_stack_return_address")
+    replacement = f"{variable} = (ulong){hex(address)};"
+    evidence = {"call_va": hex(pc), "return_va": hex(address), "stub_va": hex(target), "bind_va": hex(slot)}
+    return text[:match.start()] + replacement + text[match.end():], (variable,), evidence
 
 
 def compare_format(directory, record, binary, decoded, compiler, sdk, harness, references):
@@ -41,7 +76,6 @@ def compare_format(directory, record, binary, decoded, compiler, sdk, harness, r
         if len(guards) != 1:
             raise Unsupported("ambiguous_stack_guard")
         (guard, address), = guards.items()
-        check_tokens(body, {guard, "___stack_chk_fail"})
         image = dict(thin(binary), offset="0x0")
         _, fixups, gaps = dyld.fixups(binary, image)
         binds = [row for row in fixups if row["kind"] == "bind" and row["library"] == STACK_CHECK_LIBRARY
@@ -51,11 +85,15 @@ def compare_format(directory, record, binary, decoded, compiler, sdk, harness, r
         if (gaps or len(guard_rows) != 1 or sum(row["symbol"] == "___stack_chk_fail" for row in binds) != 1
                 or not any(row["target_va"] == address for row in targets)):
             raise Unsupported("unverified_stack_guard_linkage")
+        text, initialized_stack, return_binding = bind_return_address(text, binary, image, decoded, binds)
         if any(intrinsic in body for intrinsic in BYTE_VECTORS):
             if (any(intrinsic in body for intrinsic in ARM_VECTORS) and image["arch"] != "arm64"
                     or "pshufb" in body and image["arch"] != "x86_64"):
                 raise Unsupported("unverified_vector_architecture")
-            text, _ = lower_function(text, name, {guard, "___stack_chk_fail"}, aggregate_required=False)
+            text, _ = lower_function(text, name, {guard, "___stack_chk_fail"}, aggregate_required=False,
+                                     initialized_stack=initialized_stack)
+        else:
+            check_tokens(source_parts(text, name)[2], {guard, "___stack_chk_fail"})
     except Unsupported as error:
         return {"status": "not_testable", "reason": str(error)}
 
@@ -63,6 +101,8 @@ def compare_format(directory, record, binary, decoded, compiler, sdk, harness, r
     (directory / "candidate.c").write_text(f"#define {guard} ((uintptr_t)&gh_stack_guard)\n" + text)
     result = run_candidate(directory, compiler, sdk, harness, references, ["-fsanitize=address", f"-DRECOVERED={name}"])
     result["guard_binding"] = guard_rows[0]
+    if return_binding:
+        result["return_address_binding"] = return_binding
     if "results" in result:
         result["status"] = count_status(result["results"], 1005, 10000)
     return result
@@ -111,7 +151,7 @@ def run(args):
         "matrix_report_sha256": sha(read_bytes(args.profile_matrix / "report.json")),
         "lowerer_sha256": sha(read_bytes(LOWERER)), "compat_sha256": sha(references[COMPAT.name]),
         "harness_sha256": sha(harness), "compiler_sha256": engine.digest(Path(compiler)),
-        "format_harness_sha256": sha(format_harness), "format_linkage_policy": "macscope-stack-check-linkage/1",
+        "format_harness_sha256": sha(format_harness), "format_linkage_policy": "macscope-stack-check-linkage/2",
     }
     try:
         for provenance, snapshot, truth, _, manifest in verified_captures(args.fixture_build_root, args.profile_matrix):

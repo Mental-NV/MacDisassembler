@@ -2,7 +2,7 @@
 import re
 
 
-POLICY = "macscope-ghidra-aggregate-compat/5"
+POLICY = "macscope-ghidra-aggregate-compat/6"
 MEMORY_STORES = frozenset(("STORE_LE16", "STORE_LE32", "STORE_LE64"))
 ARM_VECTORS = frozenset(("NEON_rev64", "NEON_ext"))
 BYTE_VECTORS = ARM_VECTORS | {"pshufb"}
@@ -24,7 +24,7 @@ WORD = re.compile(
 LOCAL = re.compile(r"(?:[a-z]{1,3}Var[0-9]+|[a-z]+Stack_[0-9a-f]+|local_[0-9a-f]+|param_[0-9]+|LAB_[0-9a-f]+)")
 WORDS = set("long ulong int uint bool char byte void undefined1 undefined2 undefined4 undefined8 "
             "if else while do for goto return break continue switch case default true false "
-            "SCARRY8 SBORROW8 SEXT816 ZEXT816 SUB168 CONCAT88".split()) | MEMORY_STORES | BYTE_VECTORS
+            "SCARRY8 SBORROW8 SEXT816 ZEXT816 ZEXT412 SUB168 CONCAT88".split()) | MEMORY_STORES | BYTE_VECTORS
 CALL = re.compile(rf"\b({NAME})\s*\(")
 RAW_ARRAY = re.compile(r"\bundefined1\s+([a-z]{1,3}Var[0-9]+)\s*\[(12|16)\]\s*;")
 UNDEFINED_STACK = re.compile(r"\bundefined[1248]\s+([a-z]+Stack_[0-9a-f]+)\s*;")
@@ -132,7 +132,7 @@ def lower_vector_calls(body, arrays, parameters):
     return body
 
 
-def lower_function(text, name, functions, aggregate_required):
+def lower_function(text, name, functions, aggregate_required, *, initialized_stack=()):
     return_type, params, body, arity = source_parts(text, name)
     result_width = int(return_type.split("[")[1][:-1]) if "[" in return_type else None
     if aggregate_required and result_width is None:
@@ -144,9 +144,9 @@ def lower_function(text, name, functions, aggregate_required):
         raise Unsupported("ambiguous_aggregate_width")
     if any(intrinsic in body for intrinsic in BYTE_VECTORS):
         body = lower_vector_calls(body, arrays, params)
-    undefined = set(UNDEFINED_STACK.findall(body))
+    undefined = set(UNDEFINED_STACK.findall(body)) - set(initialized_stack)
     body = RAW_ARRAY.sub(r"gh_bits \1 = {0};", body)
-    body = UNDEFINED_STACK.sub("", body)
+    body = UNDEFINED_STACK.sub(lambda m: "" if m[1] in undefined else m[0], body)
     if arrays:
         name_pattern = "(?:" + "|".join(sorted(arrays)) + ")"
         slot = rf"\b({name_pattern})(?:\._([0-9]+)_([0-9]+)_|\[([0-9]+)\])"

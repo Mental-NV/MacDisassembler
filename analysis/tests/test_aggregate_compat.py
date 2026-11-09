@@ -2,6 +2,7 @@
 import unittest
 
 from aggregate_compat import Unsupported, lower_closure
+from compare_state_operations import bind_return_address
 
 
 def lowered(body, *, header="undefined1 [16] FUN_100(long param_1)"):
@@ -78,6 +79,21 @@ class AggregateCompatibilityTests(unittest.TestCase):
         """, header="undefined1 [16] FUN_100(undefined1 (*param_1) [16])")
         self.assertIn("pshufb(gh_load_vector(*param_1), CONCAT88(0x102,0x304))", code)
         self.assertIn("gh_store_vector(*param_1, auVar1);", code)
+
+    def test_stack_return_address_requires_a_matching_failure_stub(self):
+        text = "undefined8 uStack_40; uStack_40 = &UNK_1005;"
+        image = {"arch": "x86_64", "sections": [
+            {"name": "__stubs", "va": "0x1020", "size": "0x6", "file_offset": "0x0"}
+        ]}
+        call = {0x1000: (b"\xe8" + (0x1020 - 0x1005).to_bytes(4, "little"), "callq", "")}
+        stub = b"\xff\x25" + (0x1100 - 0x1026).to_bytes(4, "little")
+        binds = [{"symbol": "___stack_chk_fail", "va": "0x1100"}]
+        bound, stack, evidence = bind_return_address(text, stub, image, call, binds)
+        self.assertIn("uStack_40 = (ulong)0x1005;", bound)
+        self.assertEqual(stack, ("uStack_40",))
+        self.assertEqual(evidence["stub_va"], "0x1020")
+        with self.assertRaisesRegex(Unsupported, "unverified_stack_return_address"):
+            bind_return_address(text, stub, image, call, [{"symbol": "_other", "va": "0x1100"}])
 
     def test_does_not_rewrite_a_missing_aggregate_signature_or_unknown_dependency(self):
         with self.assertRaisesRegex(Unsupported, "aggregate_abi_unverified"):
