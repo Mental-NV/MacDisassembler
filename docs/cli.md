@@ -48,6 +48,7 @@ macscope --version
 macscope version --json
 macscope doctor --json --full-digest
 macscope inspect path/to/CalculatorFixture.app --json
+macscope bundle list path/to/CalculatorFixture.app --kind images --json
 macscope project create workspaces/calculator
 macscope import path/to/CorpusFixture --project workspaces/calculator \
   --arch arm64 --experimental-trusted-input --json
@@ -131,6 +132,19 @@ as a separate field. History retains edits and removals and supports
 or comments are tied to the annotation revision.
 
 ## Input preflight
+
+`bundle list APP` inventories physical files by relative path. `--kind images`
+selects Mach-O candidates and identifies the main executable named by
+`Info.plist`. `--kind resources` selects regular non-image files. Records
+include byte size and SHA-256 when hashing completes. The default `all`
+also lists symlinks and special files as metadata. The scan follows physical
+directories, including versioned framework directories, without traversing
+symlinks or mount boundaries.
+
+Inventory is bounded to 10,000 scanned entries, depth 16, 256 MiB per file
+and 512 MiB of hashing. Read or budget gaps are partial. Pagination rescans
+the selected scope and rejects a cursor when the inventory changes.
+Header candidates can be checked with `inspect` before import.
 
 `inspect` is a bounded stdlib preflight for thin/fat/fat64 little-endian
 64-bit arm64 and x86_64 executable/dylib/bundle images. It resolves a main

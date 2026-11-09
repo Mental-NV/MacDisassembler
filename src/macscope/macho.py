@@ -35,21 +35,32 @@ def checked_path(path, directory=False):
     return p
 
 
-def read_regular(path, maximum=MAX_INPUT):
-    p = checked_path(path)
-    # Open every component relative to an already-open directory. A parent
-    # cannot become an attacker-controlled symlink between lstat and open.
+def open_directory(path):
+    """Open an absolute directory path without following any symlinks."""
     directory = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
     try:
-        for part in p.parts[1:-1]:
+        for part in path.parts[1:]:
             nextfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)
             directory = nextfd
+        return directory
+    except BaseException:
+        os.close(directory)
+        raise
+
+
+def read_regular(path, maximum=MAX_INPUT):
+    p = checked_path(path)
+    directory = None
+    try:
+        # A parent cannot be swapped for a symlink between lstat and open.
+        directory = open_directory(p.parent)
         fd = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     except OSError as e:
         raise Error('path_changed', 'Path changed or contains a symlink: '+str(e)) from e
     finally:
-        os.close(directory)
+        if directory is not None:
+            os.close(directory)
     try:
         s = os.fstat(fd)
         if not stat.S_ISREG(s.st_mode) or s.st_size > maximum:

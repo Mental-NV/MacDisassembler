@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotations, calls, engine, search
+from . import annotations, bundle, calls, engine, search
 from .schema import validate_envelope, validate_function
 
 
@@ -67,6 +67,9 @@ def parser():
         s=sub.add_parser(c);common(s)
         if c=='doctor':s.add_argument('--ghidra');s.add_argument('--java-home');s.add_argument('--full-digest',action='store_true')
     s=sub.add_parser('inspect');s.add_argument('input');common(s)
+    s=sub.add_parser('bundle');ss=s.add_subparsers(dest='action',required=True)
+    s=ss.add_parser('list');s.add_argument('path');common(s);pagination(s)
+    s.add_argument('--kind',choices=('all','images','resources'),default='all')
     s=sub.add_parser('project');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('create');s.add_argument('path');common(s)
     s=sub.add_parser('import');s.add_argument('input');s.add_argument('--project',required=True);s.add_argument('--arch',choices=('arm64','x86_64','all'));common(s);budgets(s)
@@ -285,6 +288,17 @@ def execute(a):
     if a.command=='inspect':
         data,_=inspect_path(a.input)
         return envelope(command,data)
+    if a.command=='bundle':
+        inventory,gaps=bundle.inventory(a.path,a.kind)
+        inventory_id=identity({'inventory':inventory,'gaps':gaps})
+        rows,cov=page(inventory['records'],a,inventory_id,identity(os.path.abspath(a.path)),
+                      {'kind':a.kind},order='bundle-relative-path/v1')
+        cov['scope']='physical entries in selected bundle: '+a.kind
+        if gaps:
+            reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+            cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+        data=dict(inventory,inventory_id=inventory_id,records=rows)
+        return envelope(command,data,status='partial' if gaps else 'complete',cov=cov)
     if a.command=='project':
         p=Project.create(a.path)
         return envelope(command,{'project_id':p.project_id,'schema_version':'1.0'})

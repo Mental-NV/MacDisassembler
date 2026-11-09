@@ -60,7 +60,9 @@ collections exceed documented bounds despite successful pseudocode output.
   revisions, search and separate opt-in export.
 - [ ] Apply explicitly accepted type hints with separate provenance and
   affected-cache handling.
-- [ ] Add Objective-C/Swift views and explicit bundle image/resource selection.
+- [x] Inventory physical bundle images and resources with hashes and
+  resumable pages.
+- [ ] Add explicit embedded-image import and Objective-C/Swift views.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.
 - [ ] Exercise isolation, malformed-input fuzzing, schema migrations and
