@@ -1,0 +1,30 @@
+--- a/printc.cc
++++ b/printc.cc
+@@ -461,0 +462,2 @@
++
++void PrintC::opIntSdiv(const PcodeOp *op)
+@@ -462,0 +465,19 @@
++{
++  const Varnode *left = op->getIn(0);
++  const Varnode *right = op->getIn(1);
++  if (getName() != "c-language" || option_nocasts || op->getOut()->getSize() != 16
++      || left->getSize() != 16 || right->getSize() != 16
++      || (left->getHighTypeReadFacing(op)->getMetatype() != TYPE_ARRAY
++          && right->getHighTypeReadFacing(op)->getMetatype() != TYPE_ARRAY)) {
++    opBinary(&divide,op);
++    return;
++  }
++  // An infix C operator would treat a byte-array operand as a pointer.
++  // Keep the signed p-code operation explicit and preserve both operands.
++  pushOp(&function_call,op);
++  pushAtom(Atom("SDIV16",optoken,EmitMarkup::no_color,op));
++  pushOp(&comma,op);
++  pushVn(right,op,mods);
++  pushVn(left,op,mods);
++}
++
+--- a/printc.hh
++++ b/printc.hh
+@@ -311 +311 @@
+-  virtual void opIntSdiv(const PcodeOp *op) { opBinary(&divide,op); }
++  virtual void opIntSdiv(const PcodeOp *op);
