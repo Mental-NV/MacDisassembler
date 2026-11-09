@@ -118,8 +118,13 @@ collections exceed documented bounds despite successful pseudocode output.
   input, engine, isolation, profile, and limits. A live cancellation and
   restart reproduced the request and retained the prior snapshot until
   publication. Publication receipts make repeated requests idempotent.
-- [ ] Extend recorded restarts to import and fresh query jobs, and verify
-  worker exit after supervisor loss before automatic restart.
+- [x] Restart eligible unpublished import slices from the immutable workspace
+  copy. An owned universal import resumed its cancelled x86_64 slice after
+  removal of the original input and preserved the committed arm64 Program.
+  Journal recovery verifies and publishes a saved Program across interruption
+  before or after its directory move.
+- [ ] Extend recorded restarts to fresh query jobs and verify worker exit
+  after supervisor loss before automatic restart.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

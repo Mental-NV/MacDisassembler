@@ -19,10 +19,18 @@ SUMMARY = ("job_id", "mode", "image_id", "elapsed_seconds", "started_unix", "ret
 DETAILS = ("analysis_profile", "limits", "sandbox_sha256", "selected_entry", "source_analysis_id",
            "resumed_from")
 ANALYSIS_REQUEST = "macscope-analysis-request/1"
+IMPORT_REQUEST = "macscope-import-request/1"
 PUBLISH = """
 CREATE TABLE IF NOT EXISTS analysis_publications (
     job_id TEXT PRIMARY KEY,
     analysis_id TEXT NOT NULL REFERENCES analyses(id),
+    resumed_from TEXT UNIQUE
+)
+"""
+PUBLISH_IMPORT = """
+CREATE TABLE IF NOT EXISTS import_publications (
+    job_id TEXT PRIMARY KEY,
+    image_id TEXT NOT NULL REFERENCES images(id),
     resumed_from TEXT UNIQUE
 )
 """
@@ -168,13 +176,17 @@ def analysis_request(project, image):
     }
 
 
-def publication(project, job_id):
+def publication(project, job_id, mode="analyze"):
+    if mode == "import":
+        table, columns = "import_publications", ("job_id", "image_id", "resumed_from")
+    else:
+        table, columns = "analysis_publications", ("job_id", "analysis_id")
     with project.db() as db:
         db.execute("BEGIN")
-        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='analysis_publications' AND type='table'").fetchone():
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name=? AND type='table'", (table,)).fetchone():
             return None
         row = db.execute(
-            "SELECT job_id, analysis_id FROM analysis_publications WHERE job_id=? OR resumed_from=?",
+            f"SELECT {', '.join(columns)} FROM {table} WHERE job_id=? OR resumed_from=?",
             (job_id, job_id),
         ).fetchone()
-    return dict(zip(("job_id", "analysis_id"), row)) if row else None
+    return dict(zip(columns, row)) if row else None

@@ -1027,22 +1027,24 @@ class CliTests(TemporaryCase):
                     + bytes(16) + arm64 + x86_64)
         metadata = macho.inspect_bytes(original)
         metadata.update(input_name='synthetic-universal.macho', warnings=[])
-        deps = {'ghidra_version': '12.2', 'jdk_version': 'synthetic dependency record'}
+        deps = {'ghidra_version': '12.2', 'jdk_version': 'synthetic dependency record',
+                'ghidra_path': '/synthetic/ghidra', 'java_home': '/synthetic/java'}
         first_id, second_id = [item['image_id'] for item in metadata['slices']]
-        def worker(p, image, mode, args, dependencies):
+        def worker(p, image, mode, args, dependencies, **request):
             self.assertEqual(mode, 'import')
             self.assertEqual(p.path, project.path)
             self.assertEqual(dependencies, deps)
             if image['image_id'] == second_id:
                 raise Error('worker_failed', 'Synthetic second-slice worker failure', 10, retryable=True)
             self.assertEqual(image['image_id'], first_id)
-            baseline = p.path / 'engine' / image['image_id']
-            baseline.mkdir(mode=0o700)
+            self.assertEqual(request['import_request']['image_id'], first_id)
+            baseline = p.path / 'jobs' / ('a' * 32) / 'program'
+            baseline.mkdir(mode=0o700, parents=True)
             (baseline / 'image.gpr').write_bytes(b'synthetic imported baseline')
             return ({'validation': {'headless_analysis_enabled': False},
                      'executable_format': 'Mac OS X Mach-O',
                      'language_id': 'AARCH64:LE:64:AppleSilicon', 'compiler_spec_id': 'default',
-                     'executable_sha256': image['sha256']}, {'job_id': 'first-slice-job'})
+                     'executable_sha256': image['sha256']}, {'job_id': 'a' * 32})
         argv = ['import', 'synthetic-universal.macho', '--project', str(project.path),
                 '--arch', 'all', '--experimental-trusted-input', '--json']
         with mock.patch.object(cli, 'inspect_path', return_value=(metadata, original)), \
@@ -1064,7 +1066,7 @@ class CliTests(TemporaryCase):
         completed = result['error']['partial_results']['completed_slices']
         self.assertEqual(completed, result['data'])
         self.assertEqual(completed, [{'image_id': first['image_id'], 'arch': 'arm64',
-                                     'status': 'imported', 'job_id': 'first-slice-job'}])
+                                     'status': 'imported', 'job_id': 'a' * 32}])
         self.assertEqual(result['error']['partial_results']['failed_slice'], second['image_id'])
         # Reopen to prove the first transaction is committed, not just visible
         # within the import's connection, while the failed slice is unpublished.

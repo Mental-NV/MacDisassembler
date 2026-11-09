@@ -14,7 +14,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, flow_evidence, jobs, metadata, objc, search, swift_symbols
+from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, flow_evidence, import_state, jobs, metadata, objc, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -361,12 +361,12 @@ def import_annotations(args, project):
 
 def job_command(args, project, command):
     if args.action == 'resume':
-        return resume_analysis(args,project,command)
+        return resume_job(args,project,command)
     if args.action != 'list':
         path, record = jobs.get(project,args.job_id)
         data = jobs.request_cancel(path,record) if args.action == 'cancel' else jobs.view(path,record,detail=True)
         if args.action == 'show':
-            receipt = jobs.publication(project,args.job_id)
+            receipt = jobs.publication(project,args.job_id,record.get('mode'))
             if receipt:
                 data['publication'] = receipt
         return envelope(command,redact(data))
@@ -431,80 +431,95 @@ def analyze_image(project, image, args, deps, command, *, resumed_from=None):
     return analysis_response(command,normalized,job['job_id'],resumed_from=resumed_from)
 
 
-def resume_analysis(args, project, command):
+def resume_job(args, project, command):
     if not args.experimental_trusted_input:
-        raise Error('isolation_required','Restarting analysis requires --experimental-trusted-input',3)
+        raise Error('isolation_required','Restarting a job requires --experimental-trusted-input',3)
     with project.writer():
         path, record = jobs.get(project,args.job_id)
-        request = record.get('analysis_request')
-        if (record.get('mode') != 'analyze' or not isinstance(request,dict)
-                or request.get('schema') != jobs.ANALYSIS_REQUEST):
-            raise Error('job_resume_unsupported','The job has no supported recorded analysis request',3)
+        mode = record.get('mode')
+        if mode not in ('analyze','import'):
+            raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
+        request = record.get('analysis_request' if mode == 'analyze' else 'import_request')
+        schema = jobs.ANALYSIS_REQUEST if mode == 'analyze' else jobs.IMPORT_REQUEST
+        if not isinstance(request,dict) or request.get('schema') != schema:
+            raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
         if record['status'] in jobs.ACTIVE or jobs.leased(path):
             raise Error('job_resume_ownership','Cannot verify that the previous worker stopped',8)
-        image_id = request.get('image_id')
-        if not isinstance(image_id,str) or not re.fullmatch(r'[0-9a-f]{64}',image_id):
-            raise Error('job_manifest','Invalid recorded analysis image ID')
-        if request.get('project_id') != project.project_id or record.get('image_id') != image_id:
-            raise Error('job_resume_inputs','The recorded request belongs to a different project or image',8)
-        image = project.select(image_id)
-        current = jobs.analysis_request(project,image)
-        if dict(request,previous_analysis_id=image['active_analysis']) != current:
-            raise Error('job_resume_inputs','The recorded immutable inputs differ from the workspace',8)
-        receipt = jobs.publication(project,args.job_id)
-        if receipt:
-            if receipt['job_id'] == args.job_id:
-                raise Error('job_completed','The original job already published an analysis',8,partial=receipt)
-            snapshot,_ = project.snapshot(dict(image,active_analysis=receipt['analysis_id']))
-            return analysis_response(command,snapshot,receipt['job_id'],resumed_from=args.job_id,reused=True)
-        if request != current:
-            raise Error('job_resume_conflict','The active analysis changed since the recorded request',8)
-        budgets = record.get('limits')
-        policy = record.get('analysis_profile')
-        fields = {'timeout':'timeout_seconds','function_timeout':'function_timeout_seconds',
-                  'max_functions':'max_functions','heap_mib':'java_heap_mib'}
-        if (not isinstance(budgets,dict) or any(type(budgets.get(key)) is not int for key in fields.values())
-                or not isinstance(policy,dict) or not isinstance(policy.get('name'),str)):
-            raise Error('job_manifest','Invalid recorded analysis profile or limits')
-        replay = argparse.Namespace(command='analyze',profile=policy['name'],jobs=1,max_memory_mib=None,
-                                    startup_timeout=None,experimental_trusted_input=True,
-                                    **{arg:budgets[key] for arg,key in fields.items()})
-        limits(replay)
-        check_engine_access(replay,project)
-        if engine.analysis_profile(replay.profile) != policy or engine.worker_limits(replay,replay.max_functions) != budgets:
-            raise Error('job_resume_policy','The recorded profile or worker limits differ from the supported policy',3)
-        deps = engine.dependencies(args.ghidra,args.java_home,full=True)
-        if (deps != record.get('dependencies')
-                or hashlib.sha256(engine.profile(project,deps).encode()).hexdigest() != record.get('sandbox_sha256')):
-            raise Error('job_resume_engine','Select the exact recorded engine, JDK and isolation policy to restart',4)
-        artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
-        if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
-            raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
-        return analyze_image(project,image,replay,deps,command,resumed_from=args.job_id)
+        if mode == 'import':
+            return resume_import(args,project,command,record,request)
+        return resume_analysis(args,project,command,record,request)
 
 
-def import_slice(project, image, original, args, deps):
-    artifact = project.path/'inputs'/(image['artifact_sha256']+'.artifact')
-    if not artifact.exists():
-        atomic(artifact,original,mode=0o400)
-    elif hashlib.sha256(read_regular(artifact)).hexdigest()!=image['artifact_sha256']:
-        raise Error('input_integrity','Existing immutable artifact is corrupt')
-    snap = project.path/'inputs'/(image['image_id']+'.macho')
-    start, size = int(image['offset'],16), int(image['size'],16)
-    if not snap.exists():
-        atomic(snap,original[start:start+size],mode=0o400)
-    elif hashlib.sha256(read_regular(snap)).hexdigest()!=image['sha256']:
-        raise Error('input_integrity','Existing immutable slice is corrupt')
-    raw,job = engine.run(project,image,'import',args,deps)
-    if raw.get('validation',{}).get('headless_analysis_enabled') is not False:
-        raise Error('import_analysis','Import did not disable autoanalysis',10)
-    image['loader_evidence'] = {k:raw[k] for k in ('executable_format','language_id','compiler_spec_id','executable_sha256')}
-    image['import_dependencies'] = deps
-    image['engine_baseline_sha256'] = engine.tree_digest(project.path/'engine'/image['image_id'])
-    with project.db(False) as db:
-        db.execute('INSERT OR REPLACE INTO images(id,arch,metadata,imported) VALUES(?,?,?,1)',
-                   (image['image_id'],image['arch'],canonical(image).decode()))
-    return job['job_id']
+def replay_worker_request(args, project, record):
+    mode, budgets, policy = record['mode'], record.get('limits'), record.get('analysis_profile')
+    fields = {'timeout':'timeout_seconds','function_timeout':'function_timeout_seconds',
+              'max_functions':'max_functions','heap_mib':'java_heap_mib'}
+    if not isinstance(budgets,dict) or any(type(budgets.get(key)) is not int for key in fields.values()):
+        raise Error('job_manifest','Invalid recorded worker limits')
+    profile = None
+    if mode == 'analyze':
+        if not isinstance(policy,dict) or not isinstance(policy.get('name'),str):
+            raise Error('job_manifest','Invalid recorded analysis profile')
+        profile = policy['name']
+    replay = argparse.Namespace(command=mode,profile=profile,jobs=1,max_memory_mib=None,
+                                startup_timeout=None,experimental_trusted_input=True,
+                                **{arg:budgets[key] for arg,key in fields.items()})
+    limits(replay)
+    check_engine_access(replay,project)
+    if ((engine.analysis_profile(profile) if profile else None) != policy
+            or engine.worker_limits(replay,replay.max_functions) != budgets):
+        raise Error('job_resume_policy','The recorded profile or worker limits differ from the supported policy',3)
+    deps = engine.dependencies(args.ghidra,args.java_home,full=True)
+    if (deps != record.get('dependencies')
+            or hashlib.sha256(engine.profile(project,deps).encode()).hexdigest() != record.get('sandbox_sha256')):
+        raise Error('job_resume_engine','Select the exact recorded engine, JDK and isolation policy to restart',4)
+    return replay,deps
+
+
+def resume_analysis(args, project, command, record, request):
+    image_id = request.get('image_id')
+    if not isinstance(image_id,str) or not re.fullmatch(r'[0-9a-f]{64}',image_id):
+        raise Error('job_manifest','Invalid recorded analysis image ID')
+    if request.get('project_id') != project.project_id or record.get('image_id') != image_id:
+        raise Error('job_resume_inputs','The recorded request belongs to a different project or image',8)
+    image = project.select(image_id)
+    current = jobs.analysis_request(project,image)
+    if dict(request,previous_analysis_id=image['active_analysis']) != current:
+        raise Error('job_resume_inputs','The recorded immutable inputs differ from the workspace',8)
+    receipt = jobs.publication(project,args.job_id)
+    if receipt:
+        if receipt['job_id'] == args.job_id:
+            raise Error('job_completed','The original job already published an analysis',8,partial=receipt)
+        snapshot,_ = project.snapshot(dict(image,active_analysis=receipt['analysis_id']))
+        return analysis_response(command,snapshot,receipt['job_id'],resumed_from=args.job_id,reused=True)
+    if request != current:
+        raise Error('job_resume_conflict','The active analysis changed since the recorded request',8)
+    replay,deps = replay_worker_request(args,project,record)
+    artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
+    if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
+        raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
+    return analyze_image(project,image,replay,deps,command,resumed_from=args.job_id)
+
+
+def resume_import(args, project, command, record, request):
+    image, original = import_state.restore_request(project,request,record.get('image_id'))
+    receipt = jobs.publication(project,args.job_id,'import')
+    if receipt:
+        if receipt['resumed_from'] != args.job_id:
+            raise Error('job_completed','The original job already published an import',8,partial=receipt)
+        if receipt['image_id'] != image['image_id']:
+            raise Error('import_publication','The import receipt refers to a different image')
+        job_id = receipt['job_id']
+    else:
+        if any(item['imported'] and item['image_id'] == image['image_id'] for item in project.images()):
+            raise Error('job_resume_conflict','The slice was imported by a different attempt',8)
+        replay,deps = replay_worker_request(args,project,record)
+        job_id = import_state.import_slice(project,image,original,replay,deps,resumed_from=args.job_id)
+    data = {'image_id':image['image_id'],'arch':image['arch'],'job_id':job_id,
+            'resumed_from':args.job_id,'reused_restart':bool(receipt)}
+    if 'bundle_image' in image:
+        data['bundle_image'] = image['bundle_image']
+    return envelope(command,data,cov=coverage('recorded slice import'))
 
 
 def import_inputs(args, project, deps):
@@ -547,7 +562,7 @@ def import_inputs(args, project, deps):
                 if failed_slice in existing:
                     row['status'] = 'already_imported'
                 else:
-                    row.update(status='imported',job_id=import_slice(project,image,original,args,deps))
+                    row.update(status='imported',job_id=import_state.import_slice(project,image,original,args,deps))
                     existing.add(failed_slice)
                 result.append(row)
     except Error as error:
@@ -557,6 +572,8 @@ def import_inputs(args, project, deps):
                             cov=coverage(scope,len(result),known_total,True,reason=error.code),
                             diagnostics=[str(error)])
         partial = {'completed_slices':result,'failed_slice':failed_slice}
+        if isinstance(error.partial,dict) and error.partial.get('job_id'):
+            partial['failed_job_id'] = error.partial['job_id']
         if bundled:
             partial['failed_bundle_image'] = relative
         response['error'] = {'code':error.code,'message':str(error),

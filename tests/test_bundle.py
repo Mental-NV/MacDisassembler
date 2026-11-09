@@ -117,15 +117,16 @@ class BundleInventoryTests(unittest.TestCase):
         args = cli.parser().parse_args(["import", str(self.app), "--project", str(project.path),
                                         "--include-images", alias, "--experimental-trusted-input"])
 
-        def worker(workspace, imported, mode, options, dependencies):
+        def worker(workspace, imported, mode, options, dependencies, **request):
             self.assertEqual(mode, "import")
-            (workspace.path / "engine" / imported["image_id"]).mkdir()
+            job_id = imported["image_id"][:32]
+            (workspace.path / "jobs" / job_id / "program").mkdir(parents=True)
             result = {"validation": {"headless_analysis_enabled": False},
                       "executable_format": "Mac OS X Mach-O", "language_id": imported["arch"],
                       "compiler_spec_id": "test", "executable_sha256": imported["sha256"]}
-            return result, {"job_id": "test"}
+            return result, {"job_id": job_id}
 
-        with patch.object(engine, "dependencies", return_value={}), \
+        with patch.object(engine, "dependencies", return_value={"ghidra_path": "/engine", "java_home": "/java"}), \
              patch.object(engine, "run", side_effect=worker) as run:
             imported = cli.execute(args)
             repeated = cli.execute(args)

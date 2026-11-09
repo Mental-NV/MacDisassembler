@@ -393,27 +393,31 @@ the final state, since a worker can finish while a request is being written.
 A confirmed cancellation exits 130 in the original command and preserves
 the prior committed snapshot.
 
-Restart an eligible unpublished analysis with its recorded request.
+Restart an eligible unpublished analysis or import slice with its recorded
+request.
 
 ```sh
 macscope jobs resume JOB_ID --project workspaces/calculator \
   --experimental-trusted-input --json
 ```
 
-The restart creates a new job from the verified immutable artifact, slice,
-and pristine import Program. It preserves the recorded profile and worker
-limits. Select the same Ghidra and JDK used by the original job, including
-any explicit `--ghidra` or `--java-home` paths. The CLI also verifies
-the recorded isolation policy before launching.
+The restart verifies the stored immutable artifact and selected slice. It
+preserves the recorded worker limits and, for analysis, uses the pristine
+import Program and recorded profile. Select the same Ghidra and JDK used by
+the original job, including any explicit `--ghidra` or `--java-home` paths.
+The CLI also verifies the recorded isolation policy before launching.
 
-The analysis and its publication receipt commit together. Repeating a
-successful restart returns the recorded result without changing the active
-analysis. A worker that finished before publication can be restarted from
-the pristine import. An active or disconnected job with unconfirmed exit,
-an older job without a recorded request, or an intervening active analysis
-change requires a new explicit analysis decision. This command currently
-restarts analysis jobs. Reissue import or fresh decompile commands for
-those operations.
+For a partial import batch, use the `failed_job_id` in the error's partial
+results to restart that slice. The workspace's artifact copy is sufficient
+even if the original input path has disappeared. Other committed slices stay
+available. If Ghidra finished and the import journal was written, the CLI can
+verify the saved Program and finish publishing it without running Ghidra again.
+
+The result and its publication receipt commit together. Repeating a successful
+restart returns the recorded result. An active job or a disconnected job with
+unconfirmed exit is ineligible, as is an older job without a recorded request.
+Analysis restart also checks that its preceding active analysis is still
+current. Fresh decompile jobs require reissuing the original command.
 
 Raw bridge JSON and job manifests/logs remain private in the workspace.
 Normalized exports sort function and unordered cross-reference records (retaining

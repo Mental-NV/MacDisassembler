@@ -245,7 +245,8 @@ def worker_limits(args, max_functions):
     }
 
 
-def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None, resumed_from=None):
+def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
+        import_request=None, resumed_from=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -320,14 +321,21 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':worker_limits(args,max_functions), 'environment':env, 'sandbox_sha256':digest(sandbox)}
     if analysis_request is not None:
         manifest['analysis_request'] = analysis_request
-        if resumed_from is not None:
-            manifest['resumed_from'] = resumed_from
+    if import_request is not None:
+        manifest['import_request'] = import_request
+    if resumed_from is not None:
+        manifest['resumed_from'] = resumed_from
     if entry is not None:
         manifest.update(selected_entry=entry, source_analysis_id=image['active_analysis'])
     if hints is not None:
         manifest.update(type_hint_view_id=identity({'source_analysis_id':image['active_analysis'],'hints':hints}),
                         type_hints_sha256=digest(request),type_hints=hints)
-    run_process(argv, cwd=job, env=env, timeout=args.timeout, log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
+    try:
+        run_process(argv, cwd=job, env=env, timeout=args.timeout, log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
+    except Error as error:
+        if error.partial is None:
+            error.partial = {'job_id':jobid}
+        raise
     try:
         if b'Skipping unsupported -loader-' in read_regular(job/'launcher.log',8*1024*1024):
             raise Error('loader_option_unsupported','Pinned loader rejected a requested safety option',4)
@@ -369,10 +377,13 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         elif applied:
             raise Error('type_hint_result_mismatch','Worker applied unrequested type hints',10)
         if mode == 'import':
-            destination = project.path/'engine'/image['image_id']
-            if destination.exists():
-                raise Error('engine_project_exists', 'An engine baseline already exists without an image record; inspect workspace before retry', 8)
-            os.rename(engine_dir,destination)
+            if result.get('validation',{}).get('headless_analysis_enabled') is not False:
+                raise Error('import_analysis','Import did not disable autoanalysis',10)
+            if import_request is None:
+                destination = project.path/'engine'/image['image_id']
+                if destination.exists():
+                    raise Error('engine_project_exists', 'An engine baseline already exists without an image record; inspect workspace before retry', 8)
+                os.rename(engine_dir,destination)
     except (Error, OSError) as e:
         manifest.update(status='failed',error={'code':getattr(e,'code','bridge_publication'),'message':str(e)})
         write_json(job/'job.json',manifest,force=True)
