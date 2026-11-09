@@ -48,11 +48,13 @@ def restore_request(project, request, image_id):
     original = read_regular(project.path / "inputs" / (request["artifact_sha256"] + ".artifact"))
     if hashlib.sha256(original).hexdigest() != request["artifact_sha256"]:
         raise Error("input_integrity", "Immutable artifact digest differs from the recorded import")
-    inspected = inspect_bytes(original)
+    inspected = inspect_bytes(original, allow_arm64e=True)
     matching = [s for s in inspected["slices"] if s["image_id"] == image_id]
     if len(matching) != 1:
         raise Error("job_resume_inputs", "The recorded slice is absent from the immutable artifact", 8)
     image = dict(matching[0], artifact_sha256=request["artifact_sha256"], input_name=name)
+    if image["arch"] == "arm64e":
+        raise Error("unsupported_arch", "arm64e is available for data-only inspection", 3)
     if origin is not None:
         image["bundle_image"] = origin
     if request_for(project, image) != request:

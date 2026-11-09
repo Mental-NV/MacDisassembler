@@ -107,7 +107,16 @@ collections exceed documented bounds despite successful pseudocode output.
   separately linked owned binaries matched Apple tooling on 1,086 fixups.
 - [x] Query bounded modern and legacy export tries from the immutable
   slice. Apple and LLVM comparisons verified 406 exports on owned images.
-- [ ] Expand tested dyld pointer formats.
+- [x] Decode arm64e userland chained fixups through data-only file queries.
+  Apple tooling matched 18 records across a linked format-12 fixture and
+  two derived format-1/9 copies. Universal selection distinguishes arm64e.
+  The decoder handled 12,000 seeded fixup-table and pointer mutations.
+- [x] Probe authenticated instructions on an owned arm64e fixture in
+  disposable full Ghidra. The loader accepted the image, but low p-code
+  omitted signing and authentication effects.
+- [ ] Validate authenticated call and pointer semantics before enabling
+  arm64e engine import and analysis. Shared-cache, kernel and other
+  chained formats remain outside the decoder.
 - [x] Expose Objective-C classes, methods and selector references with
   static provenance. The owned app matrix matched 216 method addresses.
 - [x] Expose Swift symbol-table names and optional sandboxed demangling

@@ -9,7 +9,15 @@ from .macho_load import bounded
 
 MAX_FIXUPS = 10000
 MAX_PAGE_RECORDS = 262144
-POINTER_FORMATS = {2: "DYLD_CHAINED_PTR_64", 6: "DYLD_CHAINED_PTR_64_OFFSET"}
+POINTER_FORMATS = {
+    1: "DYLD_CHAINED_PTR_ARM64E",
+    2: "DYLD_CHAINED_PTR_64",
+    6: "DYLD_CHAINED_PTR_64_OFFSET",
+    9: "DYLD_CHAINED_PTR_ARM64E_USERLAND",
+    12: "DYLD_CHAINED_PTR_ARM64E_USERLAND24",
+}
+ARM64E_FORMATS = {1, 9, 12}
+AUTH_KEYS = ("IA", "IB", "DA", "DB")
 IMPORT_WIDTHS = {1: 4, 2: 8, 3: 16}
 
 
@@ -64,6 +72,50 @@ def segment_pages(data, payload, starts, starts_end, segments):
         yield segments[index], pointer_format, segment_offset, page_size, pages, payload+at+22
 
 
+def rebase_target(target, high, base):
+    decoded = base + target
+    if decoded >= 1 << 56:
+        raise Error("fixup_pointer", "Chained target exceeds its address field")
+    return {"kind": "rebase", "target_va": hex(decoded | high << 56), "high8": hex(high)}
+
+
+def arm64e_pointer(value, kind, base):
+    authenticated = bool(value >> 63)
+    bind = bool(value >> 62 & 1)
+    if bind:
+        ordinal_bits = 24 if kind == 12 else 16
+        ordinal = value & ((1 << ordinal_bits) - 1)
+        if (value & 0xFFFFFFFF) >> ordinal_bits:
+            raise Error("fixup_pointer", "Reserved arm64e chained bind bits are set")
+        addend = 0 if authenticated else value >> 32 & 0x7FFFF
+        if addend >= 1 << 18:
+            addend -= 1 << 19
+        fields = {"kind": "bind", "ordinal": ordinal, "inline_addend": addend, "target_va": None}
+    elif authenticated:
+        fields = rebase_target(value & 0xFFFFFFFF, 0, base)
+    else:
+        fields = rebase_target(value & ((1 << 43) - 1), value >> 43 & 0xFF, 0 if kind == 1 else base)
+    fields["authenticated"] = authenticated
+    fields["authentication"] = ({
+        "key": AUTH_KEYS[value >> 49 & 3], "address_diversity": bool(value >> 48 & 1),
+        "diversity": value >> 32 & 0xFFFF,
+    } if authenticated else None)
+    return fields, (value >> 51 & 0x7FF) * 8
+
+
+def ordinary_pointer(value, kind, base):
+    if value >> 63:
+        if value >> 32 & 0x7FFFF:
+            raise Error("fixup_pointer", "Reserved chained bind bits are set")
+        fields = {"kind": "bind", "ordinal": value & 0xFFFFFF,
+                  "inline_addend": value >> 24 & 0xFF, "target_va": None}
+    else:
+        if value >> 44 & 0x7F:
+            raise Error("fixup_pointer", "Reserved chained rebase bits are set")
+        fields = rebase_target(value & ((1 << 36) - 1), value >> 36 & 0xFF, base if kind == 6 else 0)
+    return fields, (value >> 51 & 0xFFF) * 4
+
+
 def decode_chained(data, image, parsed, extent):
     payload,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
     end = payload+size
@@ -103,6 +155,11 @@ def decode_chained(data, image, parsed, extent):
         if kind not in POINTER_FORMATS:
             unsupported.append(f"pointer_format_{kind}")
             continue
+        arm64e = kind in ARM64E_FORMATS
+        if arm64e and parsed["arch"] not in ("arm64", "arm64e"):
+            raise Error("fixup_pointer", "An arm64e pointer format requires an ARM64 image")
+        stride = 8 if arm64e else 4
+        decode = arm64e_pointer if arm64e else ordinary_pointer
         segment_va = int(segment["va"],16)
         file_offset = segment["file_offset"]
         if segment_va-base!=segment_offset or file_offset is None:
@@ -116,7 +173,7 @@ def decode_chained(data, image, parsed, extent):
             first = struct.unpack_from("<H",data,page_table+page*2)[0]
             if first==0xFFFF:
                 continue
-            if first>=page_size or first%4:
+            if first>=page_size or first%stride:
                 raise Error("fixup_pages", "Unsupported multi-start or invalid chained page offset")
             offset = page*page_size+first
             page_end = min((page+1)*page_size,file_size)
@@ -134,30 +191,20 @@ def decode_chained(data, image, parsed, extent):
                 row = {"address_space": "ram", "va": hex(va), "slice_file_offset": hex(at),
                        "container_file_offset": hex(int(image["offset"],16)+at),
                        "pointer_format": POINTER_FORMATS[kind], "raw": hex(value)}
-                if value >> 63:
-                    if value >> 32 & 0x7FFFF:
-                        raise Error("fixup_pointer", "Reserved chained bind bits are set")
-                    ordinal = value & 0xFFFFFF
+                fields, step = decode(value,kind,base)
+                if fields["kind"] == "bind":
+                    ordinal = fields.pop("ordinal")
                     if ordinal not in imports:
                         imports[ordinal] = import_symbol(data,payload,end,table,symbols,count,format_id,ordinal,libraries)
                     symbol = imports[ordinal]
-                    row.update(kind="bind",inline_addend=(value>>24)&0xFF,target_va=None,
-                               resolution="declared_symbol" if symbol["library"] else "unresolved_library_ordinal",
-                               **symbol)
-                else:
-                    if value >> 44 & 0x7F:
-                        raise Error("fixup_pointer", "Reserved chained rebase bits are set")
-                    target = value & ((1<<36)-1)
-                    high = value>>36&0xFF
-                    decoded = base+target if kind==6 else target
-                    if decoded >= 1<<56:
-                        raise Error("fixup_pointer", "Chained target exceeds its address field")
-                    row.update(kind="rebase",target_va=hex(decoded | high<<56),high8=hex(high))
+                    fields.update(symbol, resolution=(
+                        "declared_symbol" if symbol["library"] else "unresolved_library_ordinal"
+                    ))
+                row.update(fields)
                 records.append(row)
-                step = value>>51&0xFFF
                 if not step:
                     break
-                offset += step*4
+                offset += step
     result["pointer_formats"] = sorted(formats)
     return result, records, sorted(set(unsupported))
 

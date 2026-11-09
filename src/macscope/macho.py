@@ -102,13 +102,16 @@ def resolve_input(path):
     return binary, warnings
 
 
-def thin(data):
+def thin(data, *, allow_arm64e=False):
     if len(data) < 32 or data[:4] != b'\xcf\xfa\xed\xfe':
         raise Error('unsupported_format', 'Only little-endian 64-bit Mach-O images are supported', 3)
     _, cpu, subtype, filetype, ncmds, cmdbytes, flags, reserved = struct.unpack_from('<8I', data)
     arch = ARCHES.get(cpu)
-    if not arch or (arch == 'arm64' and (subtype & 0xffffff) != 0) or (arch == 'x86_64' and (subtype & 0xffffff) != 3):
-        raise Error('unsupported_arch', 'Only ordinary arm64 and x86_64 CPU subtypes are validated (arm64e is unsupported)', 3)
+    model = subtype & 0xffffff
+    if arch == 'arm64' and model == 2 and allow_arm64e:
+        arch = 'arm64e'
+    elif not arch or (arch == 'arm64' and model != 0) or (arch == 'x86_64' and model != 3):
+        raise Error('unsupported_arch', 'Unsupported CPU subtype for this operation', 3)
     if filetype not in (2, 6, 8):
         raise Error('unsupported_filetype', 'Only MH_EXECUTE, MH_DYLIB and MH_BUNDLE are supported', 3)
     if ncmds > MAX_COMMANDS or cmdbytes > 16 * 1024 * 1024 or ncmds * 8 > cmdbytes:
@@ -169,7 +172,7 @@ def thin(data):
             'loader': details(data,command_records,segments)}
 
 
-def inspect_bytes(data):
+def inspect_bytes(data, *, allow_arm64e=False):
     if len(data) > MAX_INPUT:
         raise Error('input_limit', 'Input exceeds 256 MiB')
     digest = hashlib.sha256(data).hexdigest()
@@ -195,22 +198,26 @@ def inspect_bytes(data):
             if any(off < b and a < off+size for a,b in spans):
                 raise Error('fat_overlap', 'Universal slices overlap')
             spans.append((off, off+size))
-            meta = thin(data[off:off+size])
+            meta = thin(data[off:off+size], allow_arm64e=allow_arm64e)
             if (cpu, subtype) != (meta['cpu_type'], meta['cpu_subtype']) or meta['arch'] in arches:
                 raise Error('fat_identity', 'Universal CPU mismatch or duplicate architecture')
             arches.add(meta['arch'])
             slices.append(dict(meta, offset=hex(off), size=hex(size), sha256=hashlib.sha256(data[off:off+size]).hexdigest()))
     else:
-        slices.append(dict(thin(data), offset='0x0', size=hex(len(data)), sha256=digest))
+        slices.append(dict(thin(data, allow_arm64e=allow_arm64e), offset='0x0', size=hex(len(data)), sha256=digest))
     for s in slices:
         s['image_id'] = hashlib.sha256((digest+':'+str(s['cpu_type'])+':'+str(s['cpu_subtype'])+':'+s['offset']+':'+s['size']+':'+s['sha256']).encode()).hexdigest()
-    return {'artifact_sha256': digest, 'size': hex(len(data)), 'slices': slices, 'limitations': ['Bounded preflight is not authoritative Ghidra loading.', 'No dyld bind/chained-fixup decoding, signature validation or dependency loading in preflight.']}
+    limitations = ['Bounded preflight is not authoritative Ghidra loading.',
+                   'No dyld bind/chained-fixup decoding, signature validation or dependency loading in preflight.']
+    if any(s['arch'] == 'arm64e' for s in slices):
+        limitations.append('arm64e is available for data-only inspection.')
+    return {'artifact_sha256': digest, 'size': hex(len(data)), 'slices': slices, 'limitations': limitations}
 
 
-def inspect_path(path):
+def inspect_path(path, *, allow_arm64e=False):
     p, warnings = resolve_input(path)
     data = read_regular(p)
-    result = inspect_bytes(data)
+    result = inspect_bytes(data, allow_arm64e=allow_arm64e)
     result['warnings'] = warnings
     result['input_name'] = p.name
     return result, data

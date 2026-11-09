@@ -91,7 +91,12 @@ def parser():
             s.add_argument('--ghidra')
             s.add_argument('--java-home')
     s=sub.add_parser('headers');project(s);common(s)
-    s=sub.add_parser('fixups');project(s);common(s);pagination(s)
+    s=sub.add_parser('fixups');common(s);pagination(s)
+    source=s.add_mutually_exclusive_group(required=True)
+    source.add_argument('--project')
+    source.add_argument('--input',help='Read an owned Mach-O directly without starting Ghidra')
+    s.add_argument('--image')
+    s.add_argument('--arch',choices=('arm64','arm64e','x86_64'))
     s.add_argument('--kind',choices=('all','bind','rebase'),default='all')
     s=sub.add_parser('objc');ss=s.add_subparsers(dest='action',required=True)
     for c in ('classes','methods','selectors'):
@@ -624,16 +629,18 @@ def import_inputs(args, project, deps):
                 size_total += len(original)
                 if size_total > bundle.MAX_HASH_BYTES:
                     raise Error('bundle_input_limit','Selected bundle images exceed the 512 MiB aggregate limit',7)
-                meta = dict(inspect_bytes(original),input_name=path.name)
+                meta = dict(inspect_bytes(original,allow_arm64e=True),input_name=path.name)
                 if expected_sha and meta['artifact_sha256'] != expected_sha:
                     raise Error('bundle_image_changed','Bundle image changed after inventory',5)
             else:
-                meta,original = inspect_path(path)
+                meta,original = inspect_path(path,allow_arm64e=True)
             if len(meta['slices'])>1 and args.arch is None:
                 raise Error('arch_required','Universal input requires explicit --arch arm64|x86_64|all',2)
             selected = [s for s in meta['slices'] if args.arch in (None,'all',s['arch'])]
             if not selected:
                 raise Error('arch_missing','Requested architecture is not present',2)
+            if any(s['arch']=='arm64e' for s in selected):
+                raise Error('unsupported_arch','arm64e is available for data-only inspection',3)
             if index == len(targets)-1:
                 known_total = len(result)+len(selected)
             for slice_meta in selected:
@@ -692,6 +699,37 @@ def dyld_exports(args, project, image):
     return envelope('exports', data, status='partial' if gaps else 'complete', cov=cov)
 
 
+def fixup_collection(args, image, data, binding, *, parsed=None, artifact=None):
+    info,records,gaps = dyld.fixups(data,image,parsed=parsed)
+    records = [row for row in records if args.kind == 'all' or row['kind'] == args.kind]
+    records.sort(key=lambda row:int(row['va'],16))
+    rows,cov = page(records,args,image['image_id'],binding,{'kind':args.kind},order='fixup-address/v1')
+    cov['scope'] = 'selected image dyld fixups: '+args.kind
+    if gaps:
+        reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+        cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+    data = dict(info,image_id=image['image_id'],arch=image['arch'],records=rows)
+    if artifact is not None:
+        data.update(artifact_sha256=artifact,slice_sha256=image['sha256'],cpu_subtype=image['cpu_subtype'])
+    return envelope('fixups',data,status='partial' if gaps else 'complete',cov=cov)
+
+
+def file_fixups(args):
+    if args.image is not None:
+        raise Error('usage','--image selects an imported project image; use --arch with --input',2)
+    metadata,original = inspect_path(args.input,allow_arm64e=True)
+    if len(metadata['slices']) > 1 and args.arch is None:
+        raise Error('arch_required','Universal input requires an explicit --arch',2)
+    selected = [row for row in metadata['slices'] if args.arch in (None,row['arch'])]
+    if not selected:
+        raise Error('arch_missing','Requested architecture is not present',2)
+    image, = selected
+    start,size = int(image['offset'],16),int(image['size'],16)
+    artifact = metadata['artifact_sha256']
+    return fixup_collection(args,image,original[start:start+size],identity({'file':artifact}),
+                            parsed=image,artifact=artifact)
+
+
 def swift_collection(args, project, image):
     if args.demangle and not args.experimental_trusted_input:
         raise Error('isolation_required','Native Swift demangling requires --experimental-trusted-input',3)
@@ -745,7 +783,7 @@ def execute(a):
         deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
         return envelope(command,deps)
     if a.command=='inspect':
-        data,_=inspect_path(a.input)
+        data,_=inspect_path(a.input,allow_arm64e=True)
         gaps=metadata.loader_gaps(data['slices'])
         return envelope(command,data,status='partial' if gaps else 'complete',
                         cov=coverage('Mach-O preflight',len(data['slices']),len(data['slices']),bool(gaps),
@@ -772,6 +810,8 @@ def execute(a):
     if a.command=='project':
         p=Project.create(a.path)
         return envelope(command,{'project_id':p.project_id,'schema_version':'1.0'})
+    if a.command=='fixups' and a.input is not None:
+        return file_fixups(a)
     p=Project(a.project)
     if a.command == 'jobs':
         return job_command(a,p,command)
@@ -806,16 +846,7 @@ def execute(a):
         return envelope(command,metadata.read_bytes_at(p,image,a.address,a.byte_length),
                         cov=coverage('selected image bytes',a.byte_length,a.byte_length))
     if a.command=='fixups':
-        info,records,gaps=dyld.fixups(metadata.verified_slice(p,image),image)
-        records=[row for row in records if a.kind=='all' or row['kind']==a.kind]
-        records.sort(key=lambda row:int(row['va'],16))
-        rows,cov=page(records,a,image['image_id'],p.project_id,{'kind':a.kind},order='fixup-address/v1')
-        cov['scope']='selected image dyld fixups: '+a.kind
-        if gaps:
-            reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
-            cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
-        data=dict(info,image_id=image['image_id'],arch=image['arch'],records=rows)
-        return envelope(command,data,status='partial' if gaps else 'complete',cov=cov)
+        return fixup_collection(a,image,metadata.verified_slice(p,image),p.project_id)
     if a.command=='objc':
         records,gaps=objc.inventory(metadata.verified_slice(p,image),image,a.action)
         records=[dict(row,image_id=image['image_id'],arch=image['arch'])

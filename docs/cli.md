@@ -211,12 +211,15 @@ an earlier image has been committed reports partial completion and the failed
 bundle path. Repeating an import reuses an already imported identity.
 
 `inspect` is a bounded stdlib preflight for thin/fat/fat64 little-endian
-64-bit arm64 and x86_64 executable/dylib/bundle images. It resolves a main
+64-bit arm64, arm64e and x86_64 executable/dylib/bundle images. It resolves a main
 `.app/Contents/Info.plist` executable and reports companion debug dylibs.
 Ordinary input paths open each component without following symlinks.
-Encrypted images, arm64e, x86_64h, other CPU subtypes, 32-bit images,
-relocatable objects and malformed ranges receive explicit failures. The
+Encrypted images, x86_64h, other CPU subtypes, 32-bit images, relocatable
+objects and malformed ranges receive explicit failures. The arm64e path
+is data-only. Engine import supports ordinary arm64 and x86_64. The
 preflight is **not** a complete Mach-O/dyld parser or a security proof.
+Select the ordinary slice explicitly when a universal input also contains
+arm64e. An all-slices import requires every slice to support engine import.
 
 ## Persistence, identity and freshness
 
@@ -250,8 +253,14 @@ stub and resolver offsets. The public CLI paginated both architectures
 after a universal dylib import with analysis still pending.
 
 `fixups` reads the digest-verified imported slice before or after analysis.
-It decodes `DYLD_CHAINED_PTR_64` and `DYLD_CHAINED_PTR_64_OFFSET` chains with
-uncompressed names and import record formats 1–3. Rebase records carry
+Use `fixups --input FILE` to read an owned Mach-O directly. Select a slice
+with `--arch arm64|arm64e|x86_64` for a universal input. File pagination
+binds to the artifact digest and exact slice.
+
+The decoder supports ordinary 64-bit chains and the arm64e userland
+formats 1, 9 and 12 with uncompressed names and import record formats 1–3.
+Authenticated records include the key, diversity and address-diversity flag.
+Rebase records carry
 unslid targets. Bind records carry declared symbols, ordinals, weak flags
 and addends, with an unresolved runtime address. The ordinary 64-bit
 legacy rebase, bind, weak-bind and lazy-bind opcode streams are also
@@ -264,6 +273,33 @@ Use `--kind bind|rebase|all`,
 On 16 owned fixtures, `dyld_info -fixups` agreed on all 3,296 rebase
 addresses/targets and 594 bind addresses/symbols. Those binaries used
 `DYLD_CHAINED_PTR_64_OFFSET` and import format 1.
+An independently linked arm64e fixture used format 12. Two derived copies
+exercised formats 1 and 9, tagged targets and negative inline addends.
+Apple's static tool matched all 18 raw words, targets or symbols, and
+authentication fields. The tool displays the raw 19-bit addend. The CLI
+reports its signed value as used by the loader. The same test verified
+universal arm64/arm64e selection and pagination. [Apple pointer layouts](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h) · [Apple loader addend decoding](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOLayout.cpp#L1882)
+
+The arm64e decoder also handled 12,000 seeded mutations of the owned
+fixup words and chain tables. It returned 7,056 typed errors, 3,234
+partial results and 1,710 complete decodes within its bounds. The
+mutation report SHA-256 is
+`0eb4cd9f34a3dd1a71c6665d1cf7226c2b35bc59510414da9bd018abbd01806e`.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 tests/integration_arm64e_fixups.py \
+  --output-dir /private/tmp/new-arm64e-fixup-check
+```
+
+An isolated full-Ghidra probe of a separate owned arm64e call fixture
+imported under the Apple Silicon language and matched LLVM's authenticated
+instruction mnemonics. Its low p-code omitted the signing operations for
+`pacibsp` and `paciza`, modeled `blraaz` as an ordinary indirect call,
+and modeled `retab` as an ordinary return. Engine import and analysis
+for arm64e remain gated on authenticated instruction semantics. The
+probe report SHA-256 is
+`9b959c2592f39d01a880f1552a9e9fe9e5761512a74d53baa0803a84f50b9330`.
+
 Four separately linked owned tools and AppKit binaries using
 `-Wl,-no_fixup_chains` matched Apple tooling on 906 rebases, 142 ordinary
 binds and 38 lazy binds. Synthetic tests cover weak binds and a backward
