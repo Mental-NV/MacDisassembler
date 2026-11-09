@@ -69,6 +69,15 @@ class HardeningTests(unittest.TestCase):
         r = runner.bounded_command([sys.executable, '-c', 'print("a"*50000)'], self.d / 'log', 5, max_log_bytes=100)
         self.assertEqual(r['failure'], 'log_size_limit'); self.assertEqual((self.d / 'log').stat().st_size, 100)
 
+    def test_owned_cleanup_accepts_an_exited_unreaped_leader(self):
+        with subprocess.Popen([sys.executable, '-c', 'pass'], start_new_session=True) as proc:
+            deadline = time.monotonic() + 5
+            while os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.01)
+            runner.stop_owned(proc)
+            self.assertEqual(proc.returncode, 0)
+
     def test_output_limit(self):
         code = 'from pathlib import Path;import time;Path(' + repr(str(self.d / 'large.partial')) + ').write_bytes(b"x"*1000);time.sleep(5)'
         r = runner.bounded_command([sys.executable, '-c', code], self.d / 'log', 5, watch=self.d, max_output_bytes=100)

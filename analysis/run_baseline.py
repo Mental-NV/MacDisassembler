@@ -12,7 +12,6 @@ import os
 import re
 import resource
 import selectors
-import signal
 import subprocess
 import sys
 import time
@@ -20,6 +19,9 @@ import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "src"))
+from macscope.engine import terminate_owned as stop_owned
+
 JAVA = Path('/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home')
 GHIDRA = Path('/opt/homebrew/opt/ghidra/libexec')
 CASES = [f'{cfg}-{arch}-{state}' for cfg in ('DebugAnalysis', 'ReleaseAnalysis')
@@ -42,20 +44,6 @@ def exclusive_json(path, value):
         json.dump(value, f, indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
     os.link(temporary, path)
     temporary.unlink()
-
-
-def stop_owned(proc):
-    # A new session/process group was created for this child only.
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(proc.pid, sig)
-        except ProcessLookupError:
-            break
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            continue
-    proc.wait()
 
 
 def child_file_limit():
