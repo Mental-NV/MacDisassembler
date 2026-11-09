@@ -2,11 +2,11 @@
 #include "heldout_aggregate.h"
 
 static __attribute__((noinline)) packet_t combine(uint64_t left, uint64_t right) {
-    return (packet_t){left ^ (right | UINT64_C(0x19461)), 0x237AD119U};
+    return (packet_t){left ^ (right | UINT64_C(0x19461)), (uint32_t)left ^ 0x237AD119U};
 }
 
 static __attribute__((noinline)) packet_t difference(uint64_t left, uint64_t right) {
-    return (packet_t){left - right, 0x72EF0014U};
+    return (packet_t){left - right, (uint32_t)(right >> 32) ^ 0x72EF0014U};
 }
 
 __attribute__((noinline, disable_tail_calls))
