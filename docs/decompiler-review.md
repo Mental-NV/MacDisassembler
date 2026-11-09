@@ -105,6 +105,12 @@ Use `x86 thin.json` and `DebugAnalysis-x86_64-sym/CorpusFixture` for x86_64.
 For an entirely offline recheck, supply previously captured LLVM text with
 `--llvm-text FILE`. The report records the binary, export and LLVM-text hashes.
 
+Live x86_64 validation can re-decode up to 32 single-range functions when the
+linear sweep crosses an entry independently recorded in the Mach-O function
+starts table. All LLVM calls share a 60-second deadline. The report preserves
+initial discrepancies and records each retry's address, command and text hash.
+Offline mode uses the supplied text as-is.
+
 The validator checks byte order, instruction starts, bytes at the exported
 file offsets, and direct target text within the exported function ranges.
 Unmeasured direct targets are reported separately. Duplicate engine identities

@@ -45,16 +45,20 @@ collections exceed documented bounds despite successful pseudocode output.
 
 ## Later phases and separate gates
 
-- Phase3: annotations, type hints, ObjC/Swift metadata views, search,
-  multi-image/resource inventories, REA evidence and authorized Taskovsky work.
-- Phase4: hardened isolation, fuzzing, release SBOM/notices, signed packaging,
-  migrations, compatibility expansion, arm64e and broader Swift validation.
-- Behavioral equivalence of recovered pseudocode, blind scoring, false-positive
-  analysis and UI/real-app acceptance are independent gates. Engine completion
-  and CLI command coverage do not prove them.
-- Owner decisions: project license, publication/remote pushes and optional
-  integrations. No license selection, remote push, paid engine, or Taskovsky
-  edit is part of this milestone.
+- [x] Reproduce owned stripped x86_64 instruction checks using independent
+  function-start metadata. See [profile validation](parameter-inference.md).
+- [ ] Complete the narrow CLI evidence path with uncached selected-function
+  decompilation, token/address spans and reproducible timing measurements.
+- [ ] Add snapshot search and bounded call traversal, then revisioned
+  annotations and explicitly applied type hints.
+- [ ] Add Objective-C/Swift views and explicit bundle image/resource selection.
+- [ ] Measure blind discovery and false positives on the owned corpus. For
+  behavior, freeze a mechanical recovered-C harness before held-out scoring.
+- [ ] Exercise isolation, malformed-input fuzzing, schema migrations and
+  additional host versions before a wider release. Release SBOM and notices
+  need dependency and packaging decisions.
+- [ ] Separately gated: desktop UI acceptance, private real-app and Taskovsky
+  evaluation, optional REA integration, licensing and publication.
 
 ## Independent decompiler research
 

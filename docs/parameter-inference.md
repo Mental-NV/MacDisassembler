@@ -128,7 +128,9 @@ both appear in the Mach-O function-start table. Re-decoding the affected
 ranges with LLVM's `--start-address` and `--stop-address` resolved both
 discrepancies. Across the eight exports, 268 Ghidra-selected function records,
 12,336 instructions and 2,582 direct targets agreed. The default
-whole-section validation still requires manual adjudication in these cases.
+live validator now reproduces the two bounded re-decodes automatically.
+The eight-input check passed through its CLI, with exactly those two retries
+and zero unmeasured direct targets.
 
 ## Reproduce and inspect
 

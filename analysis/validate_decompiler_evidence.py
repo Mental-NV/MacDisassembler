@@ -9,9 +9,11 @@ import hashlib
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 
 MAX_BYTES = 64 << 20
+MAX_ENTRY_REDECODES = 32
 
 
 def read_bytes(path):
@@ -186,10 +188,12 @@ def parse_llvm(text, arch):
     return result
 
 
-def adjudicate_snapshot(snapshot, binary, llvm_text):
+def adjudicate_snapshot(snapshot, binary, llvm_text, *, entry_decodes=None):
     if sha(binary) != snapshot["image"]["sha256"]:
         raise ValueError("Binary digest differs from the exported input identity")
-    llvm = parse_llvm(llvm_text, snapshot["image"]["arch"])
+    arch = snapshot["image"]["arch"]
+    whole_section = parse_llvm(llvm_text, arch)
+    entry_decodes = entry_decodes or {}
     index_functions(snapshot["functions"])
     counts = {"function_ranges_checked": 0, "instructions_checked": 0,
               "direct_targets_checked": 0, "direct_targets_unmeasured": 0}
@@ -202,6 +206,7 @@ def adjudicate_snapshot(snapshot, binary, llvm_text):
         ranges = [(int(a, 16), int(b, 16)) for a, b in f["body_ranges"]]
         if not ranges or any(lo > hi for lo, hi in ranges):
             raise ValueError("Invalid or missing body ranges")
+        llvm = entry_decodes.get(f["entry_va"], whole_section)
         emitted = {}
         for ins in f["instructions"]:
             address = int(ins["addr"], 16)
@@ -233,7 +238,8 @@ def adjudicate_snapshot(snapshot, binary, llvm_text):
         selected = {address: value[0] for address, value in llvm.items()
                     if any(lo <= address <= hi for lo, hi in ranges)}
         if emitted != selected:
-            mismatches.append({"function": f["name"], "kind": "starts_or_bytes"})
+            mismatches.append({"function": f["name"], "entry_va": f["entry_va"],
+                               "kind": "starts_or_bytes"})
         counts["function_ranges_checked"] += 1
         counts["instructions_checked"] += len(emitted)
     if not counts["instructions_checked"]:
@@ -247,6 +253,69 @@ def adjudicate_snapshot(snapshot, binary, llvm_text):
     }
 
 
+def llvm_output(argv, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("LLVM validation exceeded its total time limit")
+    proc = subprocess.run(argv, capture_output=True, timeout=remaining, check=True)
+    if len(proc.stdout) > MAX_BYTES:
+        raise ValueError("LLVM output exceeds evidence bound")
+    return proc.stdout.decode()
+
+
+def validate_with_llvm(snapshot, binary, path):
+    deadline = time.monotonic() + 60
+    base = ["xcrun", "llvm-objdump"]
+    argv = [*base, "--disassemble", str(path)]
+    llvm_text = llvm_output(argv, deadline)
+    initial = adjudicate_snapshot(snapshot, binary, llvm_text)
+    initial["llvm_argv"] = argv
+    if snapshot["image"]["arch"] != "x86_64":
+        return initial
+
+    # A linear sweep can consume the first bytes of a function as part of an
+    # instruction starting in preceding padding. Only retry a range when the
+    # sweep actually crosses its entry and the binary records that entry.
+    suspects = {m["entry_va"] for m in initial["mismatches"] if m["kind"] == "starts_or_bytes"}
+    if not suspects:
+        return initial
+    linear = parse_llvm(llvm_text, "x86_64")
+    crossed = {address + offset for address, (raw, _) in linear.items()
+               for offset in range(1, len(raw)) if hex(address + offset) in suspects}
+    if not crossed:
+        return initial
+    starts_argv = [*base, "--macho", "--function-starts=addrs", str(path)]
+    starts_text = llvm_output(starts_argv, deadline)
+    starts = {int(line, 16) for line in starts_text.splitlines()
+              if re.fullmatch(r"[0-9a-fA-F]{1,16}", line.strip())}
+    eligible = (starts & crossed) - linear.keys()
+    evidence = []
+    decodes = {}
+    for function in snapshot["functions"]:
+        entry = function["entry_va"]
+        if entry not in suspects or len(function["body_ranges"]) != 1:
+            continue
+        lo, hi = function["body_ranges"][0]
+        start, end = int(lo, 16), int(hi, 16) + 1
+        if int(entry, 16) != start or start not in eligible:
+            continue
+        if len(evidence) == MAX_ENTRY_REDECODES:
+            break
+        argv = [*base, "--disassemble", "--start-address=" + hex(start),
+                "--stop-address=" + hex(end), str(path)]
+        text = llvm_output(argv, deadline)
+        decoded = parse_llvm(text, "x86_64")
+        if min(decoded) != start or any(a + len(raw) > end for a, (raw, _) in decoded.items()):
+            raise ValueError("LLVM returned instructions outside the requested function range")
+        decodes[entry] = decoded
+        evidence.append({"entry_va": entry, "llvm_argv": argv, "llvm_text_sha256": sha(text.encode())})
+    report = adjudicate_snapshot(snapshot, binary, llvm_text, entry_decodes=decodes) if decodes else initial
+    report.update(llvm_argv=initial["llvm_argv"], initial_mismatches=initial["mismatches"],
+                  llvm_function_starts={"argv": starts_argv, "sha256": sha(starts_text.encode())},
+                  llvm_entry_redecodes=evidence)
+    return report
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--export", required=True, type=Path)
@@ -255,19 +324,19 @@ def main(argv=None):
                         help="Read previously captured llvm-objdump --disassemble output")
     parser.add_argument("--output", type=Path, help="Create a new report; never overwrite")
     args = parser.parse_args(argv)
-    envelope = read_json(args.export)
-    snapshot = envelope["data"]
+    export = read_bytes(args.export)
+    snapshot = json.loads(export)["data"]
+    binary = read_bytes(args.binary)
+    if sha(binary) != snapshot["image"]["sha256"]:
+        raise ValueError("Binary digest differs from the exported input identity")
     if args.llvm_text:
-        llvm = read_bytes(args.llvm_text).decode()
-        invocation = None
+        report = adjudicate_snapshot(snapshot, binary, read_bytes(args.llvm_text).decode())
+        report["llvm_argv"] = None
     else:
-        invocation = ["xcrun", "llvm-objdump", "--disassemble", str(args.binary)]
-        proc = subprocess.run(invocation, capture_output=True, timeout=60, check=True)
-        if len(proc.stdout) > MAX_BYTES:
-            raise ValueError("LLVM output exceeds evidence bound")
-        llvm = proc.stdout.decode()
-    report = adjudicate_snapshot(snapshot, read_bytes(args.binary), llvm)
-    report.update(export_sha256=sha(read_bytes(args.export)), llvm_argv=invocation)
+        report = validate_with_llvm(snapshot, binary, args.binary)
+        if read_bytes(args.binary) != binary:
+            raise ValueError("Binary changed during LLVM validation")
+    report["export_sha256"] = sha(export)
     if args.output:
         write_new_json(args.output, report)
     else:

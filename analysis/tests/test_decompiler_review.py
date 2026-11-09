@@ -203,6 +203,34 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(r["direct_targets_checked"], 0)
         self.assertEqual(r["direct_targets_unmeasured"], 1)
 
+    def test_x86_redecode_requires_recorded_start_crossed_by_linear_sweep(self):
+        snapshot, binary, decoded = self.snapshot("x86_64")
+        linear = "ff: 00 eb \taddb\n101: 06 \t<unknown>\n"
+        with mock.patch.object(evidence, "llvm_output",
+                               side_effect=[linear, "0000000000000100\n", decoded]) as run:
+            report = evidence.validate_with_llvm(snapshot, binary, self.path / "binary")
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["direct_targets_checked"], 1)
+        self.assertEqual(report["initial_mismatches"][0]["entry_va"], "0x100")
+        retry = report["llvm_entry_redecodes"][0]
+        self.assertEqual(retry["llvm_text_sha256"], evidence.sha(decoded.encode()))
+        self.assertIn("--start-address=0x100", run.call_args.args[0])
+        self.assertIn("--stop-address=0x102", run.call_args.args[0])
+
+        with mock.patch.object(evidence, "llvm_output", side_effect=[linear, "101\n"]) as run:
+            report = evidence.validate_with_llvm(snapshot, binary, self.path / "binary")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["llvm_entry_redecodes"], [])
+        self.assertEqual(run.call_count, 2)
+
+    def test_x86_redecode_does_not_suppress_byte_or_target_mismatches(self):
+        snapshot, binary, decoded = self.snapshot("x86_64")
+        linear = "ff: 00 eb \taddb\n101: 06 \t<unknown>\n"
+        for changed in (decoded.replace("eb 06", "eb 07"), decoded.replace("0x108", "0x109")):
+            with mock.patch.object(evidence, "llvm_output", side_effect=[linear, "100\n", changed]):
+                report = evidence.validate_with_llvm(snapshot, binary, self.path / "binary")
+            self.assertEqual(report["status"], "failed")
+
     def test_exclusive_evidence_output(self):
         p = self.path / "report.json"
         evidence.write_new_json(p, {"old": True})
