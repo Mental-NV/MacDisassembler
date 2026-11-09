@@ -407,6 +407,23 @@ A skip returns the ordinary fresh pseudocode. The cached pseudocode,
 function signature, CFG, and unresolved indirect references remain the
 saved evidence. [Owned fixture validation](dispatch-tables.md#installed-cli-validation)
 
+Direct-call signature recovery is available for a separate fresh query.
+
+```sh
+macscope decompile --project workspaces/calculator --arch x86_64 \
+  --name _calc_apply_op --fresh --recover-direct-signatures \
+  --experimental-trusted-input --json
+```
+
+The policy checks exact direct-call bytes and linker entries along a
+bounded call path. A caller must observe both result registers, and each
+eligible call must forward those registers to the return. The worker
+commits the inferred callee signatures in the read-only copy after
+checking argument storage and agreement on the return ABI.
+`origin.direct_signature_recovery` records the applied call sites or a
+skip reason. The option uses its own query, separate from dispatch
+recovery and accepted type hints. [Direct-call validation](direct-signatures.md)
+
 Cached and fresh results report partial coverage when a recorded computed
 jump lacks a destination or Ghidra emits an explicit jump-recovery warning.
 The original pseudocode, edges, and printer status remain available.
@@ -495,7 +512,7 @@ verify the saved Program and finish publishing it without running Ghidra again.
 
 For a fresh decompile, the restart opens the original saved Program and
 uses the recorded function, label and accepted return hints, even if
-a later analysis or annotation revision is current. Dispatch recovery
+a later analysis or annotation revision is current. Signature recovery
 rechecks the original slice and snapshot against the recorded request digest.
 The restart returns the stored result if the original or restarted query
 already published one. Replay preserves the active analysis and annotation

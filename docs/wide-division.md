@@ -141,3 +141,8 @@ and `calc_engine_equals` pass 521 directed and 10,000 seeded cases. Both
 completed with zero mismatches. These assisted results share the same
 open signature requirement. Their report SHA-256 is
 `d05ae6ea88f30a06eddd40851230456a4ffd037575c1baf558a61d3d5bb53f77`.
+
+
+The [installed direct-call recovery](direct-signatures.md) subsequently
+verified the same three routines through fresh CLI queries in both
+profiles and both symbol states.

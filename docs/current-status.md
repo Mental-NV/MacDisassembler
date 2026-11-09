@@ -169,11 +169,15 @@ collections exceed documented bounds despite successful pseudocode output.
   on a separate full Ghidra build. Both x86_64 O2 baseline divisions and
   both opt-in baseline dispatch queries passed. The four independent
   signed x86_64 O2 cases passed on the same frozen inputs.
-- [ ] Meet the recovered-C behavior and testability gates across the full
-  core. Baseline O2 reaches 49/52 routines and 3,835/4,269 instruction
-  bytes in each symbol state with fresh dispatch recovery. It needs
-  eight more verified instruction bytes to reach the 90% gate. The
-  direct-call signature and all-routine O0 requirements remain open.
+- [x] Verify [direct-call signature recovery](direct-signatures.md) in
+  the installed CLI. With separate opt-in fresh queries for direct calls
+  and indirect dispatch, O2 reaches 52/52 routines and 4,269/4,269
+  instruction bytes in each profile and symbol state. The independent
+  observer passed in all four captures and all four controls declined.
+- [ ] Meet the O0 recovered-C behavior and testability gate across the
+  full core. The saved captures pass 41/52 routines and 5,360/8,644
+  bytes under baseline and 46/52 routines and 6,944/8,644 bytes under
+  parameter inference in each symbol state.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
