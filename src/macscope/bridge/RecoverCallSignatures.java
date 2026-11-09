@@ -7,6 +7,8 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 
 import com.google.gson.Gson;
@@ -29,17 +31,22 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.VariableStorage;
 import ghidra.program.model.pcode.FunctionPrototype;
+import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighFunctionDBUtil;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.SourceType;
 
-public class RecoverDispatchReturn extends HeadlessScript {
-    static final String POLICY = "macscope-dispatch-return-recovery/1";
+public class RecoverCallSignatures extends HeadlessScript {
+    static final String DISPATCH = "macscope-dispatch-return-recovery/1";
+    static final String DIRECT = "macscope-direct-call-signatures/1";
     int timeout;
 
     record Recovery(Function root, Address call, FunctionPrototype prior, DataType resultType,
                     JsonArray targets, JsonObject report) {}
+
+    record DirectRecovery(Function parent, DataType resultType, String convention,
+                          List<HighFunction> callees, JsonObject report) {}
 
     @Override
     public void run() throws Exception {
@@ -51,13 +58,28 @@ public class RecoverDispatchReturn extends HeadlessScript {
         Path request = Path.of(args[0]);
         if (Files.size(request) > 256 * 1024) throw new IllegalArgumentException("Oversized ABI request");
         JsonObject plan = JsonParser.parseString(Files.readString(request)).getAsJsonObject();
-        if (!POLICY.equals(text(plan, "policy")) ||
+        String policy = text(plan, "policy");
+        if (!(DISPATCH.equals(policy) || DIRECT.equals(policy)) ||
             !text(plan, "image_sha256").equalsIgnoreCase(currentProgram.getExecutableSHA256()) ||
             !"x86:LE:64:default".equals(currentProgram.getLanguageID().getIdAsString()))
             throw new IllegalStateException("ABI request differs from the saved Program");
 
         JsonArray rows = plan.getAsJsonArray("requests");
         if (rows.isEmpty() || rows.size() > 32) throw new IllegalArgumentException("Unbounded ABI request");
+        JsonObject report = new JsonObject();
+        report.addProperty("policy", policy);
+        if (DIRECT.equals(policy)) {
+            String selected = text(plan, "entry_va");
+            report.addProperty("entry_va", selected);
+            report.add("results", recoverDirect(internal(selected), rows));
+        } else {
+            report.add("results", recoverDispatch(rows));
+        }
+        Files.writeString(Path.of(args[1]), new Gson().toJson(report),
+            StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+    }
+
+    JsonArray recoverDispatch(JsonArray rows) throws Exception {
         JsonArray results = new JsonArray();
         List<Recovery> pending = new ArrayList<>();
         Set<Address> roots = new HashSet<>();
@@ -72,23 +94,145 @@ public class RecoverDispatchReturn extends HeadlessScript {
             results.add(decision);
         }
         for (Recovery recovery : pending) apply(recovery);
-        JsonObject report = new JsonObject();
-        report.addProperty("policy", POLICY);
-        report.add("results", results);
-        Files.writeString(Path.of(args[1]), new Gson().toJson(report),
-            StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        return results;
+    }
+
+    JsonArray recoverDirect(Function selected, JsonArray rows) throws Exception {
+        JsonArray results = new JsonArray();
+        List<DirectRecovery> pending = new ArrayList<>();
+        Set<Address> parents = new HashSet<>();
+        Map<Address, HighFunction> inferred = new LinkedHashMap<>();
+        int sites = 0;
+        for (JsonElement element : rows) {
+            monitor.checkCancelled();
+            JsonObject row = element.getAsJsonObject();
+            Function parent = internal(text(row, "parent_va"));
+            if (!parents.add(parent.getEntryPoint())) throw new IllegalArgumentException("Duplicate direct parent");
+            JsonArray calls = row.getAsJsonArray("calls");
+            sites += calls.size();
+            if (calls.isEmpty() || sites > 16) throw new IllegalArgumentException("Unbounded direct call sites");
+            verifyPath(selected, parent, row.getAsJsonArray("path"));
+            verifyObserver(parent, row.getAsJsonObject("observer"));
+            JsonObject decision = new JsonObject();
+            decision.addProperty("parent_va", text(row, "parent_va"));
+            JsonArray recorded = new JsonArray();
+            List<Function> targets = new ArrayList<>();
+            Set<Address> addresses = new HashSet<>();
+            for (JsonElement callElement : calls) {
+                JsonObject site = callElement.getAsJsonObject();
+                Function target = internal(text(site, "target_va"));
+                if (!text(site, "owner_va").equals(text(row, "parent_va")) ||
+                    !addresses.add(address(text(site, "call_va"))) || target.equals(parent))
+                    throw new IllegalArgumentException("Invalid direct call site");
+                checkBytes(site.getAsJsonArray("sequence"), parent, 3);
+                checkDirect(parent, address(text(site, "call_va")), target);
+                targets.add(target);
+                JsonObject item = new JsonObject();
+                item.add("call_va", site.get("call_va"));
+                item.add("target_va", site.get("target_va"));
+                recorded.add(item);
+            }
+            decision.add("sites", recorded);
+            results.add(decision);
+            List<HighFunction> callees = new ArrayList<>();
+            DataType shared = null;
+            String convention = null;
+            for (Function target : targets) {
+                if (target.getSignatureSource() == SourceType.USER_DEFINED ||
+                    target.getSignatureSource() == SourceType.IMPORTED) {
+                    skipped(decision, "protected_callee_signature");
+                    break;
+                }
+                HighFunction high = inferred.computeIfAbsent(target.getEntryPoint(), key -> highFunction(target));
+                FunctionPrototype proto = high.getFunctionPrototype();
+                if (!twoWordCallee(proto) || shared != null && (!shared.isEquivalent(proto.getReturnType()) ||
+                    !convention.equals(proto.getModelName()))) {
+                    skipped(decision, "unsupported_callee_signature");
+                    break;
+                }
+                shared = proto.getReturnType();
+                convention = proto.getModelName();
+                callees.add(high);
+            }
+            if (callees.size() == targets.size()) {
+                pending.add(new DirectRecovery(parent, shared, convention, callees, decision));
+            }
+        }
+        Set<Address> committed = new HashSet<>();
+        for (DirectRecovery recovery : pending) {
+            for (HighFunction callee : recovery.callees()) {
+                if (committed.add(callee.getFunction().getEntryPoint())) {
+                    HighFunctionDBUtil.commitParamsToDatabase(callee, true,
+                        HighFunctionDBUtil.ReturnCommitOption.COMMIT, SourceType.ANALYSIS);
+                    verifyCommitted(callee);
+                }
+            }
+        }
+        for (DirectRecovery recovery : pending) {
+            FunctionPrototype after = prototype(recovery.parent());
+            if (!storage(after.getReturnStorage(), "RDX", "RAX") || after.isVarArg() ||
+                !recovery.resultType().isEquivalent(after.getReturnType()) ||
+                !recovery.convention().equals(after.getModelName()))
+                throw new IllegalStateException("The forwarding parent disagrees with the verified callee ABI");
+            recovery.report().addProperty("status", "applied");
+            recovery.report().addProperty("return_storage", after.getReturnStorage().toString());
+        }
+        return results;
+    }
+
+    boolean twoWordCallee(FunctionPrototype proto) {
+        return !proto.isVarArg() && proto.getNumParams() == 2 && proto.getReturnType().getLength() == 16 &&
+            storage(proto.getReturnStorage(), "RDX", "RAX") &&
+            proto.getParam(0) != null && proto.getParam(1) != null &&
+            storage(proto.getParam(0).getStorage(), "RDI") && storage(proto.getParam(1).getStorage(), "RSI");
+    }
+
+    void verifyCommitted(HighFunction high) {
+        Function function = high.getFunction();
+        FunctionPrototype proto = high.getFunctionPrototype();
+        if (function.getParameterCount() != 2 ||
+            !function.getReturnType().isEquivalent(proto.getReturnType()) ||
+            !storage(function.getReturn().getVariableStorage(), "RDX", "RAX") ||
+            !storage(function.getParameter(0).getVariableStorage(), "RDI") ||
+            !storage(function.getParameter(1).getVariableStorage(), "RSI"))
+            throw new IllegalStateException("The committed callee ABI differs from the inferred signature");
+    }
+
+    void verifyPath(Function selected, Function parent, JsonArray path) throws Exception {
+        if (path.size() > 2) throw new IllegalArgumentException("Unbounded direct call path");
+        Function owner = selected;
+        for (JsonElement element : path) {
+            JsonObject edge = element.getAsJsonObject();
+            if (!owner.getEntryPoint().equals(address(text(edge, "owner_va"))))
+                throw new IllegalStateException("Direct call path does not belong to the selected function");
+            Function target = internal(text(edge, "target_va"));
+            Address site = address(text(edge, "call_va"));
+            Instruction instruction = checkDirect(owner, site, target);
+            if (!Arrays.equals(instruction.getBytes(), HexFormat.of().parseHex(text(edge, "bytes"))))
+                throw new IllegalStateException("Saved direct call differs from the proof");
+            owner = target;
+        }
+        if (!owner.equals(parent)) throw new IllegalStateException("Direct call path did not reach its parent");
+    }
+
+    Instruction checkDirect(Function owner, Address site, Function target) {
+        Instruction call = currentProgram.getListing().getInstructionAt(site);
+        if (call == null || !owner.getBody().contains(site) || !call.getFlowType().isCall() ||
+            call.getFlowType().isComputed() || !Arrays.equals(call.getFlows(), new Address[] {target.getEntryPoint()}))
+            throw new IllegalStateException("Saved caller does not call the proved target");
+        return call;
+    }
+
+    void verifyObserver(Function parent, JsonObject observer) throws Exception {
+        Function caller = internal(text(observer, "entry_va"));
+        checkBytes(observer.getAsJsonArray("sequence"), caller, 9);
+        checkDirect(caller, address(text(observer, "call_va")), parent);
     }
 
     Recovery prepare(Function root, JsonObject row, JsonObject report) throws Exception {
         Address call = address(text(row, "call_va"));
         checkBytes(row.getAsJsonArray("machine"), root, 128);
-        JsonObject observer = row.getAsJsonObject("observer");
-        Function caller = internal(text(observer, "entry_va"));
-        checkBytes(observer.getAsJsonArray("sequence"), caller, 9);
-        Instruction direct = currentProgram.getListing().getInstructionAt(address(text(observer, "call_va")));
-        if (direct == null || !direct.getFlowType().isCall() || direct.getFlowType().isComputed() ||
-            !Arrays.equals(direct.getFlows(), new Address[] {root.getEntryPoint()}))
-            throw new IllegalStateException("Saved caller does not call the candidate");
+        verifyObserver(root, row.getAsJsonObject("observer"));
         Instruction computed = currentProgram.getListing().getInstructionAt(call);
         if (computed == null || !root.getBody().contains(call) || !computed.getFlowType().isCall() ||
             !computed.getFlowType().isComputed() || computed.getFlows().length != 0)
@@ -161,6 +305,10 @@ public class RecoverDispatchReturn extends HeadlessScript {
     }
 
     FunctionPrototype prototype(Function function) {
+        return highFunction(function).getFunctionPrototype();
+    }
+
+    HighFunction highFunction(Function function) {
         DecompInterface decompiler = new DecompInterface();
         try {
             DecompileOptions options = new DecompileOptions();
@@ -175,7 +323,7 @@ public class RecoverDispatchReturn extends HeadlessScript {
             DecompileResults result = decompiler.decompileFunction(function, timeout, monitor);
             if (!result.decompileCompleted() || result.getHighFunction() == null)
                 throw new IllegalStateException("Cannot verify ABI for " + function.getEntryPoint());
-            return result.getHighFunction().getFunctionPrototype();
+            return result.getHighFunction();
         } finally {
             decompiler.dispose();
         }

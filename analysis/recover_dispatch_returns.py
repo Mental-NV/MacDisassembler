@@ -25,7 +25,7 @@ from macscope.storage import Project
 
 
 POLICY = "macscope-dispatch-return-recovery/1"
-SCRIPT = engine.BRIDGE / "RecoverDispatchReturn.java"
+SCRIPT = engine.BRIDGE / "RecoverCallSignatures.java"
 CALCULATOR = "calc_dispatch_table"
 HELDOUT = "heldout_dispatch"
 FIXTURES = {"abi-fixture": "heldout_dispatch_abi.c", "no-observer-control": "heldout_dispatch.c"}

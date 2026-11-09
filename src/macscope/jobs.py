@@ -22,6 +22,7 @@ DETAILS = ("analysis_profile", "limits", "sandbox_sha256", "selected_entry", "so
 ANALYSIS_REQUEST = "macscope-analysis-request/1"
 IMPORT_REQUEST = "macscope-import-request/1"
 QUERY_REQUEST = "macscope-query-request/1"
+SIGNATURE_RECOVERY_FIELDS = ("dispatch_return_recovery", "direct_signature_recovery")
 QUERY_RECEIPT = "macscope-query-receipt/1"
 PUBLISH = """
 CREATE TABLE IF NOT EXISTS analysis_publications (
@@ -203,7 +204,7 @@ def analysis_request(project, image, recovery=None):
     return request
 
 
-def query_request(project, image, function, source, revision, hints, *, dispatch_recovery=None):
+def query_request(project, image, function, source, revision, hints, *, signature_recovery=None):
     program_sha256 = source.get("analysis_program_sha256")
     if not isinstance(program_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", program_sha256):
         raise Error("analysis_program_integrity", "Saved analyzed Program identity is missing; rerun analyze")
@@ -222,8 +223,9 @@ def query_request(project, image, function, source, revision, hints, *, dispatch
         "type_hint_view_id": identity({"source_analysis_id": image["active_analysis"], "hints": hints})
         if hints is not None else None,
     }
-    if dispatch_recovery is not None:
-        request["dispatch_return_recovery"] = dispatch_recovery
+    if signature_recovery is not None:
+        key, recovery = signature_recovery
+        request[key] = recovery
     return request
 
 
@@ -248,12 +250,13 @@ def query_receipt(project, job_id, request):
             or result["data"].get("entry_va") != request.get("entry_va")
             or result.get("analysis_id") != request.get("source_analysis_id")):
         raise Error("query_receipt", "Recorded query result differs from its request")
-    recovery = request.get("dispatch_return_recovery")
-    reported = origin.get("dispatch_return_recovery")
-    if (recovery is None and reported is not None or recovery is not None and (
-            not isinstance(recovery, dict) or not isinstance(reported, dict)
-            or any(reported.get(key) != value for key, value in recovery.items()))):
-        raise Error("query_receipt", "Recorded dispatch decision differs from its query request")
+    for field in SIGNATURE_RECOVERY_FIELDS:
+        recovery = request.get(field)
+        reported = origin.get(field)
+        if (recovery is None and reported is not None or recovery is not None and (
+                not isinstance(recovery, dict) or not isinstance(reported, dict)
+                or any(reported.get(key) != value for key, value in recovery.items()))):
+            raise Error("query_receipt", "Recorded signature decision differs from its query request")
     _, producer = get(project, producer_id)
     if (producer.get("mode") != "query" or producer["status"] != "complete"
             or producer.get("query_request") != request

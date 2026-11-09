@@ -3,7 +3,7 @@ import hashlib
 import json
 from unittest.mock import patch
 
-from macscope import annotations, cli, dispatch_returns, engine, jobs, storage
+from macscope import annotations, cli, direct_signatures, dispatch_returns, engine, jobs, storage
 from test_core import TemporaryCase
 
 
@@ -123,6 +123,18 @@ class QueryResumeTests(TemporaryCase):
                       dispatch_return_recovery=recovery)
         storage.write_json(self.prior_path, record, force=True)
         with (patch.object(dispatch_returns, 'request', return_value=dict(original, skipped_reason='changed')),
+              patch.object(engine, 'run') as run):
+            self.error('job_resume_inputs', self.resume)
+            run.assert_not_called()
+
+    def test_resume_does_not_replay_a_direct_plan_under_a_different_policy(self):
+        plan = {'policy': direct_signatures.POLICY, 'entry_va': self.entry, 'requests': []}
+        field, recovery = engine.signature_request(plan)
+        request = dict(self.request, type_hint_view_id=None, **{field: recovery})
+        record = dict(self.record, query_request=request, type_hints=None, type_hint_view_id=None,
+                      **{field: recovery})
+        storage.write_json(self.prior_path, record, force=True)
+        with (patch.object(direct_signatures, 'request', return_value=dict(plan, policy=dispatch_returns.POLICY)),
               patch.object(engine, 'run') as run):
             self.error('job_resume_inputs', self.resume)
             run.assert_not_called()

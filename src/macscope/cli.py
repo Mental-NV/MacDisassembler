@@ -14,7 +14,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotation_transfer, annotations, bundle, calls, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, import_state, jobs, metadata, objc, search, swift_symbols
+from . import annotation_transfer, annotations, bundle, calls, direct_signatures, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, import_state, jobs, metadata, objc, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -130,6 +130,8 @@ def parser():
             s.add_argument('--with-type-hints',action='store_true',help='Apply accepted return hints in the fresh query copy')
             s.add_argument('--recover-dispatch-return',action='store_true',
                            help='Use verified x86_64 dispatch return evidence in a fresh query')
+            s.add_argument('--recover-direct-signatures',action='store_true',
+                           help='Use verified x86_64 direct callee signatures in a fresh query')
         if c=='xrefs':s.add_argument('--direction',choices=('to','from','both'),default='both')
     s=sub.add_parser('search');project(s);common(s);pagination(s)
     s.add_argument('query')
@@ -285,14 +287,14 @@ def check_engine_access(args, project):
 
 
 def fresh_decompile(args, project, image, function, source, revision, hints=None, *,
-                    deps=None, resumed_from=None, dispatch_plan=None):
+                    deps=None, resumed_from=None, signature_plan=None):
     if function['entry_va'] is None or function['is_external'] or function['is_thunk']:
         raise Error('fresh_function_unsupported','Fresh decompilation requires a non-thunk function in this image',3)
     if deps is None:
         deps = engine.dependencies(args.ghidra,args.java_home,full=True)
-    recovery = dispatch_returns.request_identity(dispatch_plan) if dispatch_plan is not None else None
-    request = jobs.query_request(project,image,function,source,revision,hints,dispatch_recovery=recovery)
-    options = {} if dispatch_plan is None else {'dispatch_plan': dispatch_plan}
+    recovery = engine.signature_request(signature_plan) if signature_plan is not None else None
+    request = jobs.query_request(project,image,function,source,revision,hints,signature_recovery=recovery)
+    options = {} if signature_plan is None else {'signature_plan': signature_plan}
     result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'],hints=hints,
                              query_request=request,resumed_from=resumed_from,**options)
     fresh = flow_evidence.review(result['functions'][0], blocks=function.get('blocks', ()))
@@ -313,8 +315,8 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
                               applied_type_hints=result['applied_type_hints'])
     if 'boundary_recovery' in job:
         data['origin']['boundary_recovery'] = job['boundary_recovery']
-    if dispatch_plan is not None:
-        data['origin']['dispatch_return_recovery'] = result['dispatch_return_recovery']
+    if recovery is not None:
+        data['origin'][recovery[0]] = result[recovery[0]]
     for field in ('control_flow_review', 'control_flow_gaps', 'engine_decompile_status'):
         if field in fresh:
             data[field] = fresh[field]
@@ -541,16 +543,18 @@ def resume_query(args, project, command, record, request):
     functions = annotations.with_labels(snapshot['functions'],rows)
     function = select_function(functions,argparse.Namespace(address=None,function_id=function_id))
     hints = annotations.type_hints(rows,functions) if request.get('type_hint_view_id') is not None else None
-    recovery = request.get('dispatch_return_recovery')
-    dispatch_plan = None
-    if recovery is not None:
-        if hints is not None:
-            raise Error('job_resume_inputs','The dispatch query conflicts with recorded return hints',8)
-        dispatch_plan = dispatch_returns.request(metadata.verified_slice(project,image),image,function,functions)
-        recovery = dispatch_returns.request_identity(dispatch_plan)
-    if (jobs.query_request(project,image,function,source,revision,hints,dispatch_recovery=recovery) != request
+    fields = [key for key in jobs.SIGNATURE_RECOVERY_FIELDS if key in request]
+    signature_plan, recovery = None, None
+    if fields:
+        if hints is not None or len(fields) != 1:
+            raise Error('job_resume_inputs','The recorded query has conflicting signature evidence',8)
+        policy, _ = engine.SIGNATURE_RECOVERIES[fields[0]]
+        signature_plan = policy.request(metadata.verified_slice(project,image),image,function,functions)
+        recovery = engine.signature_request(signature_plan)
+    if (jobs.query_request(project,image,function,source,revision,hints,signature_recovery=recovery) != request
             or record.get('type_hint_view_id') != request['type_hint_view_id']
-            or record.get('type_hints') != hints or record.get('dispatch_return_recovery') != recovery):
+            or record.get('type_hints') != hints
+            or any(record.get(key) != request.get(key) for key in jobs.SIGNATURE_RECOVERY_FIELDS)):
         raise Error('job_resume_inputs','The fresh query request differs from its saved analysis, hints or recovery',8)
     response = jobs.query_receipt(project,args.job_id,request)
     reused = response is not None
@@ -564,7 +568,7 @@ def resume_query(args, project, command, record, request):
         if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
             raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
         response = fresh_decompile(replay,project,image,function,source,revision,hints,
-                                   deps=deps,resumed_from=args.job_id,dispatch_plan=dispatch_plan)
+                                   deps=deps,resumed_from=args.job_id,signature_plan=signature_plan)
     response = flow_evidence.query_view(response,function)
     data = response['data']
     reused = reused or data['origin']['job_id'] == args.job_id
@@ -784,10 +788,13 @@ def execute(a):
     fresh = a.command == 'decompile' and a.fresh
     with_hints = a.command == 'decompile' and a.with_type_hints
     recover_dispatch = a.command == 'decompile' and a.recover_dispatch_return
+    recover_direct = a.command == 'decompile' and a.recover_direct_signatures
     if with_hints and not fresh:
         raise Error('type_hints_require_fresh','Type-hinted decompilation requires --fresh',3)
     if recover_dispatch and (not fresh or with_hints):
         raise Error('dispatch_return_scope','Dispatch return recovery requires --fresh without --with-type-hints',3)
+    if recover_direct and (not fresh or with_hints or recover_dispatch):
+        raise Error('direct_signature_scope','Direct signature recovery requires --fresh and its own query',3)
     if fresh and a.all:
         raise Error('fresh_selection','--fresh requires one function selector',2)
     term = search.pattern(a.query) if a.command == 'search' else None
@@ -796,7 +803,7 @@ def execute(a):
         return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.4.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='doctor':
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
-        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
+        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
         return envelope(command,deps)
     if a.command=='inspect':
         data,_=inspect_path(a.input,allow_arm64e=True)
@@ -949,9 +956,9 @@ def execute(a):
     f=select_function(functions,a)
     if fresh:
         hints=annotations.type_hints(annotations_rows,functions) if with_hints else None
-        plan = (dispatch_returns.request(metadata.verified_slice(p,image),image,f,functions)
-                if recover_dispatch else None)
-        return flow_evidence.query_view(fresh_decompile(a,p,image,f,record,revision,hints,dispatch_plan=plan),f)
+        policy = direct_signatures if recover_direct else dispatch_returns if recover_dispatch else None
+        plan = policy.request(metadata.verified_slice(p,image),image,f,functions) if policy else None
+        return flow_evidence.query_view(fresh_decompile(a,p,image,f,record,revision,hints,signature_plan=plan),f)
     if a.command=='calls':
         data,gaps=calls.graph(dict(snapshot,functions=functions),f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])

@@ -15,7 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
-from . import dispatch_returns, flow_boundaries, jobs, worker_lifecycle
+from . import direct_signatures, dispatch_returns, flow_boundaries, jobs, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -24,6 +24,18 @@ from .macho import read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
+SIGNATURE_RECOVERIES = {
+    'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
+    'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
+}
+
+
+def signature_request(plan):
+    for field, (policy, _) in SIGNATURE_RECOVERIES.items():
+        if plan['policy'] == policy.POLICY:
+            digest = hashlib.sha256(canonical(plan) + b"\n").hexdigest()
+            return field, {'policy': policy.POLICY, 'request_sha256': digest}
+    raise Error('signature_recovery_scope', 'Unknown signature recovery policy', 2)
 
 ANALYSIS_PROFILES = {
     'baseline': {'name': 'baseline', 'identity': 'baseline/1',
@@ -253,7 +265,7 @@ def worker_limits(args, max_functions):
 
 
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
-        import_request=None, query_request=None, resumed_from=None, boundary_request=None, dispatch_plan=None):
+        import_request=None, query_request=None, resumed_from=None, boundary_request=None, signature_plan=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -272,13 +284,19 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         raise Error('type_hint_scope', 'Accepted hints require a bounded selected-function query', 2)
     if boundary_request is not None and mode != 'analyze':
         raise Error('boundary_recovery_scope', 'Boundary recovery requires analysis of an imported image', 2)
-    dispatch_identity = None
-    if dispatch_plan is not None:
-        dispatch_identity = dispatch_returns.request_identity(dispatch_plan)
-        if (mode != 'query' or entry is None or hints is not None or dispatch_plan['entry_va'] != entry
-                or dispatch_plan['image_sha256'] != image['sha256'] or not query_request
-                or query_request.get('dispatch_return_recovery') != dispatch_identity):
-            raise Error('dispatch_return_scope', 'Dispatch return recovery requires its exact selected query', 2)
+    recovery = None
+    bound_recoveries = {key: query_request[key] for key in jobs.SIGNATURE_RECOVERY_FIELDS
+                        if query_request is not None and key in query_request}
+    if signature_plan is not None:
+        recovery = signature_request(signature_plan)
+        recovery_field, recovery_identity = recovery
+        recovery_policy, recovery_stem = SIGNATURE_RECOVERIES[recovery_field]
+        if (mode != 'query' or entry is None or hints is not None or signature_plan['entry_va'] != entry
+                or signature_plan['image_sha256'] != image['sha256']
+                or bound_recoveries != {recovery_field: recovery_identity}):
+            raise Error('signature_recovery_scope', 'Signature recovery requires its exact selected query', 2)
+    elif bound_recoveries:
+        raise Error('signature_recovery_scope', 'The selected query is missing its signature recovery plan', 2)
     requested_profile = analysis_profile(getattr(args, 'profile', 'baseline')) if mode == 'analyze' else None
     if mode == 'query':
         saved_snapshot, active = project.snapshot(image)
@@ -307,15 +325,15 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     if mode == 'import':
         engine_dir.mkdir(mode=0o700)
     else:
-        if dispatch_plan is not None and (source.is_symlink() or any(p.is_symlink() for p in source.rglob('*'))):
-            raise Error('analysis_program_integrity', 'Saved dispatch Program contains a symbolic link')
+        if signature_plan is not None and (source.is_symlink() or any(p.is_symlink() for p in source.rglob('*'))):
+            raise Error('analysis_program_integrity', 'Saved signature query Program contains a symbolic link')
         shutil.copytree(source, engine_dir, symlinks=False)
-    if dispatch_plan is not None:
+    if signature_plan is not None:
         if tree_digest(engine_dir) != active['analysis_program_sha256']:
-            raise Error('analysis_program_integrity', 'Copied Program differs from the saved dispatch query input')
-        dispatch_request = job/'dispatch-return-request.json'
-        dispatch_report = job/'dispatch-return-result.json'
-        write_json(dispatch_request, dispatch_plan, mode=0o400)
+            raise Error('analysis_program_integrity', 'Copied Program differs from the saved signature query input')
+        recovery_request = job/(recovery_stem + '-request.json')
+        recovery_report = job/(recovery_stem + '-result.json')
+        write_json(recovery_request, signature_plan, mode=0o400)
     argv = ['/usr/bin/sandbox-exec', '-f', str(sandbox), str(g/'support/analyzeHeadless'), str(engine_dir), 'image']
     if mode == 'import':
         argv += ['-import', str(project.path/'inputs'/(image['image_id']+'.macho')), '-noanalysis', '-loader', 'MachoLoader', '-loader-loadLibraries', 'false', '-loader-linkExistingProjectLibraries', 'false', '-loader-reexport', 'false']
@@ -323,8 +341,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         argv += ['-process', image['image_id']+'.macho']
         if mode == 'query':
             argv += ['-readOnly', '-noanalysis']
-            if dispatch_plan is not None and dispatch_plan['requests']:
-                argv += ['-preScript', 'RecoverDispatchReturn.java', str(dispatch_request), str(dispatch_report),
+            if signature_plan is not None and signature_plan['requests']:
+                argv += ['-preScript', 'RecoverCallSignatures.java', str(recovery_request), str(recovery_report),
                          str(args.function_timeout)]
         else:
             argv += ['-preScript', 'MacscopeProfile.java']
@@ -362,8 +380,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         manifest['import_request'] = import_request
     if query_request is not None:
         manifest['query_request'] = query_request
-    if dispatch_identity is not None:
-        manifest['dispatch_return_recovery'] = dispatch_identity
+    if recovery is not None:
+        manifest[recovery_field] = recovery_identity
     if resumed_from is not None:
         manifest['resumed_from'] = resumed_from
     if entry is not None:
@@ -420,16 +438,16 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                 raise Error('type_hint_result_mismatch','Worker did not apply the exact accepted hints',10)
         elif applied:
             raise Error('type_hint_result_mismatch','Worker applied unrequested type hints',10)
-        if dispatch_plan is not None:
+        if signature_plan is not None:
             if any(tree_digest(path) != active['analysis_program_sha256'] for path in (source, engine_dir)):
-                raise Error('analysis_program_integrity', 'Dispatch recovery changed a saved Program on disk', 10)
+                raise Error('analysis_program_integrity', 'Signature recovery changed a saved Program on disk', 10)
             report = None
-            if dispatch_plan['requests'] or dispatch_report.exists():
+            if signature_plan['requests'] or recovery_report.exists():
                 try:
-                    report = json.loads(read_regular(dispatch_report,64*1024))
+                    report = json.loads(read_regular(recovery_report,64*1024))
                 except (Error,ValueError) as error:
-                    raise Error('dispatch_return_result', 'Worker did not publish a valid dispatch decision', 10) from error
-            result['dispatch_return_recovery'] = dict(dispatch_identity, **dispatch_returns.decision(dispatch_plan,report))
+                    raise Error('signature_recovery_result', 'Worker did not publish a valid signature decision', 10) from error
+            result[recovery_field] = dict(recovery_identity, **recovery_policy.decision(signature_plan,report))
         if mode == 'import':
             if result.get('validation',{}).get('headless_analysis_enabled') is not False:
                 raise Error('import_analysis','Import did not disable autoanalysis',10)
