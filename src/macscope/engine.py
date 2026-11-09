@@ -236,7 +236,16 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
             os.close(owner)
 
 
-def run(project, image, mode, args, deps, *, entry=None, hints=None):
+def worker_limits(args, max_functions):
+    return {
+        'timeout_seconds': args.timeout, 'function_timeout_seconds': args.function_timeout,
+        'max_functions': max_functions, 'jobs': 1, 'java_heap_mib': args.heap_mib,
+        'process_memory_limit': None, 'sampled_job_storage_bytes': 512*1024*1024,
+        'storage_is_hard_quota': False,
+    }
+
+
+def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None, resumed_from=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -308,7 +317,11 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None):
         worker_home = job/'home'
         worker_home.mkdir(mode=0o700)
     env = {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'HOME':str(worker_home), 'USER':os.environ.get('USER','macscope'), 'TMPDIR':str(job/'tmp')+'/', 'JAVA_HOME':str(j), 'GHIDRA_HEADLESS_MAXMEM':str(args.heap_mib)+'M', 'JAVA_TOOL_OPTIONS':'-Duser.home='+json.dumps(str(worker_home),ensure_ascii=False)+' -Djava.io.tmpdir='+json.dumps(str(job/'tmp'),ensure_ascii=False), 'LANG':'en_US.UTF-8'}
-    manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':{'timeout_seconds':args.timeout,'function_timeout_seconds':args.function_timeout,'max_functions':max_functions,'jobs':1,'java_heap_mib':args.heap_mib,'process_memory_limit':None,'sampled_job_storage_bytes':512*1024*1024,'storage_is_hard_quota':False}, 'environment':env, 'sandbox_sha256':digest(sandbox)}
+    manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':worker_limits(args,max_functions), 'environment':env, 'sandbox_sha256':digest(sandbox)}
+    if analysis_request is not None:
+        manifest['analysis_request'] = analysis_request
+        if resumed_from is not None:
+            manifest['resumed_from'] = resumed_from
     if entry is not None:
         manifest.update(selected_entry=entry, source_analysis_id=image['active_analysis'])
     if hints is not None:

@@ -393,6 +393,28 @@ the final state, since a worker can finish while a request is being written.
 A confirmed cancellation exits 130 in the original command and preserves
 the prior committed snapshot.
 
+Restart an eligible unpublished analysis with its recorded request.
+
+```sh
+macscope jobs resume JOB_ID --project workspaces/calculator \
+  --experimental-trusted-input --json
+```
+
+The restart creates a new job from the verified immutable artifact, slice,
+and pristine import Program. It preserves the recorded profile and worker
+limits. Select the same Ghidra and JDK used by the original job, including
+any explicit `--ghidra` or `--java-home` paths. The CLI also verifies
+the recorded isolation policy before launching.
+
+The analysis and its publication receipt commit together. Repeating a
+successful restart returns the recorded result without changing the active
+analysis. A worker that finished before publication can be restarted from
+the pristine import. An active or disconnected job with unconfirmed exit,
+an older job without a recorded request, or an intervening active analysis
+change requires a new explicit analysis decision. This command currently
+restarts analysis jobs. Reissue import or fresh decompile commands for
+those operations.
+
 Raw bridge JSON and job manifests/logs remain private in the workspace.
 Normalized exports sort function and unordered cross-reference records (retaining
 duplicate references), omit volatile Program-info/timing fields and

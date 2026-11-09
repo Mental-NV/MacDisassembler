@@ -7,6 +7,7 @@ import json
 import os
 import re
 from pathlib import Path
+import sqlite3
 import sys
 from . import __version__, SCHEMA_VERSION
 from .errors import Error
@@ -78,12 +79,16 @@ def parser():
     s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','parameter-inference','deep'),default='baseline',help='baseline is unchanged; parameter-inference is an explicit experimental binary-only profile');common(s);budgets(s)
     s=sub.add_parser('status');project(s);common(s)
     s=sub.add_parser('jobs');ss=s.add_subparsers(dest='action',required=True)
-    for action in ('list','show','cancel'):
+    for action in ('list','show','cancel','resume'):
         s=ss.add_parser(action);s.add_argument('--project',required=True);common(s)
         if action=='list':
             pagination(s)
         else:
             s.add_argument('job_id')
+        if action=='resume':
+            s.add_argument('--experimental-trusted-input',action='store_true')
+            s.add_argument('--ghidra')
+            s.add_argument('--java-home')
     s=sub.add_parser('headers');project(s);common(s)
     s=sub.add_parser('fixups');project(s);common(s);pagination(s)
     s.add_argument('--kind',choices=('all','bind','rebase'),default='all')
@@ -355,9 +360,15 @@ def import_annotations(args, project):
 
 
 def job_command(args, project, command):
+    if args.action == 'resume':
+        return resume_analysis(args,project,command)
     if args.action != 'list':
         path, record = jobs.get(project,args.job_id)
         data = jobs.request_cancel(path,record) if args.action == 'cancel' else jobs.view(path,record,detail=True)
+        if args.action == 'show':
+            receipt = jobs.publication(project,args.job_id)
+            if receipt:
+                data['publication'] = receipt
         return envelope(command,redact(data))
     rows, gaps = jobs.recent(project)
     rows, cov = page(rows,args,identity(rows),project.project_id,{},order='recent-worker-jobs/v1')
@@ -366,6 +377,110 @@ def job_command(args, project, command):
         reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
         cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
     return envelope(command,redact(rows),status='partial' if gaps else 'complete',cov=cov)
+
+
+def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=False):
+    view = flow_evidence.snapshot_view(snapshot)
+    data = {'image_id': snapshot['image']['image_id'], 'function_count': len(snapshot['functions']),
+            'job_id': job_id, 'decompile_summary': snapshot['engine'].get('decompile_summary'),
+            'analysis_profile': snapshot['analysis_profile'], 'limitations': snapshot['limitations']}
+    if resumed_from is not None:
+        data.update(resumed_from=resumed_from,reused_restart=reused)
+    reasons = ['engine_or_facet_partial'] if snapshot['status'] != 'complete' else []
+    if 'control_flow_review' in view:
+        data['control_flow_review'] = view['control_flow_review']
+        reasons.append('unresolved_control_flow')
+    return envelope(command,data,snapshot['analysis_id'],view['status'],
+                    coverage('selected image analysis',len(snapshot['functions']),
+                             snapshot['engine'].get('function_count_total_reported_by_engine'),bool(reasons),
+                             reason=';'.join(reasons) or None))
+
+
+def analyze_image(project, image, args, deps, command, *, resumed_from=None):
+    """Run analysis and publish its snapshot and receipt under the project writer lock."""
+    metadata.verified_slice(project,image)
+    baseline = project.path/'engine'/image['image_id']
+    if not baseline.is_dir() or engine.tree_digest(baseline)!=image['engine_baseline_sha256']:
+        raise Error('baseline_integrity','Saved import Program DB changed; create a fresh project')
+    raw,job=engine.run(project,image,'analyze',args,deps,
+                       analysis_request=jobs.analysis_request(project,image),resumed_from=resumed_from)
+    normalized=normalize(raw,image,deps,job)
+    aid=normalized['analysis_id']
+    out=project.path/'snapshots'/(aid+'.json')
+    payload=canonical(normalized)+b'\n'
+    if len(payload)>MAX_SNAPSHOT_BYTES:
+        raise Error('snapshot_limit','Normalized snapshot exceeds its read limit; analyze fewer functions',7)
+    if out.exists():
+        if read_regular(out,MAX_SNAPSHOT_BYTES)!=payload:
+            raise Error('nondeterministic_snapshot','Identical analysis identity produced different output; previous snapshot retained',5)
+    else:
+        atomic(out,payload,mode=0o400)
+    record={'snapshot_sha256':hashlib.sha256(payload).hexdigest(),'job_id':job['job_id'],
+            'analysis_program_sha256':engine.tree_digest(project.path/'jobs'/job['job_id']/'program')}
+    try:
+        with project.db(False) as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute(jobs.PUBLISH)
+            db.execute('INSERT OR IGNORE INTO analyses(id,image_id,payload) VALUES(?,?,?)',
+                       (aid,image['image_id'],canonical(record).decode()))
+            db.execute('UPDATE images SET active_analysis=? WHERE id=?',(aid,image['image_id']))
+            db.execute('INSERT INTO analysis_publications(job_id,analysis_id,resumed_from) VALUES(?,?,?)',
+                       (job['job_id'],aid,resumed_from))
+    except sqlite3.Error as error:
+        raise Error('analysis_publication','Could not commit the analysis and job receipt',8,retryable=True) from error
+    return analysis_response(command,normalized,job['job_id'],resumed_from=resumed_from)
+
+
+def resume_analysis(args, project, command):
+    if not args.experimental_trusted_input:
+        raise Error('isolation_required','Restarting analysis requires --experimental-trusted-input',3)
+    with project.writer():
+        path, record = jobs.get(project,args.job_id)
+        request = record.get('analysis_request')
+        if (record.get('mode') != 'analyze' or not isinstance(request,dict)
+                or request.get('schema') != jobs.ANALYSIS_REQUEST):
+            raise Error('job_resume_unsupported','The job has no supported recorded analysis request',3)
+        if record['status'] in jobs.ACTIVE or jobs.leased(path):
+            raise Error('job_resume_ownership','Cannot verify that the previous worker stopped',8)
+        image_id = request.get('image_id')
+        if not isinstance(image_id,str) or not re.fullmatch(r'[0-9a-f]{64}',image_id):
+            raise Error('job_manifest','Invalid recorded analysis image ID')
+        if request.get('project_id') != project.project_id or record.get('image_id') != image_id:
+            raise Error('job_resume_inputs','The recorded request belongs to a different project or image',8)
+        image = project.select(image_id)
+        current = jobs.analysis_request(project,image)
+        if dict(request,previous_analysis_id=image['active_analysis']) != current:
+            raise Error('job_resume_inputs','The recorded immutable inputs differ from the workspace',8)
+        receipt = jobs.publication(project,args.job_id)
+        if receipt:
+            if receipt['job_id'] == args.job_id:
+                raise Error('job_completed','The original job already published an analysis',8,partial=receipt)
+            snapshot,_ = project.snapshot(dict(image,active_analysis=receipt['analysis_id']))
+            return analysis_response(command,snapshot,receipt['job_id'],resumed_from=args.job_id,reused=True)
+        if request != current:
+            raise Error('job_resume_conflict','The active analysis changed since the recorded request',8)
+        budgets = record.get('limits')
+        policy = record.get('analysis_profile')
+        fields = {'timeout':'timeout_seconds','function_timeout':'function_timeout_seconds',
+                  'max_functions':'max_functions','heap_mib':'java_heap_mib'}
+        if (not isinstance(budgets,dict) or any(type(budgets.get(key)) is not int for key in fields.values())
+                or not isinstance(policy,dict) or not isinstance(policy.get('name'),str)):
+            raise Error('job_manifest','Invalid recorded analysis profile or limits')
+        replay = argparse.Namespace(command='analyze',profile=policy['name'],jobs=1,max_memory_mib=None,
+                                    startup_timeout=None,experimental_trusted_input=True,
+                                    **{arg:budgets[key] for arg,key in fields.items()})
+        limits(replay)
+        check_engine_access(replay,project)
+        if engine.analysis_profile(replay.profile) != policy or engine.worker_limits(replay,replay.max_functions) != budgets:
+            raise Error('job_resume_policy','The recorded profile or worker limits differ from the supported policy',3)
+        deps = engine.dependencies(args.ghidra,args.java_home,full=True)
+        if (deps != record.get('dependencies')
+                or hashlib.sha256(engine.profile(project,deps).encode()).hexdigest() != record.get('sandbox_sha256')):
+            raise Error('job_resume_engine','Select the exact recorded engine, JDK and isolation policy to restart',4)
+        artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
+        if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
+            raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
+        return analyze_image(project,image,replay,deps,command,resumed_from=args.job_id)
 
 
 def import_slice(project, image, original, args, deps):
@@ -576,35 +691,7 @@ def execute(a):
         with p.writer():
             if a.command=='import':
                 return import_inputs(a,p,deps)
-            image=p.select(a.image,a.arch)
-            if hashlib.sha256(read_regular(p.path/'inputs'/(image['image_id']+'.macho'))).hexdigest()!=image['sha256']:raise Error('input_integrity','Immutable slice digest mismatch')
-            if engine.tree_digest(p.path/'engine'/image['image_id'])!=image['engine_baseline_sha256']:raise Error('baseline_integrity','Saved import Program DB changed; create a fresh project')
-            raw,job=engine.run(p,image,'analyze',a,deps)
-            normalized=normalize(raw,image,deps,job)
-            aid=normalized['analysis_id']
-            out=p.path/'snapshots'/(aid+'.json')
-            payload=canonical(normalized)+b'\n'
-            if len(payload)>MAX_SNAPSHOT_BYTES:
-                raise Error('snapshot_limit','Normalized snapshot exceeds its read limit; analyze fewer functions',7)
-            if out.exists():
-                if read_regular(out,MAX_SNAPSHOT_BYTES)!=payload:raise Error('nondeterministic_snapshot','Identical analysis identity produced different output; previous snapshot retained',5)
-            else:atomic(out,payload,mode=0o400)
-            record={'snapshot_sha256':hashlib.sha256(payload).hexdigest(),'job_id':job['job_id'],'analysis_program_sha256':engine.tree_digest(p.path/'jobs'/job['job_id']/'program')}
-            with p.db(False) as db:
-                db.execute('INSERT OR IGNORE INTO analyses(id,image_id,payload) VALUES(?,?,?)',(aid,image['image_id'],canonical(record).decode()))
-                db.execute('UPDATE images SET active_analysis=? WHERE id=?',(aid,image['image_id']))
-            view = flow_evidence.snapshot_view(normalized)
-            data = {'image_id': image['image_id'], 'function_count': len(normalized['functions']),
-                    'job_id': job['job_id'], 'decompile_summary': raw.get('decompile_summary'),
-                    'analysis_profile': job['analysis_profile'], 'limitations': normalized['limitations']}
-            reasons = ['engine_or_facet_partial'] if raw['status'] != 'complete' else []
-            if 'control_flow_review' in view:
-                data['control_flow_review'] = view['control_flow_review']
-                reasons.append('unresolved_control_flow')
-            return envelope(command,data,aid,view['status'],
-                            coverage('selected image analysis',len(normalized['functions']),
-                                     raw.get('function_count_total_reported_by_engine'),bool(reasons),
-                                     reason=';'.join(reasons) or None))
+            return analyze_image(p,p.select(a.image,a.arch),a,deps,command)
     image=p.select(a.image,a.arch)
     if a.command=='headers':
         data=metadata.headers(p,image)

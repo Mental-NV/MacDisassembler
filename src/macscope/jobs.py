@@ -16,7 +16,16 @@ STATUSES = ACTIVE | {"complete", "failed", "timeout", "cancelled"}
 RECENT = 100
 SCAN_LIMIT = 4096
 SUMMARY = ("job_id", "mode", "image_id", "elapsed_seconds", "started_unix", "returncode", "error")
-DETAILS = ("analysis_profile", "limits", "sandbox_sha256", "selected_entry", "source_analysis_id")
+DETAILS = ("analysis_profile", "limits", "sandbox_sha256", "selected_entry", "source_analysis_id",
+           "resumed_from")
+ANALYSIS_REQUEST = "macscope-analysis-request/1"
+PUBLISH = """
+CREATE TABLE IF NOT EXISTS analysis_publications (
+    job_id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL REFERENCES analyses(id),
+    resumed_from TEXT UNIQUE
+)
+"""
 
 
 def claim(manifest):
@@ -145,3 +154,27 @@ def request_cancel(path, record):
         if error.code != "output_exists" or not cancel_requested(path, token):
             raise
     return {"job_id": record["job_id"], "status": "cancellation_requested"}
+
+
+def analysis_request(project, image):
+    return {
+        "schema": ANALYSIS_REQUEST,
+        "project_id": project.project_id,
+        "image_id": image["image_id"],
+        "artifact_sha256": image["artifact_sha256"],
+        "slice_sha256": image["sha256"],
+        "import_baseline_sha256": image["engine_baseline_sha256"],
+        "previous_analysis_id": image["active_analysis"],
+    }
+
+
+def publication(project, job_id):
+    with project.db() as db:
+        db.execute("BEGIN")
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='analysis_publications' AND type='table'").fetchone():
+            return None
+        row = db.execute(
+            "SELECT job_id, analysis_id FROM analysis_publications WHERE job_id=? OR resumed_from=?",
+            (job_id, job_id),
+        ).fetchone()
+    return dict(zip(("job_id", "analysis_id"), row)) if row else None

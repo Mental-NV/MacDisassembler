@@ -256,7 +256,8 @@ class ProfileRunnerTests(unittest.TestCase):
 
     def test_cli_rejected_analysis_keeps_existing_active_snapshot(self):
         content = b"owned synthetic input"
-        image = dict(self.image, sha256=hashlib.sha256(content).hexdigest(),
+        digest = hashlib.sha256(content).hexdigest()
+        image = dict(self.image, sha256=digest, artifact_sha256=digest,
                      offset="0x0", sections=[],
                      engine_baseline_sha256=engine.tree_digest(
                          self.project.path / "engine" / self.image["image_id"]))

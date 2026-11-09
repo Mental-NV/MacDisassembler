@@ -106,7 +106,12 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] List and inspect worker jobs and request cancellation through their
   live owner. A second CLI process cancelled an owned calculator analysis
   while preserving its previously committed snapshot.
-- [ ] Restart eligible unfinished jobs with their recorded analysis request.
+- [x] Restart eligible unpublished analysis jobs with their recorded
+  input, engine, isolation, profile, and limits. A live cancellation and
+  restart reproduced the request and retained the prior snapshot until
+  publication. Publication receipts make repeated requests idempotent.
+- [ ] Extend recorded restarts to import and fresh query jobs, and verify
+  worker exit after supervisor loss before automatic restart.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.
