@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import uuid
@@ -62,10 +63,18 @@ class Project:
         self.path = checked_path(path, directory=True)
         if self.path.stat().st_uid != os.getuid() or self.path.stat().st_mode & 0o077:
             raise Error('workspace_permissions', 'Workspace must be owner-private (chmod 700)', 8)
-        manifest = json.loads(read_regular(self.path/'project.json', 65536))
-        if manifest.get('schema_version') != '1.0':
+        try:
+            manifest = json.loads(read_regular(self.path/'project.json', 65536))
+        except (ValueError, RecursionError) as error:
+            raise Error('workspace_manifest', 'Invalid workspace manifest JSON') from error
+        if not isinstance(manifest, dict) or not isinstance(manifest.get('schema_version'), str):
+            raise Error('workspace_manifest', 'Invalid workspace manifest structure')
+        if manifest['schema_version'] != '1.0':
             raise Error('workspace_schema', 'Unsupported workspace schema; export with its original version', 3)
-        self.project_id = manifest['project_id']
+        project_id = manifest.get('project_id')
+        if not isinstance(project_id, str) or not re.fullmatch(r'[a-f0-9]{32}', project_id):
+            raise Error('workspace_manifest', 'Invalid workspace identifier')
+        self.project_id = project_id
         for d in ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp'):
             checked_path(self.path/d, directory=True)
         checked_path(self.path/'index.sqlite')

@@ -190,6 +190,16 @@ class ProjectTests(TemporaryCase):
         storage.write_json(project.path / 'project.json', {'schema_version': '99', 'project_id': project.project_id}, force=True)
         self.error('workspace_schema', storage.Project, project.path)
 
+    def test_malformed_workspace_manifest_returns_typed_error(self):
+        project = self.project()
+        manifest = project.path / 'project.json'
+        for invalid in (b'{', b'[1]', b'{"schema_version":"1.0"}',
+                        b'{"schema_version":1}', b'{"schema_version":"1.0","project_id":"invalid"}',
+                        b'[' * 3000 + b']' * 3000):
+            with self.subTest(prefix=invalid[:40]):
+                storage.atomic(manifest, invalid, force=True)
+                self.error('workspace_manifest', storage.Project, project.path)
+
     def test_writer_conflict_is_retryable_and_lock_released(self):
         first = self.project()
         second = storage.Project(first.path)
