@@ -143,3 +143,35 @@ require stronger isolation. User state is isolated in new runner runs, while
 old runs used shared Ghidra state. No x86_64 binary has been executed and no
 Rosetta use is claimed. Neither this review nor the new runner turns partial
 quality gates into a release pass.
+
+## Post-baseline display-layout correction
+
+A live visual check of the v1.1 app found that the original 280-point field
+clipped `INT64_MAX` at 28-point font despite exposing the complete AX value.
+The AppKit delegate now derives its minimum/default width from the measured
+signed-int64 extrema (at least 420×480 content), preserves a minimum window
+size, stretches the display/error/history horizontally, and expands history
+vertically while keeping the button grid visible. A normal application Quit
+menu routes Command-Q to `NSApplication.terminate:`. Window/menu names honor
+`CFBundleDisplayName`, falling back to the ordinary fixture name.
+
+`fixture/tests/ui_layout.m` constructs the real production controls without
+showing or activating a window. O0, O2 and ASan+UBSan each pass 1,383
+assertions over minimum,
+wider, taller, larger, and restored-minimum sizes. Checks compare full
+`INT64_MAX`/`INT64_MIN` glyph extents with the cell drawing/title rectangles,
+keep overflow text and both `2+3*4=` history entries visible, verify button
+bounds/non-overlap, and inspect Command-Q routing. The matrix script now runs
+this regression. It does not synthesize a Quit action or touch other apps.
+
+The isolated visual-review build is reproducible with
+`python3 fixture/build/build_ui_review.py build/ui-layout-review-v1`. It uses
+a copied Info.plist and Xcode overrides for bundle identifier
+`org.macsdisassembler.CalculatorFixture.UIReview` and display name
+`CalculatorFixture UI Review`, avoiding selection of an older running
+same-ID app. Baseline identity files remain unchanged. The output manifest
+records source hashes/revision, actual tool versions/command, temporary
+Info.plist hash, and the new executable hash. No existing process is closed
+or killed by the build. This UI change creates a new binary identity; the
+prior full baseline stays frozen and is not a measurement of this UI build.
+No new 16-case analysis is claimed for a layout-only correction.

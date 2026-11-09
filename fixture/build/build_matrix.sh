@@ -39,6 +39,11 @@ xcrun clang -O0 -g -Wall -fobjc-arc -Ifixture/src -framework Cocoa \
     fixture/src/calc_core.c fixture/src/CalcController.m \
     fixture/tests/ui_journeys.m -o "$BLD/ui_journeys" 2>&1
 "$BLD/ui_journeys"
+xcrun clang -O0 -g -Wall -Wextra -Werror -fobjc-arc -Ifixture/src -framework Cocoa \
+    fixture/src/calc_core.c fixture/src/CalcController.m \
+    fixture/src/CalculatorFixtureAppDelegate.m fixture/tests/ui_layout.m \
+    -o "$BLD/ui_layout"
+"$BLD/ui_layout"
 
 echo "=== Toolchain versions ==="
 sw_vers

@@ -3,45 +3,100 @@
 // headless UI-journey tests drive).
 #import "CalculatorFixtureAppDelegate.h"
 #import "CalcController.h"
+#include <math.h>
+
+@interface CalculatorFixtureAppDelegate ()
+- (void)buildInterface;
+@end
 
 @implementation CalculatorFixtureAppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
+    [self buildInterface];
+    [self.window center];
+    [self.window makeKeyAndOrderFront:nil];
+}
+
+// Separate construction from presentation so layout tests use the actual
+// production controls without showing or activating a window.
+- (void)buildInterface {
+    if (self.window != nil) return;
     self.controller = [[CalcController alloc] init];
 
-    NSRect frame = NSMakeRect(0, 0, 320, 480);
+    NSString *applicationName = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+    if (applicationName.length == 0) {
+        applicationName = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
+    }
+    if (applicationName.length == 0) applicationName = @"CalculatorFixture";
+    NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:applicationName];
+    NSMenuItem *applicationItem = [[NSMenuItem alloc] initWithTitle:applicationName
+                                                           action:NULL keyEquivalent:@""];
+    NSMenu *applicationMenu = [[NSMenu alloc] initWithTitle:applicationName];
+    NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:[@"Quit " stringByAppendingString:applicationName]
+                                                   action:@selector(terminate:)
+                                            keyEquivalent:@"q"];
+    quitItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    quitItem.target = NSApp;
+    [applicationMenu addItem:quitItem];
+    applicationItem.submenu = applicationMenu;
+    [mainMenu addItem:applicationItem];
+    NSApp.mainMenu = mainMenu;
+
+    const CGFloat margin = 20, minimumHeight = 480;
+    NSFont *displayFont = [NSFont monospacedDigitSystemFontOfSize:28
+                                                        weight:NSFontWeightRegular];
+    NSDictionary *attributes = @{NSFontAttributeName: displayFont};
+    CGFloat maximumTextWidth = MAX([@"9223372036854775807" sizeWithAttributes:attributes].width,
+                                  [@"-9223372036854775808" sizeWithAttributes:attributes].width);
+    // Leave room for the field's cell inset plus breathing room at both ends.
+    CGFloat minimumWidth = MAX(420, ceil(maximumTextWidth) + 2 * margin + 16);
+    CGFloat innerWidth = minimumWidth - 2 * margin;
+    NSRect frame = NSMakeRect(0, 0, minimumWidth, minimumHeight);
     NSWindowStyleMask style = NSWindowStyleMaskTitled |
         NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:style
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
-    self.window.title = @"CalculatorFixture";
+    self.window.title = applicationName;
+    self.window.contentMinSize = NSMakeSize(minimumWidth, minimumHeight);
     NSView *root = self.window.contentView;
 
-    NSTextField *display = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 410, 280, 40)];
+    NSTextField *display = [[NSTextField alloc] initWithFrame:NSMakeRect(margin, 410, innerWidth, 40)];
     display.editable = NO;
     display.selectable = NO;
     display.alignment = NSTextAlignmentRight;
-    display.font = [NSFont monospacedDigitSystemFontOfSize:28 weight:NSFontWeightRegular];
+    display.font = displayFont;
+    display.usesSingleLineMode = YES;
+    display.lineBreakMode = NSLineBreakByClipping;
+    display.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     display.stringValue = @"0";
     [root addSubview:display];
 
-    NSTextField *error = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 384, 280, 22)];
+    NSTextField *error = [[NSTextField alloc] initWithFrame:NSMakeRect(margin, 384, innerWidth, 22)];
     error.editable = NO;
     error.selectable = NO;
     error.bordered = NO;
     error.drawsBackground = NO;
     error.textColor = NSColor.systemRedColor;
+    error.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     error.stringValue = @"";
     [root addSubview:error];
 
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 264, 280, 112)];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(margin, 264, innerWidth, 112)];
     scroll.hasVerticalScroller = YES;
+    // The top labels stay top-aligned and the buttons stay bottom-aligned.
+    // Only history absorbs extra height, so the controls cannot overlap.
+    scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     NSTextView *history = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds];
     history.editable = NO;
     history.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    history.verticallyResizable = YES;
+    history.horizontallyResizable = NO;
+    history.autoresizingMask = NSViewWidthSizable;
+    history.textContainer.containerSize = NSMakeSize(innerWidth, CGFLOAT_MAX);
+    history.textContainer.widthTracksTextView = YES;
     scroll.documentView = history;
     [root addSubview:scroll];
 
@@ -56,8 +111,12 @@
         @"1", @"2", @"3", @"=",
         @"0",
     ];
-    const CGFloat bw = 65, bh = 44, gap = 6;
-    const CGFloat x0 = 20, yTop = 208;
+    NSView *buttons = [[NSView alloc] initWithFrame:NSMakeRect(margin, 8, innerWidth, 244)];
+    buttons.autoresizingMask = NSViewWidthSizable;
+    [root addSubview:buttons];
+    const CGFloat bh = 44, gap = 6;
+    const CGFloat bw = (innerWidth - 3 * gap) / 4;
+    const CGFloat x0 = 0, yTop = 200;
     for (NSUInteger i = 0; i < labels.count; i++) {
         NSUInteger row = i / 4, col = i % 4;
         // Last row holds only "0" spanning the width.
@@ -73,11 +132,10 @@
         b.bezelStyle = NSBezelStyleRounded;
         b.target = self;
         b.action = @selector(buttonPressed:);
-        [root addSubview:b];
+        // Proportionally resize the horizontal grid, retaining row positions.
+        b.autoresizingMask = NSViewMinXMargin | NSViewWidthSizable | NSViewMaxXMargin;
+        [buttons addSubview:b];
     }
-
-    [self.window center];
-    [self.window makeKeyAndOrderFront:nil];
 }
 
 - (void)buttonPressed:(NSButton *)sender {
