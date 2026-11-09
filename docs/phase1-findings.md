@@ -150,6 +150,42 @@ The recovery report SHA-256 is
 The control report SHA-256 is
 `54298809ec08c85a22847e1db0d72d788b0b0076cadf62295bbecc5b3e2142c8`.
 
+### Controlled data references
+
+The evaluator decoded all PC-relative data-address patterns in the 26
+public core functions for both architectures and optimization levels.
+It checked x86_64 RIP displacements against LLVM's printed targets and
+followed the arm64 ADRP page through contiguous address operations to
+the consuming instruction. The Mach-O section table confirmed the
+destination. Indexed loads contributed a static base reference, with
+the runtime index left unresolved.
+
+Across the 32 patched app and tool captures, the original outgoing
+references matched all 76 tool sites and 74 of 76 app sites. The two
+missing app sites were the same indexed dispatch-table reference in the
+two profiles of the split function. With the guarded repair, all 152
+references matched, including 24 indexed bases. The repaired app
+also matched all 13,900 instruction starts and bytes and all 2,732
+direct targets. Register-derived addresses outside these PC-relative
+patterns and references to runtime objects have separate coverage.
+
+Reproduce the recovery matrix from a new scratch directory:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 tests/integration_boundary_matrix.py \
+  --fixture-build-root /path/to/owned-calculator-build \
+  --profile-matrix /private/tmp/owned-patched-profile-matrix \
+  --ghidra /path/to/recorded/patched/full-ghidra \
+  --output-dir /private/tmp/new-boundary-matrix --experimental-trusted-input
+```
+
+Run `analysis/audit_core_data_references.py` with the same build and
+profile matrix, `--kind app` or `--kind tool`, and a new `--output` file.
+Pass `--recovery-matrix` for the repaired results. The repaired app and
+tool data report SHA-256 values are
+`889dea75862ab4acd728e930745d3dda862efc8c167b4ca905a8ba14afbb7c32`
+and `dac3341aa5dbd66f13762890e131a5bcdf3c4d948081bbdc1dba3b5611a33ced`.
+
 ## Post-review semantics and harness
 
 Semantics **v1.1**, committed separately, fixes controller chain-history

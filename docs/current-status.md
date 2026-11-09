@@ -70,7 +70,9 @@ collections exceed documented bounds despite successful pseudocode output.
   The 32-capture calculator comparison found the expected two joins and
   preserved the other functions. The held-out integration and live
   cancellation verified saved Programs and exact replay.
-- [ ] Measure controlled data-reference completeness.
+- [x] Match all 152 controlled PC-relative data references across the app
+  and tool after opt-in recovery, including the two sites inside the
+  previously split body. See [the data audit](phase1-findings.md#controlled-data-references).
 - [x] Match three normalized exports per case and profile on the owned
   patched app and tool matrix. The [determinism run](parameter-inference.md#three-run-determinism)
   verified 96 distinct headless workers.

@@ -185,11 +185,13 @@ def summary(rows):
     )
 
 
-def run(build, matrix, kind="tool"):
+def run(build, matrix, kind="tool", recovery_matrix=None):
     decoder = xcrun("--find", "llvm-objdump")
     decodes, stubs = {}, {}
     captures = []
-    for provenance, snapshot, truth, _, _ in verified_captures(build, matrix, kind=kind):
+    for provenance, snapshot, truth, _, _ in verified_captures(
+        build, matrix, kind=kind, recovery_matrix=recovery_matrix,
+    ):
         case = provenance["case"]
         arch = case.split("-", 1)[1]
         extents = core_extents(truth)
@@ -228,9 +230,10 @@ def main():
     parser.add_argument("--fixture-build-root", type=Path, required=True)
     parser.add_argument("--profile-matrix", type=Path, required=True)
     parser.add_argument("--kind", choices=("tool", "app"), default="tool")
+    parser.add_argument("--recovery-matrix", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    report = run(args.fixture_build_root, args.profile_matrix, args.kind)
+    report = run(args.fixture_build_root, args.profile_matrix, args.kind, args.recovery_matrix)
     write_new_json(args.output, report)
     print(json.dumps({"status": report["status"], **report["summary"]}))
     return 0 if report["status"] == "matched" else 6

@@ -9,9 +9,11 @@ import subprocess
 from prototype_experiment import fixture_input
 from recovered_compare import PROFILES, matrix_exports
 from validate_decompiler_evidence import (
-    read_bytes, require_complete_function_inventory, sha, write_new_json,
+    read_bytes, read_json, require_complete_function_inventory, sha, write_new_json,
 )
+from macscope import flow_boundaries
 from macscope.macho import thin
+from macscope.storage import Project
 
 
 DIE = re.compile(r"^0x[0-9a-fA-F]+:\s+DW_TAG_([a-z_]+)")
@@ -152,8 +154,18 @@ def text_bytes(data, metadata):
     return (va, va + size), data[offset:offset + size]
 
 
-def verified_captures(build, matrix, *, kind="tool"):
+def verified_captures(build, matrix, *, kind="tool", recovery_matrix=None):
     build, matrix = build.resolve(), matrix.resolve()
+    repaired = {}
+    if recovery_matrix is not None:
+        recovery_matrix = recovery_matrix.resolve()
+        report = read_json(recovery_matrix / "report.json")
+        if (report["status"] != "passed" or report["matrix_sha256"] != sha(read_bytes(matrix / "report.json"))
+                or len(report["captures"]) != 32):
+            raise ValueError("Recovery matrix does not match the original capture cohort")
+        repaired = {(row["case"], row["profile"]): row for row in report["captures"]}
+        if len(repaired) != 32:
+            raise ValueError("Duplicate recovery matrix capture")
     states = ("sym", "stripped")
     paired = {
         state: {case: (prior, paths) for case, prior, paths in matrix_exports(matrix, symbols=state, kind=kind)}
@@ -202,6 +214,24 @@ def verified_captures(build, matrix, *, kind="tool"):
                     "dwarf_sha256": dwarf_sha, "dwarf_text_sha256": dwarf_text_sha,
                     "export_sha256": sha(export), "evaluator_exclusions": exclusions,
                 }
+                if recovery_matrix is not None:
+                    label = f"{case}-{state}-{kind}"
+                    repair = repaired[label, profile.split("/", 1)[0]]
+                    project = Project(recovery_matrix / label)
+                    image = project.select()
+                    recovered, record = project.snapshot(dict(image, active_analysis=repair["analysis_id"]))
+                    request = {
+                        "policy": flow_boundaries.RECOVERY_POLICY, "request_sha256": repair["request_sha256"],
+                    }
+                    if (recovered["analysis_id"] != repair["analysis_id"] or recovered["image"]["sha256"] != digest
+                            or recovered["identity"]["profile"] != profile
+                            or recovered["identity"]["boundary_recovery"] != request
+                            or recovered["identity"]["engine"]["native_decompiler_sha256"] !=
+                            snapshot["identity"]["engine"]["native_decompiler_sha256"]):
+                        raise ValueError("Repaired snapshot differs from its recorded fixture or policy")
+                    provenance.update(repaired_snapshot_sha256=record["snapshot_sha256"],
+                                      recovery_request_sha256=repair["request_sha256"])
+                    snapshot = recovered
                 yield provenance, snapshot, truth, linker, manifest
 
 
