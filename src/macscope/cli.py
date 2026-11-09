@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, metadata, objc, search, swift_symbols
+from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, flow_evidence, metadata, objc, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -267,7 +267,7 @@ def fresh_decompile(args, project, image, function, aid, hints=None):
         raise Error('fresh_function_unsupported','Fresh decompilation requires a non-thunk function in this image',3)
     deps = engine.dependencies(args.ghidra,args.java_home,full=True)
     result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'],hints=hints)
-    fresh = result['functions'][0]
+    fresh = flow_evidence.review(result['functions'][0], blocks=function.get('blocks', ()))
     facet = fresh['coverage']['pseudocode']
     complete = facet['status'] == 'complete' and bool(fresh['pseudocode'])
     spans, span_facet = address_spans(fresh, redact(fresh['pseudocode']))
@@ -283,10 +283,14 @@ def fresh_decompile(args, project, image, function, aid, hints=None):
     if hints is not None:
         data['origin'].update(type_hint_view_id=job['type_hint_view_id'],
                               applied_type_hints=result['applied_type_hints'])
+    for field in ('control_flow_review', 'control_flow_gaps', 'engine_decompile_status'):
+        if field in fresh:
+            data[field] = fresh[field]
     diagnostics = [fresh['decompile_error']] if fresh.get('decompile_error') else []
+    reason = 'unresolved_control_flow' if 'control_flow_gaps' in fresh else 'pseudocode_incomplete'
     return envelope('decompile',redact(data),aid,'complete' if complete else 'partial',
                     coverage('fresh selected function pseudocode',int(bool(fresh['pseudocode'])),1,
-                             not complete,reason=None if complete else 'pseudocode_incomplete'),
+                             not complete,reason=None if complete else reason),
                     redact(diagnostics))
 
 
@@ -571,7 +575,18 @@ def execute(a):
             with p.db(False) as db:
                 db.execute('INSERT OR IGNORE INTO analyses(id,image_id,payload) VALUES(?,?,?)',(aid,image['image_id'],canonical(record).decode()))
                 db.execute('UPDATE images SET active_analysis=? WHERE id=?',(aid,image['image_id']))
-            return envelope(command,{'image_id':image['image_id'],'function_count':len(normalized['functions']),'job_id':job['job_id'],'decompile_summary':raw.get('decompile_summary'),'analysis_profile':job['analysis_profile'],'limitations':normalized['limitations']},aid,raw['status'],coverage('selected image analysis',len(normalized['functions']),raw.get('function_count_total_reported_by_engine'),raw['status']!='complete',reason='engine_or_facet_partial' if raw['status']!='complete' else None))
+            view = flow_evidence.snapshot_view(normalized)
+            data = {'image_id': image['image_id'], 'function_count': len(normalized['functions']),
+                    'job_id': job['job_id'], 'decompile_summary': raw.get('decompile_summary'),
+                    'analysis_profile': job['analysis_profile'], 'limitations': normalized['limitations']}
+            reasons = ['engine_or_facet_partial'] if raw['status'] != 'complete' else []
+            if 'control_flow_review' in view:
+                data['control_flow_review'] = view['control_flow_review']
+                reasons.append('unresolved_control_flow')
+            return envelope(command,data,aid,view['status'],
+                            coverage('selected image analysis',len(normalized['functions']),
+                                     raw.get('function_count_total_reported_by_engine'),bool(reasons),
+                                     reason=';'.join(reasons) or None))
     image=p.select(a.image,a.arch)
     if a.command=='headers':
         data=metadata.headers(p,image)
@@ -616,11 +631,12 @@ def execute(a):
     if a.command in metadata.ENGINE_LISTS:
         return metadata_collection(a,p,image,snapshot)
     aid=snapshot['analysis_id']
-    functions=snapshot['functions']
     if a.command == 'annotations' and a.action == 'export':
         transfer = annotation_transfer.export(p,image)
         total = len(transfer['revisions'])
         return envelope(command,transfer,aid,cov=coverage('portable image annotation history',total,total))
+    snapshot = flow_evidence.snapshot_view(snapshot)
+    functions = snapshot['functions']
     if a.command == 'export' and not a.include_annotations:
         revision, annotations_rows = 0, []
     else:
@@ -653,7 +669,8 @@ def execute(a):
     if a.command=='export':
         if a.include_annotations:
             snapshot=dict(snapshot,annotations=redact({'revision':revision,'records':annotations_rows}))
-        return envelope(command,snapshot,aid,snapshot['status'],coverage('committed normalized image export',len(functions),snapshot['engine'].get('function_count_total_reported_by_engine'),snapshot['status']!='complete'),['Private recovered code/strings may be sensitive. Absolute host paths and volatile job timings are omitted.'])
+        reason = 'unresolved_control_flow' if 'control_flow_review' in snapshot else None
+        return envelope(command,snapshot,aid,snapshot['status'],coverage('committed normalized image export',len(functions),snapshot['engine'].get('function_count_total_reported_by_engine'),snapshot['status']!='complete',reason=reason),['Private recovered code/strings may be sensitive. Absolute host paths and volatile job timings are omitted.'])
     if a.command=='functions' and a.action=='list':
         rows=[f for f in functions if not a.name_contains or any(a.name_contains in n['name'] for n in f['names'])]
         filters={'name_contains':a.name_contains}
@@ -661,13 +678,20 @@ def execute(a):
         rows,cov=page(rows,a,aid,p.project_id,filters)
         if snapshot['engine'].get('functions_truncated'):
             cov.update(status='partial',known_total=None,truncation_reason='discovery_limit'+(';page_limit' if cov['next_cursor'] else ''))
-        return envelope(command,[{k:f[k] for k in ('function_id','image_id','arch','entry_va','address_space','engine_entry','body_ranges','names','signature','is_thunk','is_external','decompile_status')} for f in rows],aid,cov=cov)
+        fields = ('function_id','image_id','arch','entry_va','address_space','engine_entry','body_ranges',
+                  'names','signature','is_thunk','is_external','decompile_status','control_flow_review',
+                  'control_flow_gaps','engine_decompile_status')
+        return envelope(command,[{key: f[key] for key in fields if key in f} for f in rows],aid,cov=cov)
     if a.command=='decompile' and a.all:
         rows,cov=page(functions,a,aid,p.project_id,{'decompile':'all'})
         if snapshot['engine'].get('functions_truncated'):
             cov.update(status='partial',known_total=snapshot['engine'].get('function_count_total_reported_by_engine'),truncation_reason='discovery_limit')
         states=Counter(f['decompile_status'] for f in rows)
         partial=any(k not in ('complete','not_requested') for k in states)
+        if partial:
+            reason = ('unresolved_control_flow' if any('control_flow_gaps' in row for row in rows)
+                      else 'pseudocode_incomplete')
+            cov.update(status='partial', truncation_reason=';'.join(filter(None, (cov['truncation_reason'], reason))))
         return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if partial else 'complete',cov)
     f=select_function(functions,a)
     if fresh:
@@ -682,8 +706,10 @@ def execute(a):
     if a.command=='functions':
         notes=[row for row in annotations_rows if row['engine_entry']==f['engine_entry']]
         if notes:f=dict(f,annotations=notes)
-        incomplete=any(c.get('truncated') or c.get('error') for c in f.get('coverage',{}).values())
-        return envelope(command,f,aid,'partial' if incomplete else 'complete',coverage('selected function evidence',1,1,incomplete,reason='facet_incomplete' if incomplete else None))
+        unresolved = 'control_flow_gaps' in f
+        incomplete = unresolved or any(c.get('truncated') or c.get('error') for c in f.get('coverage',{}).values())
+        reason = 'unresolved_control_flow' if unresolved else 'facet_incomplete' if incomplete else None
+        return envelope(command,f,aid,'partial' if incomplete else 'complete',coverage('selected function evidence',1,1,incomplete,reason=reason))
     if a.command=='disasm':
         data={'function_id':f['function_id'],'instructions':f['instructions']}
         partial=bool(f.get('instructions_truncated') or f.get('instructions_error'))
@@ -702,7 +728,12 @@ def execute(a):
         if a.direction in ('from','both'):data['from_body']=f['xrefs_from_sample']
         partial=bool((a.direction in ('to','both') and (f.get('xrefs_to_entry_truncated') or f.get('xrefs_to_entry_error'))) or (a.direction in ('from','both') and (f.get('xrefs_from_truncated') or f.get('xrefs_from_error'))))
         count=sum(len(v) for v in data.values() if isinstance(v,list))
-    return envelope(command,data,aid,'partial' if partial else 'complete',coverage('selected function '+a.command,count,None,partial,reason='facet_incomplete' if partial else None))
+    unresolved = 'control_flow_gaps' in f and (a.command != 'xrefs' or a.direction != 'to')
+    if unresolved and a.command != 'decompile':
+        data.update(control_flow_gaps=f['control_flow_gaps'], control_flow_review=f['control_flow_review'])
+    partial = partial or unresolved
+    reason = 'unresolved_control_flow' if unresolved else 'facet_incomplete' if partial else None
+    return envelope(command,data,aid,'partial' if partial else 'complete',coverage('selected function '+a.command,count,None,partial,reason=reason))
 
 
 def render(result,fmt):

@@ -825,6 +825,45 @@ class CliTests(TemporaryCase):
         self.assertEqual(cli.execute(self.args('type','list'))['data'],[])
         self.assertEqual(self.workspace.snapshot(self.workspace.select())[0],self.snapshot)
 
+    def test_unresolved_computed_jump_surfaces_without_rewriting_saved_evidence(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        target = snapshot['functions'][2]
+        target['blocks'][0].update(flow='COMPUTED_JUMP', dsts=[])
+        target['coverage'] = {'pseudocode': {'status': 'complete', 'emitted': 1}}
+        target['pseudocode'] = '/* WARNING: Treating indirect jump as call */\nreturn;'
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            for command in (('decompile',), ('disasm',), ('cfg',), ('functions', 'show'),
+                            ('xrefs', '--direction', 'from'), ('calls', '--direction', 'callees')):
+                with self.subTest(command=command):
+                    result = cli.execute(self.args(*command, '--name', 'unique'))
+                    self.assertEqual(result['status'], 'partial')
+                    self.assertIn('unresolved_control_flow', result['coverage']['truncation_reason'])
+            selected = cli.execute(self.args('decompile', '--name', 'unique'))['data']
+            self.assertEqual(selected['decompile_status'], 'partial')
+            self.assertEqual(selected['engine_decompile_status'], 'complete')
+            self.assertEqual(selected['pseudocode'], target['pseudocode'])
+            self.assertEqual([gap['source'] for gap in selected['control_flow_gaps']],
+                             ['ghidra_cfg', 'ghidra_pseudocode'])
+            batch = cli.execute(self.args('decompile', '--all'))
+            self.assertEqual(batch['data']['summary']['partial'], 1)
+            exported = cli.execute(self.args('export'))
+            self.assertEqual(exported['data']['control_flow_review']['affected_functions'], 1)
+            self.assertEqual(exported['status'], 'partial')
+        self.assertNotIn('control_flow_gaps', target)
+        self.assertEqual(target['decompile_status'], 'complete')
+
+    def test_resolved_switch_and_indirect_call_do_not_imply_a_missing_jump(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        target = snapshot['functions'][2]
+        target['blocks'][0].update(flow='COMPUTED_JUMP', dsts=[
+            {'flow': 'COMPUTED_JUMP', 'to': target['entry_va']},
+        ])
+        target['blocks'].append(dict(target['blocks'][0], flow='COMPUTED_CALL', dsts=[]))
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            result = cli.execute(self.args('decompile', '--name', 'unique'))
+        self.assertEqual(result['status'], 'complete')
+        self.assertNotIn('control_flow_gaps', result['data'])
+
     def test_cached_metadata_filters_keep_address_space_and_coverage(self):
         snapshot = copy.deepcopy(self.snapshot)
         snapshot['engine']['imports'] = [

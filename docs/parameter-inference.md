@@ -39,12 +39,12 @@ revision plus its dirty-state and exact source-file hashes; it must not be
 mistaken for a clean tagged build.
 
 There were 1,581 compared function records per profile across the matrix,
-including externals/thunks, and 933 complete pseudocode records per profile.
-All paired entry sets, names, body ranges, instructions, CFGs and decompile
-statuses were unchanged. This is an explicit set of measured fields, not
-a statement that every export field or every possible function is unchanged.
-The only effective analyzer-option delta was `Decompiler Parameter ID`,
-from `false` to `true`.
+including externals/thunks, and Ghidra reported 933 completed printer
+operations per profile. All paired entry sets, names, body ranges,
+instructions, CFGs and printer statuses were unchanged. The only effective
+analyzer-option delta was `Decompiler Parameter ID`, from `false` to `true`.
+The historical counts predate CLI review of unresolved control flow.
+[Switch validation](heldout-switch.md#measured-results)
 
 | Fixture case | Function records | Complete pseudocode | Changed signatures | Changed pseudocode |
 | --- | ---: | ---: | ---: | ---: |

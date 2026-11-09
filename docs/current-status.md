@@ -90,8 +90,11 @@ collections exceed documented bounds despite successful pseudocode output.
   and adjudicated the x86_64 O2 padding discrepancy. See the
   [discovery measurement](parameter-inference.md#evaluator-side-discovery-measurement).
 - [x] Freeze a [held-out switch variation](heldout-switch.md) before tuning.
-- [ ] Evaluate both switch fixtures and report unresolved computed jumps
-  as incomplete where the decompiler cannot recover their destinations.
+- [x] Report unresolved computed jumps as partial in cached and fresh CLI
+  views. Verified both owned switch fixtures and their resolved controls.
+- [ ] Recover the missing x86_64 O0 case blocks. Ghidra 12.2 remains pinned.
+  The related upstream change and local limits are recorded in the
+  [switch validation](heldout-switch.md#measured-results).
 - [ ] Exercise isolation, malformed-input fuzzing, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

@@ -103,16 +103,25 @@ def main(argv=None):
             invoke("analyze", "--project", project, "--experimental-trusted-input", "--json",
                    expected=(0, 6))
             baseline = exported(project)
+            baseline_raw, _ = workspace.snapshot(workspace.select())
             if baseline["identity"]["profile"] != "baseline/1":
                 raise AssertionError("Default profile changed")
             invoke("analyze", "--project", project, "--profile", "parameter-inference",
                    "--experimental-trusted-input", "--json", expected=(0, 6))
             inferred = exported(project)
+            inferred_raw, _ = workspace.snapshot(workspace.select())
             if (inferred["identity"]["profile"] != "parameter-inference/1"
                     or inferred["analysis_id"] == baseline["analysis_id"]
                     or inferred["analysis_profile"] != engine.analysis_profile("parameter-inference")):
                 raise AssertionError("Profile identity/provenance not distinct")
-            comparison = compare_results(comparison_view(baseline), comparison_view(inferred))
+            comparison = compare_results(comparison_view(baseline_raw), comparison_view(inferred_raw))
+            comparison["engine_complete_pseudocode_count"] = comparison["complete_pseudocode_count"]
+            comparison["complete_pseudocode_count"] = sum(
+                f["decompile_status"] == "complete" for f in inferred["functions"]
+            )
+            comparison["control_flow_review"] = {
+                "baseline": baseline.get("control_flow_review"), "parameter_inference": inferred.get("control_flow_review"),
+            }
             if not comparison["unchanged_machine_facets"]:
                 raise AssertionError("Fixture machine evidence changed")
             if comparison["option_deltas"] != {"Decompiler Parameter ID": ["false", "true"]}:

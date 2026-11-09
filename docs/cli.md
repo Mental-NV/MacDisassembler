@@ -352,6 +352,15 @@ On the owned arm64 and x86_64 tools, fresh queries matched the cached
 pseudocode under both profiles. The integration checks verified one
 decompile attempt and preserved the saved Program and snapshot.
 
+Cached and fresh results report partial coverage when a recorded computed
+jump lacks a destination or Ghidra emits an explicit jump-recovery warning.
+The original pseudocode, edges, and printer status remain available.
+`control_flow_gaps` identifies the Ghidra evidence and
+`control_flow_review` identifies the reporting policy. Selected pseudocode
+and CFG queries with an observed gap exit 6. The check also applies when
+reading existing snapshots. It leaves analyzer settings and stored
+snapshots intact. [Held-out and calculator validation](heldout-switch.md#measured-results)
+
 New analyses and fresh queries can include `address_spans` from Ghidra's C
 markup. `text_start` and `text_end` are zero-based UTF-16 offsets into the
 returned pseudocode, with the end excluded. Each `ranges` entry is an
@@ -478,13 +487,12 @@ trusted part of the execution environment.
 Bundled `envelope.schema.json` and `function.schema.json` use schema1.0.
 Every JSON response has command, status, analysis_id (nullable), data,
 diagnostics and coverage. A stdlib subset validator validates those schemas
-and emitted function records. `complete` denotes completion of a backend
-operation, **not** semantic correctness or exhaustive runtime behavior.
-Unavailable pseudocode is null; unknown coverage totals are null.
-Token/address spans are currently unavailable and explicitly marked as such.
+and emitted function records. `complete` denotes completion within the
+recorded coverage. Unavailable pseudocode and unknown coverage totals are
+null. Token/address spans include a separate availability field.
 
 Exit codes: 0 complete, 2 usage/ambiguity/cursor, 3 unsupported capability,
-4 dependency missing/incompatible, 5 malformed/integrity, 6 partial batch,
+4 dependency missing/incompatible, 5 malformed/integrity, 6 partial result,
 7 timeout/resource limit, 8 workspace/output conflict, 10 unexpected worker/
 internal failure, 130 interrupt. A bounded collection page can have partial
 coverage while the page request itself exits0; use `next_cursor`.

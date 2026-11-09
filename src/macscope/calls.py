@@ -45,6 +45,8 @@ def graph(snapshot, root, direction, depth, max_edges):
                 gaps.add(facet + "_incomplete")
             refs = [row for row in function.get(key, ()) if "CALL" in row["type"]]
             if not incoming:
+                if function.get("control_flow_gaps"):
+                    gaps.add("unresolved_control_flow")
                 if function.get("instructions_truncated") or function.get("instructions_error"):
                     gaps.add("instructions_incomplete")
                 sites = {row["from"] for row in refs}
