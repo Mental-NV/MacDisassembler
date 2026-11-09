@@ -60,6 +60,7 @@ macscope decompile --project workspaces/calculator --name _calc_add --json
 macscope decompile --project workspaces/calculator --all --limit 1000 --json
 macscope xrefs --project workspaces/calculator --name _calc_add --direction both --json
 macscope cfg --project workspaces/calculator --name _calc_add --format dot
+macscope search calc_add --in all --project workspaces/calculator --json
 macscope status --project workspaces/calculator --json
 macscope export --project workspaces/calculator --json --output private-results.json
 ```
@@ -78,6 +79,17 @@ bind to project, full analysis ID, filter and sort order. Changing any of
 these rejects the cursor. Pagination coverage distinguishes page truncation
 from global discovery truncation. `--all` means bounded engine-recognized
 functions, not every possible routine in the binary.
+
+`search QUERY` matches a literal, case-insensitive query of up to 256 printable
+characters against the selected committed image. `--in names` covers
+function and symbol names, `--in strings` covers Ghidra-defined strings,
+and `--in pseudocode` covers saved decompiler text. The default `all` searches
+these three scopes. Each matching source record returns one bounded excerpt
+with image identity, engine address when available, and a function ID when
+the record identifies a function. Pseudocode addresses identify the function
+entry. Use `--limit` and `--cursor` to page through the hits. A partial source
+facet yields partial coverage even when there are no matches. Search uses
+the saved evidence and requires no engine startup.
 
 `inspect` is a bounded stdlib preflight for thin/fat/fat64 little-endian
 64-bit arm64 and x86_64 executable/dylib/bundle images. It resolves a main

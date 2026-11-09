@@ -71,7 +71,13 @@ def synthetic_snapshot(project, aid='analysis-one'):
         })
     snapshot = {'analysis_id': aid, 'status': 'complete', 'image': image,
                 'functions': functions, 'engine': {'function_count_total_reported_by_engine': 3,
-                                                  'functions_truncated': False},
+                                                  'functions_truncated': False,
+                                                  'symbols': [{'name': 'reference+anchor',
+                                                               'address': '0x100000020'}],
+                                                  'strings': [{'value': 'Some reference+anchor data',
+                                                               'address': '0x100000050'}],
+                                                  'coverage': {'symbols': {'status': 'complete'},
+                                                               'strings': {'status': 'complete'}}},
                 'limitations': ['Synthetic test fixture only.']}
     payload = storage.canonical(snapshot) + b'\n'
     storage.atomic(project.path / 'snapshots' / (aid + '.json'), payload, mode=0o400)
@@ -575,6 +581,51 @@ class CliTests(TemporaryCase):
         payload = stdout.buffer.getvalue()
         stdout.close()
         return code, payload, stderr.getvalue()
+
+    def test_search_finds_literal_names_symbols_strings_and_pseudocode_without_engine(self):
+        with mock.patch.object(engine, 'dependencies') as deps, mock.patch.object(engine, 'run') as run:
+            anchors = cli.execute(self.args('search', 'REFERENCE+ANCHOR'))
+            functions = cli.execute(self.args('search', 'UNIQUE', '--in', 'names'))
+            code = cli.execute(self.args('search', 'RETURN;', '--in', 'pseudocode'))
+        deps.assert_not_called()
+        run.assert_not_called()
+        self.assertEqual([hit['source'] for hit in anchors['data']], ['symbol', 'defined_string'])
+        self.assertEqual(anchors['data'][0]['function_id'], 'function-2')
+        self.assertIsNone(anchors['data'][1]['function_id'])
+        self.assertEqual(functions['data'][0]['va'], '0x100000020')
+        self.assertEqual([hit['function_id'] for hit in code['data']],
+                         ['function-0', 'function-1', 'function-2'])
+
+    def test_search_pages_are_bound_to_query_scope_and_order(self):
+        page_one = cli.execute(self.args('search', 'duplicate', '--in', 'names', '--limit', '1'))
+        cursor = page_one['coverage']['next_cursor']
+        self.assertEqual(page_one['coverage']['truncation_reason'], 'page_limit')
+        page_two = cli.execute(self.args('search', 'duplicate', '--in', 'names', '--cursor', cursor))
+        self.assertEqual([row['function_id'] for row in page_two['data']], ['function-1'])
+        self.assertIsNone(page_two['coverage']['next_cursor'])
+        for query, scope in (('duplicate', 'all'), ('DUPLICATE', 'names')):
+            self.error('stale_cursor', cli.execute,
+                       self.args('search', query, '--in', scope, '--cursor', cursor))
+
+    def test_empty_search_preserves_incomplete_scope(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        snapshot['engine']['coverage']['strings']['status'] = 'partial'
+        snapshot['functions'][0].update(decompile_status='timeout', pseudocode=None)
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            for scope, reason in (('strings', 'string_coverage_incomplete'),
+                                  ('pseudocode', 'pseudocode_coverage_incomplete')):
+                result = cli.execute(self.args('search', 'no hit', '--in', scope))
+                self.assertEqual(result['data'], [])
+                self.assertEqual(result['status'], 'partial')
+                self.assertIsNone(result['coverage']['known_total'])
+                self.assertEqual(result['coverage']['truncation_reason'], reason)
+            names = cli.execute(self.args('search', 'no hit', '--in', 'names'))
+        self.assertEqual(names['status'], 'complete')
+        self.assertEqual(names['coverage']['known_total'], 0)
+
+    def test_search_rejects_empty_or_oversized_query(self):
+        for value in ('', ' ', 'x' * 257, '\n'):
+            self.error('search_query', cli.execute, self.args('search', value))
 
     def assert_envelope(self, result):
         required = {'schema_version', 'command', 'status', 'analysis_id', 'data', 'diagnostics', 'coverage'}

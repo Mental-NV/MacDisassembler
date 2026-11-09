@@ -12,7 +12,7 @@ from . import __version__, SCHEMA_VERSION
 from .errors import Error
 from .macho import inspect_path, read_regular
 from .storage import Project, atomic, canonical, identity, write_json
-from . import engine
+from . import engine, search
 from .schema import validate_envelope, validate_function
 
 
@@ -80,6 +80,9 @@ def parser():
         s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl'));selector(s,all_option=c=='decompile')
         if c=='decompile':pagination(s)
         if c=='xrefs':s.add_argument('--direction',choices=('to','from','both'),default='both')
+    s=sub.add_parser('search');project(s);common(s);pagination(s)
+    s.add_argument('query')
+    s.add_argument('--in',dest='search_scope',choices=(*search.SCOPES,'all'),default='all')
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl'))
     return p
 
@@ -160,8 +163,8 @@ def select_function(functions,args):
     return rows[0]
 
 
-def page(rows,args,aid,project_id,filters):
-    binding=identity({'analysis':aid,'project':project_id,'filters':filters,'order':'entry-va/function-id/v1'})
+def page(rows,args,aid,project_id,filters,*,order='entry-va/function-id/v1'):
+    binding=identity({'analysis':aid,'project':project_id,'filters':filters,'order':order})
     start=0
     if args.cursor:
         try:
@@ -178,6 +181,7 @@ def page(rows,args,aid,project_id,filters):
 
 def execute(a):
     limits(a)
+    term = search.pattern(a.query) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
         return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.1.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
@@ -264,6 +268,16 @@ def execute(a):
     snapshot,record=p.snapshot(image)
     aid=snapshot['analysis_id']
     functions=snapshot['functions']
+    if a.command == 'search':
+        hits, gaps = search.snapshot_matches(snapshot, term, a.search_scope)
+        rows, cov = page(hits, a, aid, p.project_id,
+                         {'query': a.query, 'scope': a.search_scope}, order='search-kind/address/v1')
+        cov['scope'] = 'committed image search: ' + a.search_scope
+        if gaps:
+            reasons = [*gaps, *(['page_limit'] if cov['next_cursor'] else [])]
+            cov.update(status='partial', known_total=None, truncation_reason=';'.join(reasons))
+        return envelope(command, rows, aid, 'partial' if gaps else 'complete', cov,
+                        ['Search hits are leads from the selected committed analysis.'])
     if a.command=='export':
         return envelope(command,snapshot,aid,snapshot['status'],coverage('committed normalized image export',len(functions),snapshot['engine'].get('function_count_total_reported_by_engine'),snapshot['status']!='complete'),['Private recovered code/strings may be sensitive. Absolute host paths and volatile job timings are omitted.'])
     if a.command=='functions' and a.action=='list':
