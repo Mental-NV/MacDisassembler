@@ -78,7 +78,9 @@ def parser():
         else:s.add_argument('--name-contains');pagination(s)
     for c in ('disasm','decompile','xrefs','cfg'):
         s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl'));selector(s,all_option=c=='decompile')
-        if c=='decompile':pagination(s)
+        if c=='decompile':
+            pagination(s);budgets(s)
+            s.add_argument('--fresh',action='store_true',help='Reopen the saved Program and decompile one function')
         if c=='xrefs':s.add_argument('--direction',choices=('to','from','both'),default='both')
     s=sub.add_parser('search');project(s);common(s);pagination(s)
     s.add_argument('query')
@@ -100,6 +102,13 @@ def limits(args):
         target=Path(args.output)
         if target.exists() and not args.force:
             raise Error('output_exists','Output exists; use --force',8)
+
+
+def redact(value):
+    if isinstance(value,str):return re.sub(r'/Users/[^/\s\"\']+', '$HOME', value)
+    if isinstance(value,list):return [redact(item) for item in value]
+    if isinstance(value,dict):return {key:redact(item) for key,item in value.items()}
+    return value
 
 
 def normalize(raw, image, deps, manifest):
@@ -141,11 +150,6 @@ def normalize(raw, image, deps, manifest):
         functions.append(f)
     functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['engine_entry'],f['function_id']))
     value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','No token-to-address spans, annotations, rich ObjC/Swift metadata views or phase-3 features.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
-    def redact(v):
-        if isinstance(v,str):return re.sub(r'/Users/[^/\s\"\']+', '$HOME', v)
-        if isinstance(v,list):return [redact(x) for x in v]
-        if isinstance(v,dict):return {k:redact(x) for k,x in v.items()}
-        return v
     return redact(value)
 
 
@@ -183,15 +187,52 @@ def page(rows,args,aid,project_id,filters,*,order='entry-va/function-id/v1'):
     return selected,coverage('selected image function collection',len(selected),len(rows),bool(nxt),nxt,'page_limit' if nxt else None)
 
 
+def check_engine_access(args, project):
+    if not args.experimental_trusted_input:
+        raise Error('isolation_required','Engine operations require explicit --experimental-trusted-input for trusted user-owned fixtures only',3)
+    if args.jobs != 1 or args.max_memory_mib is not None or args.startup_timeout is not None:
+        raise Error('unsupported_budget','Only jobs=1, total --timeout and Java-only --heap-mib are supported; hard process-memory/startup budgets are rejected',3)
+    if args.command == 'analyze':
+        engine.analysis_profile(args.profile)
+    if any(c in str(project.path) for c in ('"', '\\', '\n', '\r')):
+        raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
+
+
+def fresh_decompile(args, project, image, function, aid):
+    if function['entry_va'] is None or function['is_external'] or function['is_thunk']:
+        raise Error('fresh_function_unsupported','Fresh decompilation requires a non-thunk function in this image',3)
+    deps = engine.dependencies(args.ghidra,args.java_home,full=True)
+    result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'])
+    fresh = result['functions'][0]
+    facet = fresh['coverage']['pseudocode']
+    complete = facet['status'] == 'complete' and bool(fresh['pseudocode'])
+    data = {
+        'function_id': function['function_id'], 'image_id': image['image_id'], 'arch': image['arch'],
+        'entry_va': function['entry_va'], 'names': function['names'],
+        'pseudocode': fresh['pseudocode'], 'decompile_status': fresh['decompile_status'],
+        'pseudocode_truncated': fresh['pseudocode_truncated'],
+        'origin': {'mode': 'fresh_readonly', 'job_id': job['job_id'],
+                   'analysis_profile': job['analysis_profile'], 'bridge_version': result['bridge_version']},
+    }
+    diagnostics = [fresh['decompile_error']] if fresh.get('decompile_error') else []
+    return envelope('decompile',redact(data),aid,'complete' if complete else 'partial',
+                    coverage('fresh selected function pseudocode',int(bool(fresh['pseudocode'])),1,
+                             not complete,reason=None if complete else 'pseudocode_incomplete'),
+                    redact(diagnostics))
+
+
 def execute(a):
     limits(a)
+    fresh = a.command == 'decompile' and a.fresh
+    if fresh and a.all:
+        raise Error('fresh_selection','--fresh requires one function selector',2)
     term = search.pattern(a.query) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
-        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.1.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
+        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.2.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='doctor':
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
-        deps['capabilities']={'cached_queries':True,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
+        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
         return envelope(command,deps)
     if a.command=='inspect':
         data,_=inspect_path(a.input)
@@ -200,6 +241,8 @@ def execute(a):
         p=Project.create(a.path)
         return envelope(command,{'project_id':p.project_id,'schema_version':'1.0'})
     p=Project(a.project)
+    if fresh or a.command in ('import','analyze'):
+        check_engine_access(a,p)
     if a.command=='status':
         images=p.images()
         jobs=[]
@@ -212,11 +255,6 @@ def execute(a):
             jobs.append({k:v for k,v in job.items() if k in ('job_id','mode','image_id','elapsed_seconds','error','returncode')}|{'status':state})
         return envelope(command,{'project_id':p.project_id,'images':images,'jobs':jobs,'job_history_limit':100},cov=coverage('project status',len(images),len(images)))
     if a.command in ('import','analyze'):
-        # All budget validation occurs before importing or mutating workspace.
-        if not a.experimental_trusted_input:raise Error('isolation_required','Engine operations require explicit --experimental-trusted-input for trusted user-owned fixtures only',3)
-        if a.jobs!=1 or a.max_memory_mib is not None or a.startup_timeout is not None:raise Error('unsupported_budget','Only jobs=1, total --timeout and Java-only --heap-mib are supported; hard process-memory/startup budgets are rejected',3)
-        if a.command=='analyze':engine.analysis_profile(a.profile)
-        if any(c in str(p.path) for c in ('\"','\\','\n','\r')):raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
         deps=engine.dependencies(a.ghidra,a.java_home,full=True)
         with p.writer():
             if a.command=='import':
@@ -298,6 +336,8 @@ def execute(a):
         partial=any(k not in ('complete','not_requested') for k in states)
         return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if partial else 'complete',cov)
     f=select_function(functions,a)
+    if fresh:
+        return fresh_decompile(a,p,image,f,aid)
     if a.command=='calls':
         data,gaps=calls.graph(snapshot,f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])

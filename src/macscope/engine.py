@@ -194,7 +194,7 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
         write_json(manifest_path, manifest, force=True)
 
 
-def run(project, image, mode, args, deps):
+def run(project, image, mode, args, deps, *, entry=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -205,10 +205,24 @@ def run(project, image, mode, args, deps):
         raise Error('hard_memory_unsupported', 'A hard process-memory budget cannot be enforced here. --heap-mib caps only the Java heap.', 3)
     if args.startup_timeout is not None:
         raise Error('startup_budget_unsupported', 'Separate startup deadlines are not yet supported; use --timeout for a total wall deadline', 3)
+    if entry is not None and (mode != 'query' or not re.fullmatch(r'0x[0-9a-f]{1,16}', entry)):
+        raise Error('query_entry', 'Selected query requires an exact saved RAM function entry', 2)
     requested_profile = analysis_profile(getattr(args, 'profile', 'baseline')) if mode == 'analyze' else None
     if mode == 'query':
-        saved_snapshot, _ = project.snapshot(image)
+        saved_snapshot, active = project.snapshot(image)
         requested_profile = profile_for_snapshot(saved_snapshot)
+        if entry is not None:
+            saved_digest = saved_snapshot['identity'].get('engine', {}).get('ghidra_tree_sha256')
+            if not saved_digest or saved_digest != deps.get('ghidra_tree_sha256'):
+                raise Error('query_engine_mismatch', 'Installed Ghidra differs from the saved analysis; rerun analyze', 4)
+        if not re.fullmatch(r'[a-f0-9]{32}', active.get('job_id','')):
+            raise Error('analysis_program_missing','Active analyzed Program reference is invalid')
+        source = project.path/'jobs'/active['job_id']/'program'
+        if not source.is_dir() or active.get('analysis_program_sha256') != tree_digest(source):
+            raise Error('analysis_program_integrity','Saved analyzed Program is missing or changed; rerun analyze')
+    elif mode == 'analyze':
+        # Fresh analysis starts from the saved no-analysis import.
+        source = project.path/'engine'/image['image_id']
     jobid = uuid.uuid4().hex
     job = project.path/'jobs'/jobid
     job.mkdir(mode=0o700)
@@ -221,17 +235,6 @@ def run(project, image, mode, args, deps):
     if mode == 'import':
         engine_dir.mkdir(mode=0o700)
     else:
-        if mode == 'query':
-            _, active = project.snapshot(image)
-            if not re.fullmatch(r'[a-f0-9]{32}', active.get('job_id','')):
-                raise Error('analysis_program_missing','Active analyzed Program reference is invalid')
-            source = project.path/'jobs'/active['job_id']/'program'
-            if not source.is_dir() or active.get('analysis_program_sha256') != tree_digest(source):
-                raise Error('analysis_program_integrity','Saved analyzed Program is missing or changed; rerun analyze')
-        else:
-            # Every analysis starts from the saved no-analysis import, avoiding
-            # analyzer mutations from a preceding run under the same identity.
-            source = project.path/'engine'/image['image_id']
         shutil.copytree(source, engine_dir, symlinks=False)
     argv = ['/usr/bin/sandbox-exec', '-f', str(sandbox), str(g/'support/analyzeHeadless'), str(engine_dir), 'image']
     if mode == 'import':
@@ -244,9 +247,22 @@ def run(project, image, mode, args, deps):
             argv += ['-preScript', 'MacscopeProfile.java']
             if requested_profile['parameter_inference']:
                 argv += [requested_profile['name']]
-    argv += ['-scriptPath', str(BRIDGE.resolve()), '-postScript', 'MacscopeBridge.java', str(outfile), mode, str(args.max_functions), str(args.function_timeout), '-max-cpu', '1', '-analysisTimeoutPerFile', str(args.timeout), '-log', str(job/'engine.log'), '-scriptlog', str(job/'script.log')]
-    env = {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'HOME':str(project.path/'home'), 'USER':os.environ.get('USER','macscope'), 'TMPDIR':str(job/'tmp')+'/', 'JAVA_HOME':str(j), 'GHIDRA_HEADLESS_MAXMEM':str(args.heap_mib)+'M', 'JAVA_TOOL_OPTIONS':'-Duser.home='+json.dumps(str(project.path/'home'),ensure_ascii=False)+' -Djava.io.tmpdir='+json.dumps(str(job/'tmp'),ensure_ascii=False), 'LANG':'en_US.UTF-8'}
-    manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':{'timeout_seconds':args.timeout,'function_timeout_seconds':args.function_timeout,'max_functions':args.max_functions,'jobs':1,'java_heap_mib':args.heap_mib,'process_memory_limit':None,'sampled_job_storage_bytes':512*1024*1024,'storage_is_hard_quota':False}, 'environment':env, 'sandbox_sha256':digest(sandbox)}
+    max_functions = 1 if entry is not None else args.max_functions
+    argv += ['-scriptPath', str(BRIDGE.resolve()), '-postScript', 'MacscopeBridge.java',
+             str(outfile), mode, str(max_functions), str(args.function_timeout)]
+    if entry is not None:
+        argv.append(entry)
+    argv += ['-max-cpu', '1', '-analysisTimeoutPerFile', str(args.timeout), '-log',
+             str(job/'engine.log'), '-scriptlog', str(job/'script.log')]
+    worker_home = project.path/'home'
+    if entry is not None:
+        # Concurrent readers use independent Ghidra user settings.
+        worker_home = job/'home'
+        worker_home.mkdir(mode=0o700)
+    env = {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'HOME':str(worker_home), 'USER':os.environ.get('USER','macscope'), 'TMPDIR':str(job/'tmp')+'/', 'JAVA_HOME':str(j), 'GHIDRA_HEADLESS_MAXMEM':str(args.heap_mib)+'M', 'JAVA_TOOL_OPTIONS':'-Duser.home='+json.dumps(str(worker_home),ensure_ascii=False)+' -Djava.io.tmpdir='+json.dumps(str(job/'tmp'),ensure_ascii=False), 'LANG':'en_US.UTF-8'}
+    manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':{'timeout_seconds':args.timeout,'function_timeout_seconds':args.function_timeout,'max_functions':max_functions,'jobs':1,'java_heap_mib':args.heap_mib,'process_memory_limit':None,'sampled_job_storage_bytes':512*1024*1024,'storage_is_hard_quota':False}, 'environment':env, 'sandbox_sha256':digest(sandbox)}
+    if entry is not None:
+        manifest.update(selected_entry=entry, source_analysis_id=image['active_analysis'])
     run_process(argv, cwd=job, env=env, timeout=args.timeout, log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
     try:
         if b'Skipping unsupported -loader-' in read_regular(job/'launcher.log',8*1024*1024):
@@ -274,6 +290,11 @@ def run(project, image, mode, args, deps):
             raise Error('bridge_failed', 'Bridge failed: '+str(result.get('errors')), 10)
         if mode != 'import':
             validate_analysis_profile(result, requested_profile, mode)
+        if entry is not None:
+            rows = result.get('functions', [])
+            if (result.get('selected_entry') != entry or len(rows) != 1
+                    or rows[0].get('entry_va') != entry):
+                raise Error('query_result_mismatch', 'Worker did not return the exact selected function', 10)
         if mode == 'import':
             destination = project.path/'engine'/image['image_id']
             if destination.exists():

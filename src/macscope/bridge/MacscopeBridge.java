@@ -1,5 +1,5 @@
 // Narrow, bounded exporter of a real Ghidra Program. Ghidra 12.2 public APIs.
-// analyzeHeadless ... -postScript MacscopeBridge.java OUTPUT MODE MAXFUNCS TIMEOUT
+// analyzeHeadless ... -postScript MacscopeBridge.java OUTPUT MODE MAXFUNCS TIMEOUT [QUERY_ENTRY]
 // MODE: import (no function work), analyze (post-analysis), query (read-only).
 // The runner owns import/process/readOnly/noanalysis flags and project locking.
 import java.io.IOException;
@@ -53,7 +53,7 @@ import ghidra.program.model.symbol.SymbolTable;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.1.0";
+    static final String VERSION = "1.2.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final int MAX_INSTRUCTIONS = 2000, MAX_BLOCKS = 500, MAX_EDGES = 500;
@@ -77,8 +77,8 @@ public class MacscopeBridge extends HeadlessScript {
     @Override
     public void run() throws Exception {
         String[] args = getScriptArgs();
-        if (args.length != 4) {
-            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT");
+        if (args.length != 4 && args.length != 5) {
+            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [QUERY_ENTRY]");
         }
         mode = args[1];
         if (!mode.equals("import") && !mode.equals("analyze") && !mode.equals("query")) {
@@ -86,10 +86,15 @@ public class MacscopeBridge extends HeadlessScript {
         }
         int maxFunctions = boundedInt(args[2], 1, 10000, "MAXFUNCS");
         int timeout = boundedInt(args[3], 1, 300, "FUNCTION_TIMEOUT");
+        String entry = args.length == 5 ? args[4] : null;
+        if (entry != null && (!mode.equals("query") || maxFunctions != 1 || !entry.matches("0x[0-9a-f]{1,16}"))) {
+            throw new IllegalArgumentException("Selected decompilation requires query mode and one RAM entry");
+        }
         Path output = Path.of(args[0]).toAbsolutePath().normalize();
         root.addProperty("schema", SCHEMA);
         root.addProperty("bridge_version", VERSION);
         root.addProperty("mode", mode);
+        if (entry != null) root.addProperty("selected_entry", entry);
         root.addProperty("ghidra_version", getGhidraVersion());
         root.add("errors", errors);
         root.add("warnings", warnings);
@@ -126,12 +131,14 @@ public class MacscopeBridge extends HeadlessScript {
             describeProgram();
             describeOptions();
             verifyMode();
-            sections();
-            symbols();
-            imports();
-            exports();
-            strings();
-            if (!fatal && !mode.equals("import")) functions(maxFunctions, timeout);
+            if (entry == null) {
+                sections();
+                symbols();
+                imports();
+                exports();
+                strings();
+            }
+            if (!fatal && !mode.equals("import")) functions(maxFunctions, timeout, entry);
             else coverage.add("functions", facet(0, 0, false, null,
                 mode.equals("import") ? "not_requested" : "failed"));
         } catch (Exception e) {
@@ -365,7 +372,7 @@ public class MacscopeBridge extends HeadlessScript {
         put(cov, "scope", "Ghidra-defined string data, not an exhaustive raw-byte scan"); coverage.add("strings", cov);
     }
 
-    void functions(int limit, int timeout) {
+    void functions(int limit, int timeout, String entry) {
         JsonArray out = root.getAsJsonArray("functions");
         DecompInterface decomp = new DecompInterface();
         String err = null; boolean trunc = false; int visited = 0;
@@ -376,16 +383,29 @@ public class MacscopeBridge extends HeadlessScript {
             decomp.setOptions(opts); decomp.toggleCCode(true); decomp.toggleSyntaxTree(false);
             boolean opened = decomp.openProgram(currentProgram);
             if (!opened) { decompilerError = clipped(decomp.getLastMessage(), MAX_TEXT); partial = true; }
-            BasicBlockModel model = new BasicBlockModel(currentProgram);
-            FunctionIterator it = currentProgram.getFunctionManager().getFunctions(true);
-            FunctionIterator external = currentProgram.getFunctionManager().getExternalFunctions();
-            while (visited < limit && (it.hasNext() || external.hasNext())) {
+            if (entry == null) {
+                BasicBlockModel model = new BasicBlockModel(currentProgram);
+                FunctionIterator it = currentProgram.getFunctionManager().getFunctions(true);
+                FunctionIterator external = currentProgram.getFunctionManager().getExternalFunctions();
+                while (visited < limit && (it.hasNext() || external.hasNext())) {
+                    monitor.checkCancelled();
+                    Function f = it.hasNext() ? it.next() : external.next(); visited++;
+                    JsonObject item = function(f, model, opened ? decomp : null, timeout);
+                    if (!append(out, item, false)) { trunc = true; break; }
+                }
+                trunc |= it.hasNext() || external.hasNext();
+            } else {
+                Address selectedAddress = currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(entry.substring(2));
+                Function f = currentProgram.getFunctionManager().getFunctionAt(selectedAddress);
+                if (f == null) throw new IllegalStateException("Selected entry is absent from saved Program");
                 monitor.checkCancelled();
-                Function f = it.hasNext() ? it.next() : external.next(); visited++;
-                JsonObject item = function(f, model, opened ? decomp : null, timeout);
-                if (!append(out, item, false)) { trunc = true; break; }
+                JsonObject item = new JsonObject(), facets = new JsonObject();
+                item.add("coverage", facets);
+                put(item, "entry_va", address(f.getEntryPoint()));
+                decompile(f, opened ? decomp : null, timeout, item, facets);
+                visited = 1;
+                trunc = !append(out, item, false);
             }
-            trunc |= it.hasNext() || external.hasNext();
         } catch (Exception e) { err = error(e); }
         finally {
             try { decomp.dispose(); }
@@ -397,7 +417,8 @@ public class MacscopeBridge extends HeadlessScript {
         root.addProperty("function_count_enumerated", out.size());
         root.addProperty("functions_truncated", trunc);
         root.addProperty("function_count_attempted", visited);
-        coverage.add("functions", facet(out.size(), currentProgram.getFunctionManager().getFunctionCount(), trunc, err, "complete"));
+        int total = entry == null ? currentProgram.getFunctionManager().getFunctionCount() : 1;
+        coverage.add("functions", facet(out.size(), total, trunc, err, "complete"));
     }
 
     JsonObject function(Function f, BasicBlockModel model, DecompInterface decomp, int timeout) {

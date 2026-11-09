@@ -213,6 +213,46 @@ class ProfileRunnerTests(unittest.TestCase):
         self.assertNotIn("-preScript", self.seen)
         self.assertEqual(engine.tree_digest(source), before)
 
+    def test_selected_query_checks_engine_pin_and_exact_worker_entry(self):
+        job_id = "c" * 32
+        source = self.project.path / "jobs" / job_id / "program"
+        source.mkdir(parents=True)
+        (source / "saved").write_text("analyzed Program")
+        before = engine.tree_digest(source)
+        snapshot = {"identity": {"profile": "baseline/1",
+                                 "engine": {"ghidra_tree_sha256": "pinned"}}}
+        record = {"job_id": job_id, "analysis_program_sha256": before}
+        self.image["active_analysis"] = "saved"
+        entry = "0x100000000"
+        self.deps["ghidra_tree_sha256"] = "wrong"
+
+        def reply(argv, *, cwd, **kwargs):
+            self.seen = argv
+            (cwd / "launcher.log").write_bytes(b"")
+            raw = raw_result("baseline", "query")
+            raw["selected_entry"] = entry
+            (cwd / "bridge.json").write_text(json.dumps(raw))
+
+        with mock.patch.object(storage.Project, "snapshot", return_value=(snapshot, record)), \
+             mock.patch.object(engine, "run_process", side_effect=reply) as run:
+            with self.assertRaises(Error) as caught:
+                engine.run(self.project, self.image, "query", self.args(), self.deps, entry=entry)
+            self.assertEqual(caught.exception.code, "query_engine_mismatch")
+            run.assert_not_called()
+            self.deps["ghidra_tree_sha256"] = "pinned"
+            _, job = engine.run(self.project, self.image, "query", self.args(), self.deps, entry=entry)
+            self.assertEqual(job["source_analysis_id"], "saved")
+            self.assertEqual(job["selected_entry"], entry)
+            self.assertEqual(job["limits"]["max_functions"], 1)
+            self.assertEqual(Path(job["environment"]["HOME"]), self.project.path / "jobs" / job["job_id"] / "home")
+            offset = self.seen.index("MacscopeBridge.java")
+            self.assertEqual(self.seen[offset + 2:offset + 6], ["query", "1", "15", entry])
+            run.side_effect = self.mock_runner("baseline", "query")
+            with self.assertRaises(Error) as caught:
+                engine.run(self.project, self.image, "query", self.args(), self.deps, entry=entry)
+            self.assertEqual(caught.exception.code, "query_result_mismatch")
+        self.assertEqual(engine.tree_digest(source), before)
+
 
     def test_cli_rejected_profile_keeps_existing_active_snapshot(self):
         content = b"owned synthetic input"

@@ -142,6 +142,16 @@ def main(argv=None):
                         or engine.tree_digest(program) != before
                         or raw["validation"]["headless_analysis_enabled"] is not False):
                     raise AssertionError("Saved-profile query violated its provenance/read-only scope")
+                target = next(f for f in inferred["functions"] if f["name"] == "_calc_add")
+                fresh = invoke("decompile", "--fresh", "--project", project,
+                               "--function-id", target["function_id"],
+                               "--experimental-trusted-input", "--json")
+                if (fresh["analysis_id"] != inferred["analysis_id"]
+                        or fresh["data"]["pseudocode"] != target["pseudocode"]
+                        or fresh["data"]["origin"]["analysis_profile"]["name"] != "parameter-inference"
+                        or engine.tree_digest(program) != before
+                        or workspace.snapshot(workspace.select()) != (snap, saved)):
+                    raise AssertionError("Fresh decompilation violated saved profile or snapshot isolation")
                 queries.append({"case": label, "source_program_sha256": before,
                                 "job_id": job["job_id"], "profile": job["analysis_profile"]})
                 invoke("analyze", "--project", project, "--profile", "parameter-inference",

@@ -16,7 +16,7 @@ contains documentation only.
 - Version/doctor, bounded Mach-O/app-main inspection, private project creation,
   explicit thin/universal slice import without autoanalysis, versioned baseline
   analysis and explicitly selected binary-derived parameter inference,
-  function list/show, disassembly, cached pseudocode, references,
+  function list/show, disassembly, cached and fresh selected-function pseudocode, references,
   CFG JSON/DOT, project/job status, cached search, bounded call traversal
   and normalized exports.
 - Package-owned Java bridge, effective analyzer-option recording, real saved
@@ -37,9 +37,9 @@ tested seatbelt profile is not a complete hostile-input filesystem sandbox.
 Hard process-memory/disk quotas are not available. No automatic unsafe
 fallback exists.
 
-Public queries use completed snapshots. A read-only/noanalysis reopened-engine
-query was independently tested, but a public uncached-decompile/refresh
-command remains unexposed. Token/address spans, polished terminal output,
+Public queries default to completed snapshots. Explicit `decompile --fresh`
+uses the saved Program and the read-only/noanalysis worker. Token/address
+spans, polished terminal output,
 all Mach-O load-command/dyld decoding and broad host/version support remain
 incomplete. Some calculator batches correctly exit6 because their reference
 collections exceed documented bounds despite successful pseudocode output.
@@ -48,8 +48,9 @@ collections exceed documented bounds despite successful pseudocode output.
 
 - [x] Reproduce owned stripped x86_64 instruction checks using independent
   function-start metadata. See [profile validation](parameter-inference.md).
-- [ ] Complete the narrow CLI evidence path with uncached selected-function
-  decompilation, token/address spans and reproducible timing measurements.
+- [x] Expose uncached selected-function decompilation from the saved Program.
+- [ ] Complete the narrow CLI evidence path with token/address spans and
+  reproducible timing measurements.
 - [x] Search committed function names, symbols, strings and pseudocode
   with resumable pages and scoped coverage.
 - [x] Traverse saved call references with depth/edge bounds and explicit

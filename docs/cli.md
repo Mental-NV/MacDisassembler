@@ -57,6 +57,8 @@ macscope functions list --project workspaces/calculator --limit 100 --json
 macscope functions show --project workspaces/calculator --name _calc_add --json
 macscope disasm --project workspaces/calculator --name _calc_add --json
 macscope decompile --project workspaces/calculator --name _calc_add --json
+macscope decompile --project workspaces/calculator --name _calc_add --fresh \
+  --experimental-trusted-input --json
 macscope decompile --project workspaces/calculator --all --limit 1000 --json
 macscope xrefs --project workspaces/calculator --name _calc_add --direction both --json
 macscope cfg --project workspaces/calculator --name _calc_add --format dot
@@ -143,12 +145,19 @@ locations carry image, architecture, address space, unslid VA, RVA, and nullable
 slice/container offsets. External functions have `entry_va: null` and a typed
 `EXTERNAL` engine location, not a fabricated image VA.
 
-After analysis, **all public function/disassembly/decompile/xref/CFG/export
-commands query the committed snapshot and do not start a JVM**. These are
-cached analysis evidence, not freshly recomputed results. An internal worker
-query mode has been tested with `-process -readOnly -noanalysis` and unchanged
-Program digests; a public uncached-decompile/refresh command is not yet
-exposed. Rerun `analyze` for new evidence. `status` shows at most 100 job
+By default, function, disassembly, decompile, xref, CFG and export commands
+query the committed snapshot without starting a JVM. `decompile --fresh`
+requires an exact function selector and the trusted-input flag. It opens a
+private copy of the selected saved Program with `-readOnly -noanalysis`,
+inherits its analysis profile, and asks the native decompiler for that one
+function. The result identifies the original analysis and the new query job.
+The worker requires the Ghidra distribution recorded by the saved analysis.
+Fresh queries preserve the committed snapshot and the original Program.
+`--fresh` supports the same worker time and Java heap limits as analysis.
+On the owned arm64 and x86_64 tools, fresh queries matched the cached
+pseudocode under both profiles. The integration checks verified one
+decompile attempt and preserved the saved Program and snapshot.
+`status` shows at most 100 job
 records; interrupted/disconnected running markers become
 `unknown_after_disconnect`, with no attempt to signal stale PIDs.
 

@@ -13,6 +13,8 @@ import subprocess
 import sys
 import time
 from macscope.schema import validate_envelope, validate_function
+from macscope import engine
+from macscope.storage import Project
 
 ROOT=Path(__file__).resolve().parents[1]
 WORK=ROOT/'build'/('cli-integration-'+time.strftime('%Y%m%d-%H%M%S'))
@@ -66,6 +68,25 @@ try:
         shown=cli('functions','show',*opts,'--json');validate_function(shown['data'])
         cli('disasm',*opts,'--json',expected=(0,6))
         dec=cli('decompile',*opts,'--json',expected=(0,6));assert dec['data']['pseudocode']
+        if source != fat:
+            project = Project(p)
+            image = project.select()
+            saved, record = project.snapshot(image)
+            program = p / 'jobs' / record['job_id'] / 'program'
+            program_digest = engine.tree_digest(program)
+            cli('decompile','--fresh',*opts,'--json',expected=(3,))
+            fresh = cli('decompile','--fresh',*opts,'--experimental-trusted-input','--json')
+            assert fresh['analysis_id'] == saved['analysis_id']
+            assert fresh['data']['function_id'] == fid
+            assert fresh['data']['pseudocode'] == dec['data']['pseudocode']
+            job_path = p / 'jobs' / fresh['data']['origin']['job_id']
+            job = json.loads((job_path / 'job.json').read_bytes())
+            raw = json.loads((job_path / 'bridge.json').read_bytes())
+            assert len(raw['functions']) == raw['decompile_summary']['attempted'] == 1
+            assert raw['validation']['headless_analysis_enabled'] is False
+            assert '-readOnly' in job['argv'] and '-noanalysis' in job['argv']
+            assert engine.tree_digest(program) == program_digest
+            assert project.snapshot(project.select()) == (saved, record)
         cli('decompile','--project',p,'--all','--limit','1000','--json',expected=(0,6))
         cli('xrefs',*opts,'--json',expected=(0,6))
         cli('cfg',*opts,'--json',expected=(0,6));cli('cfg',*opts,'--format','dot',dot=True,expected=(0,6))
@@ -81,11 +102,8 @@ try:
         cli('export','--project',p,'--json','--output',out,'--force',expected=(0,6))
         assert out.read_bytes()==original
     # Exercise the production uncached runner, not a separate hand-built
-    # invocation: it must reopen the active analyzed Program, never the
-    # no-analysis baseline. There is deliberately no public refresh flag yet.
-    from macscope import engine
+    # invocation: its internal all-functions mode remains available for research.
     from macscope.cli import parser
-    from macscope.storage import Project
     project=Project(WORK/'arm thin');image=project.select()
     snap,record=project.snapshot(image)
     source=project.path/'jobs'/record['job_id']/'program'

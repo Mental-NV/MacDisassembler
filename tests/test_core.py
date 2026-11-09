@@ -695,6 +695,31 @@ class CliTests(TemporaryCase):
         self.assertIsNone(edge['caller_function_id'])
         self.assertEqual(edge['resolution'], 'unresolved_caller')
 
+    def test_fresh_decompile_requires_explicit_trust_and_single_function(self):
+        with mock.patch.object(engine, 'dependencies') as deps:
+            self.error('isolation_required', cli.execute,
+                       self.args('decompile', '--fresh', '--name', 'unique'))
+            self.error('fresh_selection', cli.execute,
+                       self.args('decompile', '--fresh', '--all', '--experimental-trusted-input'))
+        deps.assert_not_called()
+
+    def test_fresh_decompile_keeps_selected_snapshot_and_labels_new_evidence(self):
+        record = {'pseudocode': 'char *f() { return "/Users/local/private"; }',
+                  'decompile_status': 'complete', 'pseudocode_truncated': False,
+                  'coverage': {'pseudocode': {'status': 'complete'}}}
+        raw = {'functions': [record], 'bridge_version': '1.2.0'}
+        job = {'job_id': 'private-job', 'analysis_profile': engine.analysis_profile()}
+        with mock.patch.object(engine, 'dependencies', return_value={}), \
+             mock.patch.object(engine, 'run', return_value=(raw, job)) as run:
+            result = cli.execute(self.args('decompile', '--fresh', '--name', 'unique',
+                                           '--experimental-trusted-input'))
+        self.assertEqual(run.call_args.args[2], 'query')
+        self.assertEqual(run.call_args.kwargs['entry'], '0x100000020')
+        self.assertEqual(result['analysis_id'], self.snapshot['analysis_id'])
+        self.assertEqual(result['data']['origin']['mode'], 'fresh_readonly')
+        self.assertIn('$HOME/private', result['data']['pseudocode'])
+        self.assertEqual(self.workspace.snapshot(self.workspace.select())[0], self.snapshot)
+
     def assert_envelope(self, result):
         required = {'schema_version', 'command', 'status', 'analysis_id', 'data', 'diagnostics', 'coverage'}
         self.assertTrue(required <= result.keys())
