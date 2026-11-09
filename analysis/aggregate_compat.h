@@ -65,6 +65,42 @@ static gh_bits gh_shift(gh_bits value, unsigned bytes) {
     return (gh_bits){value.bits << (bytes*8), (uint16_t)((value.known << bytes) | ((1u<<bytes)-1))};
 }
 
+static gh_bits gh_load_vector(const void *address) {
+    gh_wide value;
+    memcpy(&value, address, sizeof(value));
+    return gh_known(value);
+}
+
+static void gh_store_vector(void *address, gh_bits value) {
+    gh_wide bits = gh_read(value, 0, 16);
+    memcpy(address, &bits, sizeof(bits));
+}
+
+static void gh_copy_byte(gh_bits *dest, unsigned index, gh_bits src, unsigned source) {
+    if (src.known & (1u << source)) {
+        gh_set(dest, index, 1, src.bits >> (source * 8));
+    }
+}
+
+static gh_bits NEON_rev64(gh_bits input, unsigned lane_bytes) {
+    if (lane_bytes != 1) abort();
+    gh_bits result = {0};
+    for (unsigned i = 0; i < 16; ++i) {
+        gh_copy_byte(&result, i, input, i ^ 7);
+    }
+    return result;
+}
+
+static gh_bits NEON_ext(gh_bits first, gh_bits second, unsigned offset, unsigned lane_bytes) {
+    if (lane_bytes != 1 || offset >= 16) abort();
+    gh_bits result = {0};
+    for (unsigned i = 0; i < 16; ++i) {
+        unsigned source = i + offset;
+        gh_copy_byte(&result, i, source < 16 ? first : second, source & 15);
+    }
+    return result;
+}
+
 static bool SCARRY8(int64_t left, int64_t right) {
     int64_t ignored;
     return __builtin_add_overflow(left, right, &ignored);

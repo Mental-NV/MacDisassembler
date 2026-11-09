@@ -55,6 +55,20 @@ class AggregateCompatibilityTests(unittest.TestCase):
         code = lowered("return ZEXT816(param_1);", header="undefined1 [12] FUN_100(long param_1)")
         self.assertIn("return gh_low_bytes(gh_known((ZEXT816(param_1))), 12);", code)
 
+    def test_byte_vector_pointer_forms_preserve_the_source_address(self):
+        code = lowered("""
+            undefined1 (*pauVar2) [16];
+            undefined1 auVar1 [16];
+            pauVar2 = (undefined1 (*) [16])param_1;
+            auVar1 = NEON_rev64(pauVar2[-1],1);
+            auVar1 = NEON_ext(auVar1,*pauVar2,0x9,1);
+            *pauVar2 = auVar1;
+            return auVar1;
+        """)
+        self.assertIn("NEON_rev64(gh_load_vector(pauVar2[-1]), 1)", code)
+        self.assertIn("NEON_ext(auVar1, gh_load_vector(*pauVar2), 9, 1)", code)
+        self.assertIn("gh_store_vector(*pauVar2, auVar1);", code)
+
     def test_does_not_rewrite_a_missing_aggregate_signature_or_unknown_dependency(self):
         with self.assertRaisesRegex(Unsupported, "aggregate_abi_unverified"):
             lowered("return param_1;", header="long FUN_100(long param_1)")
