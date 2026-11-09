@@ -2,7 +2,7 @@
 import unittest
 
 from audit_core_behavior import core_extents, history_declaration, summarize
-from audit_core_instructions import compare
+from audit_core_instructions import compare, compare_call_references
 
 
 class CoreBehaviorTests(unittest.TestCase):
@@ -51,3 +51,18 @@ class CoreBehaviorTests(unittest.TestCase):
         instruction["fallthrough"] = "0x102"
         self.assertEqual(compare(body, decoded, "x86_64", 0x102, {0x180: "_linker_stub"})["status"],
                          "disagreement")
+
+    def test_indirect_call_target_and_incomplete_references_cannot_pass(self):
+        decoded = {0x100: (b"", "callq", "0x180"), 0x105: (b"", "callq", "*%rax")}
+        direct = {"from": "0x100", "to": "0x180", "type": "UNCONDITIONAL_CALL"}
+        record = {"xrefs_from_sample": [direct], "coverage": {"xrefs_from": {
+            "status": "complete", "truncated": False, "error": None, "emitted": 1,
+        }}}
+        self.assertEqual(compare_call_references(record, decoded, "x86_64", ())["status"], "matched")
+        record["xrefs_from_sample"].append({"from": "0x105", "to": "0x184", "type": "COMPUTED_CALL"})
+        self.assertEqual(compare_call_references(record, decoded, "x86_64", ())["status"],
+                         "incomplete_outgoing_references")
+        record["coverage"]["xrefs_from"]["emitted"] = 2
+        actual = compare_call_references(record, decoded, "x86_64", ())
+        self.assertEqual(actual["status"], "disagreement")
+        self.assertEqual(actual["reported_targets_at_indirect_calls"], [{"entry": "0x105", "target": "0x184"}])

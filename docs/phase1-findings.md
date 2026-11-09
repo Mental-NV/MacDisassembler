@@ -92,10 +92,13 @@ fallthrough. The address matches in every case. LLVM's indirect-symbol
 table independently identifies the destination as the `_bzero` stub on
 arm64 or `___bzero` stub on x86_64.
 
-The evaluator maps the frozen captures by confirmed DWARF and linker
-entries, decodes their exact byte extents, and excludes linker-marked data.
-The count covers the tool's controlled core. Indirect destinations,
-data-reference completeness and other Mach-O images are separate gates.
+The complete outgoing-reference facet contained all 256 direct call
+references expected from those instructions, including the eight tail calls.
+All 16 encoded indirect calls had no reported target. The evaluator maps
+the frozen captures by confirmed DWARF and linker entries, decodes their
+exact byte extents, and excludes linker-marked data. Data-reference
+completeness, indirect jump tables and other Mach-O images have separate
+denominators.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/audit_core_instructions.py \
@@ -105,7 +108,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/audit_core_in
 ```
 
 The measured report SHA-256 is
-`2d2242d9db12ba2a9faa32eb674aecd44d09e9c08945d4eb8b483b186ca18b33`.
+`5859c98f8c2be6664f0bddfca4164dbdd9bb3968fd2af4a0e8c59d552a2d3d0a`.
 
 ## Post-review semantics and harness
 

@@ -52,6 +52,9 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Match 13,900 instruction starts and byte records and 2,732 direct
   targets across the full owned tool core in the patched captures. See
   [the instruction audit](phase1-findings.md#controlled-core-instruction-audit).
+- [x] Match all 256 outgoing direct call references in the controlled tool
+  core and verify that the 16 encoded indirect calls have no reported target.
+- [ ] Measure controlled data-reference completeness.
 - [x] Expose uncached selected-function decompilation from the saved Program.
 - [x] Link available Ghidra pseudocode tokens to machine addresses. The
   arm64/x86_64 thin and universal integration checked cached and fresh links.

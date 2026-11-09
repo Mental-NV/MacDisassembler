@@ -552,12 +552,12 @@ Exit codes: 0 complete, 2 usage/ambiguity/cursor, 3 unsupported capability,
 internal failure, 130 interrupt. A bounded collection page can have partial
 coverage while the page request itself exits0; use `next_cursor`.
 
-Not implemented: public uncached refresh, annotations/types, rich ObjC/Swift
-views, search commands, bundle/resource inventory, auxiliary images, REA,
-HTML exports, diffs, manual function corrections, source-equivalence proof,
-strong hostile-input isolation, hard RSS/disk quotas, migrations, signed
-packaging, x86_64 host workers, or release-wide fuzzing/SBOM/notices review.
-Unknown commands fail through the parser rather than fabricating support.
+Remaining capabilities include richer Objective-C and Swift views,
+compound type hints, HTML exports, binary diffs and manual function
+corrections. Additional release requirements include stronger isolation,
+hard RSS/disk quotas, schema migrations, signed packaging, x86_64 host
+workers and expanded fuzzing. The [progress checklist](current-status.md)
+tracks behavior validation and the separately gated work.
 
 ## Reproduce validation
 

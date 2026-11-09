@@ -130,13 +130,59 @@ def compare(record, independent, arch, end, stubs):
     }
 
 
+def compare_call_references(record, independent, arch, tail_calls):
+    expected = {(int(row["entry"], 16), row["target"]) for row in tail_calls}
+    indirect_calls = set()
+    for address, (_, mnemonic, operands) in independent.items():
+        branch = expected_branch(arch, mnemonic, operands)
+        if branch and branch[0] == "call":
+            if branch[1] is None:
+                return {"status": "unverified_call_operand"}
+            expected.add((address, hex(branch[1])))
+        elif ((arch == "arm64" and mnemonic.startswith("blr"))
+              or (arch == "x86_64" and mnemonic.startswith("call") and operands.startswith("*"))):
+            indirect_calls.add(address)
+    if record is None:
+        return {"status": "missing_recovered_entry"}
+    refs = record["xrefs_from_sample"]
+    facet = record["coverage"]["xrefs_from"]
+    if (facet["status"] != "complete" or facet["truncated"] is not False
+            or facet["error"] or facet["emitted"] != len(refs)):
+        return {"status": "incomplete_outgoing_references"}
+    calls = {(int(row["from"], 16), row["to"]) for row in refs
+             if row["type"] in ("UNCONDITIONAL_CALL", "CONDITIONAL_CALL")}
+    speculative = {(int(row["from"], 16), row["to"]) for row in refs
+                   if "CALL" in row["type"] and int(row["from"], 16) in indirect_calls}
+
+    def addresses(rows):
+        return [{"entry": hex(address), "target": target} for address, target in sorted(rows)]
+
+    return {
+        "status": "matched" if calls == expected and not speculative else "disagreement",
+        "expected_direct_call_references": len(expected),
+        "matched_direct_call_references": len(expected & calls),
+        "encoded_indirect_calls": len(indirect_calls),
+        "missing_direct_call_references": addresses(expected - calls),
+        "unexpected_direct_call_references": addresses(calls - expected),
+        "reported_targets_at_indirect_calls": addresses(speculative),
+    }
+
+
 TOTALS = ("instruction_starts", "instruction_starts_matched", "instruction_byte_records_matched",
           "llvm_instruction_bytes", "direct_targets", "direct_targets_matched", "stub_tail_calls_adjudicated")
+CALL_TOTALS = ("expected_direct_call_references", "matched_direct_call_references", "encoded_indirect_calls")
 
 
 def summary(rows):
-    return dict(Counter(row["status"] for row in rows),
-                **{key: sum(row.get(key, 0) for row in rows) for key in TOTALS})
+    calls = [row["call_references"] for row in rows if "call_references" in row]
+    return dict(
+        Counter(row["status"] for row in rows),
+        **{key: sum(row.get(key, 0) for row in rows) for key in TOTALS},
+        call_references={
+            "statuses": dict(Counter(row["status"] for row in calls)),
+            **{key: sum(row.get(key, 0) for row in calls) for key in CALL_TOTALS},
+        },
+    )
 
 
 def run(build, matrix):
@@ -157,14 +203,20 @@ def run(build, matrix):
                 continue
             _, end = extents[routine]
             row.update(compare(records[routine], decoded[routine], arch, end, stubs[case]))
+            row["call_references"] = compare_call_references(
+                records[routine], decoded[routine], arch, row.get("stub_tail_calls", ()),
+            )
         captures.append(dict(provenance, analysis_id=snapshot["analysis_id"],
                              native_decompiler_sha256=snapshot["identity"]["engine"]["native_decompiler_sha256"],
                              routines=rows, summary=summary(rows.values())))
     rows = [row for capture in captures for row in capture["routines"].values()]
     return {
-        "schema": "macscope-core-instruction-audit/1",
-        "status": "matched" if rows and all(row["status"] == "matched" for row in rows) else "partial",
-        "scope": "LLVM instruction bytes and encoded direct calls and branches within the owned tool core",
+        "schema": "macscope-core-instruction-audit/2",
+        "status": "matched" if rows and all(
+            row["status"] == "matched" and row.get("call_references", {}).get("status") == "matched"
+            for row in rows
+        ) else "partial",
+        "scope": "LLVM instruction bytes, direct targets and outgoing call references within the owned tool core",
         "matrix_report_sha256": sha(read_bytes(matrix / "report.json")),
         "decoder_sha256": engine.digest(Path(decoder)),
         "summary": summary(rows), "captures": captures,
