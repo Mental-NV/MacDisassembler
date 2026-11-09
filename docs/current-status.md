@@ -94,7 +94,13 @@ collections exceed documented bounds despite successful pseudocode output.
   and control captures. The [behavior check](heldout-switch.md#recovered-c-behavior)
   records signed overflow and caller arity failures separately from
   recovered control flow.
-- [ ] Measure recovered-C behavior and testability across the broader core.
+- [x] Inventory all 26 public routines across the 16 patched calculator
+  captures and test unmodified comparisons and history routines against the
+  reference. See [recovered core behavior](semantics.md#recovered-core-behavior)
+  for instruction-byte denominators and the distinct blockers.
+- [ ] Meet the recovered-C behavior and testability gates across the full
+  core. Aggregate returns, state-machine harnesses and recovered signed
+  overflow remain open.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the

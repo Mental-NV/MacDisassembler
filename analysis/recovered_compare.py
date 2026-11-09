@@ -21,10 +21,12 @@ HARNESS = ROOT / "analysis/compare_scalar_harness.c"
 TOKEN = re.compile(r"\s+|0[xX][0-9a-fA-F]+|[0-9]+|[A-Za-z_]\w*|[{}();=<>!+,:&|^~\-]",re.ASCII)
 LOCALS = re.compile(r"(?:[A-Za-z]Var[0-9]+|local_[a-fA-F0-9]+|param_[0-9]+)")
 WORDS = {"if","else","return","undefined4","int","uint","long","ulong","char"}
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
 
 
 def eligible(text, routine, argument):
-    if not isinstance(text,str) or not 0<len(text)<=16384:
+    if (not isinstance(text,str) or not 0<len(text)<=16384
+            or not IDENTIFIER.fullmatch(routine) or argument not in ("long", "ulong")):
         return False
     identifier = r"[A-Za-z_]\w*"
     declaration = rf"\s*(?:int|uint|undefined4)\s+{re.escape(routine)}\s*\(\s*{argument}\s+({identifier})\s*,\s*{argument}\s+({identifier})\s*\)\s*\{{(.*)\}}\s*"
@@ -68,13 +70,7 @@ def matrix_exports(root, *, symbols="sym"):
         yield case,cases[label],exports[label][:2]
 
 
-def evaluate(directory, text, routine, argument, compiler, sdk, harness, references):
-    directory.mkdir(mode=0o700)
-    payload = text.encode("utf-8")
-    (directory/"candidate.c").write_bytes(payload)
-    result = {"pseudocode_sha256":sha(payload)}
-    if not eligible(text,routine,argument):
-        return dict(result,status="not_testable",reason="Unsupported unmodified scalar function")
+def run_candidate(directory, compiler, sdk, harness, references, candidate_flags, *, wide_counter=False):
     (directory/"harness.c").write_bytes(harness)
     for name,data in references.items():
         (directory/Path(name).name).write_bytes(data)
@@ -87,21 +83,51 @@ def evaluate(directory, text, routine, argument, compiler, sdk, harness, referen
     target = directory/"compare"
     flags = ["-std=c11","-O1","-fsigned-char","-fsanitize=undefined",
              "-fno-sanitize-recover=undefined","-Werror=implicit-function-declaration",
-             "-isysroot",sdk,"-DSIGNED_CASE="+str(int(argument=="long"))]
+             "-isysroot",sdk,*candidate_flags]
     try:
         engine.run_process([*prefix,compiler,*flags,str(directory/"harness.c"),str(directory/"calc_core.c"),
                             "-o",str(target)],
                            cwd=directory,env=env,timeout=30,log_path=directory/"compile.log",
                            manifest_path=directory/"compile-job.json",manifest={"phase":"compile"})
     except Error as error:
-        return dict(result,status="compile_failed",reason=error.code)
-    try:
-        engine.run_process([*prefix,str(target)],cwd=directory,env=env,timeout=10,
-                           log_path=directory/"compare.log",manifest_path=directory/"compare-job.json",
-                           manifest={"phase":"compare"})
-    except Error as error:
-        return dict(result,status="execution_failed",reason=error.code)
-    counts = read_json(directory/"compare.log")
+        log = directory/"compile.log"
+        diagnostic = next((line for line in log.read_text(errors="replace").splitlines()
+                           if "error:" in line), None) if log.is_file() else None
+        return {"status":"compile_failed","reason":error.code,"diagnostic":diagnostic}
+    def execute(phase, argv):
+        log = directory/(phase+".log")
+        try:
+            engine.run_process([*prefix,str(target),*argv],cwd=directory,env=env,timeout=10,
+                               log_path=log,manifest_path=directory/(phase+"-job.json"),
+                               manifest={"phase":phase})
+        except Error as error:
+            lines = log.read_text(errors="replace").splitlines() if log.is_file() else ()
+            for status, marker in (("undefined_behavior", "runtime error:"),
+                                   ("address_sanitizer", "ERROR: AddressSanitizer")):
+                diagnostic = next((line for line in lines if marker in line), None)
+                if diagnostic:
+                    return {"status":status,"reason":error.code,"diagnostic":diagnostic}
+            return {"status":"execution_failed","reason":error.code}
+        return {"results":read_json(log)}
+
+    measured = execute("compare", [])
+    if wide_counter and "results" in measured:
+        measured["wide_counter"] = execute("compare-wide", ["wide"])
+    return measured
+
+
+def evaluate(directory, text, routine, argument, compiler, sdk, harness, references):
+    directory.mkdir(mode=0o700)
+    payload = text.encode("utf-8")
+    (directory/"candidate.c").write_bytes(payload)
+    result = {"pseudocode_sha256":sha(payload)}
+    if not eligible(text,routine,argument):
+        return dict(result,status="not_testable",reason="Unsupported unmodified scalar function")
+    flags = ["-DSIGNED_CASE="+str(int(argument=="long")), "-DRECOVERED="+routine]
+    measured = run_candidate(directory, compiler, sdk, harness, references, flags)
+    counts = measured.get("results")
+    if counts is None:
+        return dict(result, **measured)
     if (counts["directed"]!=121 or counts["seeded"]!=10000
             or sum(counts[key] for key in ("less","equal","greater"))!=10121
             or not all(counts[key] for key in ("less","equal","greater"))):

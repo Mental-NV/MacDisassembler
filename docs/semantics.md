@@ -181,3 +181,52 @@ branch directions. The report records the tool and source fingerprints and
 checks the 95% reference coverage requirement. Recovered-code coverage and
 behavior are measured separately. The measured report SHA-256 is
 `75ed6bf9766a6bf9aeba16d7db98496cffc430196490fc259f9c9f9467f87293`.
+
+## Recovered core behavior
+
+The evaluator mapped all 26 public core routines by DWARF and linker-confirmed
+entry after the owned tool exports were frozen. It used arm64 and x86_64
+at O0 and O2, symbol-bearing and stripped copies, and both analysis profiles.
+All 416 instances had complete pseudocode. LLVM decoded each confirmed body
+independently, checked every instruction byte against the immutable binary,
+and excluded linker-marked data. The four captures per build share a byte
+denominator, so the table counts those bytes once per capture.
+
+| Build | Routines | Primary domain complete | Full pass | Instruction bytes | Primary domain bytes | Full pass bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| arm64 O0 | 104 | 24 | 20 | 19,168 | 2,736 | 2,128 |
+| arm64 O2 | 104 | 20 | 20 | 8,864 | 448 | 448 |
+| x86_64 O0 | 104 | 24 | 20 | 15,408 | 2,056 | 1,524 |
+| x86_64 O2 | 104 | 24 | 16 | 8,212 | 832 | 376 |
+| Total | 416 | 92 | 76 | 51,652 | 6,072 | 4,476 |
+
+The comparison and history harnesses compile the exact recovered text on the
+arm64 evaluator host with UBSan. The history harness also uses ASan and
+compiles with strict aliasing disabled for the raw memory accesses. It
+checks the Darwin layout, binds the printed zeroing helpers to their libc
+operations, and compares observable state and returned entry addresses.
+Each comparison has 121 directed pairs and 10,000 seeded pairs. Each history
+routine has 111 directed cases, 10,000 seeded calls, and a separate 110-case
+wide-counter run. The 92 completed primary runs had zero mismatches.
+
+- Four arm64 O2 `calc_history_get` outputs overflowed signed arithmetic for
+  large indices before checking whether the index was in range.
+- Sixteen more outputs passed the primary domain and hit signed overflow
+  in the wide-counter run. Twelve `calc_history_push` outputs overflowed at
+  `LONG_MAX`. Four x86_64 O2 `calc_history_get` outputs overflowed when
+  signed 32-bit arithmetic combined a large count with the ring offset.
+- 202 aggregate-return instances printed Ghidra's `undefined1 [16]` return
+  form. Six printed scalar forms with an unverified aggregate ABI.
+  The remaining 112 instances require buffer or state-machine harnesses.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/audit_core_behavior.py \
+  --fixture-build-root /path/to/owned-calculator-build \
+  --profile-matrix /private/tmp/owned-patched-profile-matrix \
+  --output-dir /private/tmp/new-core-behavior \
+  --experimental-trusted-input
+```
+
+Exit 6 records partial coverage. The measured report SHA-256 is
+`789c28b225582553f86ee1afec0c6f9e62d9465feba93eb70a1c72692b5d537a`.
+The full behavior and O2 testability gates remain open.

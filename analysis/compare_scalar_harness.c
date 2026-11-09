@@ -18,7 +18,6 @@ _Static_assert(sizeof(long) == 8 && sizeof(int) == 4 && CHAR_MIN < 0,
 
 #if SIGNED_CASE
 typedef long Input;
-#define RECOVERED _calc_compare_s64
 #define REFERENCE calc_compare_s64
 static const Input directed[] = {
     INT64_MIN, INT64_MIN+1, -0x100000000L, -2, -1, 0, 1, 2,
@@ -26,7 +25,6 @@ static const Input directed[] = {
 };
 #else
 typedef unsigned long Input;
-#define RECOVERED _calc_compare_u64
 #define REFERENCE calc_compare_u64
 static const Input directed[] = {
     0, 1, 2, 0x7FFFFFFFUL, 0x80000000UL, 0xFFFFFFFFUL, 0x100000000UL,

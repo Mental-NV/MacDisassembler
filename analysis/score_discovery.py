@@ -152,13 +152,8 @@ def text_bytes(data, metadata):
     return (va, va + size), data[offset:offset + size]
 
 
-def run(build, matrix):
+def verified_captures(build, matrix):
     build, matrix = build.resolve(), matrix.resolve()
-    report = {
-        "schema": "macscope-discovery-dwarf/1", "status": "measured", "cases": [],
-        "scope": "Source-aware evaluator comparison of saved binary-only discovery in calculator tools",
-        "matrix_report_sha256": sha(read_bytes(matrix / "report.json")),
-    }
     states = ("sym", "stripped")
     paired = {
         state: {case: (prior, paths) for case, prior, paths in matrix_exports(matrix, symbols=state)}
@@ -209,12 +204,22 @@ def run(build, matrix):
                 if (snapshot["image"]["sha256"] != digest or snapshot["identity"]["profile"] != profile
                         or snapshot["analysis_id"] != prior[key]):
                     raise ValueError("Profile export identity mismatch")
-                measured = score(snapshot, truth, linker)
-                report["cases"].append(dict(
-                    measured, case=case, symbols=state, profile=profile, input_sha256=digest,
-                    dwarf_sha256=dwarf_sha, dwarf_text_sha256=dwarf_text_sha,
-                    export_sha256=sha(export), evaluator_exclusions=exclusions,
-                ))
+                provenance = {
+                    "case": case, "symbols": state, "profile": profile, "input_sha256": digest,
+                    "dwarf_sha256": dwarf_sha, "dwarf_text_sha256": dwarf_text_sha,
+                    "export_sha256": sha(export), "evaluator_exclusions": exclusions,
+                }
+                yield provenance, snapshot, truth, linker, manifest
+
+
+def run(build, matrix):
+    report = {
+        "schema": "macscope-discovery-dwarf/1", "status": "measured", "cases": [],
+        "scope": "Source-aware evaluator comparison of saved binary-only discovery in calculator tools",
+        "matrix_report_sha256": sha(read_bytes(matrix / "report.json")),
+    }
+    for provenance, snapshot, truth, linker, _ in verified_captures(build, matrix):
+        report["cases"].append(dict(score(snapshot, truth, linker), **provenance))
     return report
 
 
