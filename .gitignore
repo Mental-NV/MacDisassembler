@@ -1,0 +1,16 @@
+.DS_Store
+build/
+dist/
+.venv/
+node_modules/
+*.app/
+*.dSYM/
+*.dylib
+*.ghidra/
+*.gpr
+*.rep/
+workspaces/
+private-corpus/
+third-party-exports/
+*.log
+
