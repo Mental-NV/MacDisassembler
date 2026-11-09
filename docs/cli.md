@@ -72,6 +72,7 @@ macscope status --project workspaces/calculator --json
 macscope headers --project workspaces/calculator --json
 macscope sections --project workspaces/calculator --name-contains text --json
 macscope imports --project workspaces/calculator --json
+macscope exports --source dyld --project workspaces/calculator --json
 macscope strings --project workspaces/calculator --min-length 8 --json
 macscope fixups --project workspaces/calculator --kind bind --json
 macscope objc methods --project workspaces/calculator --name-contains press --json
@@ -207,6 +208,26 @@ symbol table ranges, linkedit payload ranges, function starts, and
 data-in-code entries. An incomplete decoded table makes the header result
 partial. Dyld stream, export trie, chained fixup and signature ranges are
 recorded as extents.
+
+`exports --source dyld` reads declared exports directly from the
+digest-verified slice, including before analysis. It accepts modern
+`LC_DYLD_EXPORTS_TRIE` and legacy dyld-info export extents. It reports
+regular, weak, absolute, thread-local, re-export, and stub/resolver records
+with raw flags and slice/container offsets. Thread-local addresses refer
+to the image descriptor. Re-exports preserve the library ordinal, declared
+path and import name, with no resolved runtime address. Absent evidence,
+unsupported flags and traversal limits receive partial coverage. Malformed
+tries and conflicting extents produce typed errors. Use `--name-contains`,
+`--limit` and `--cursor`. The default `--source ghidra` reads the existing
+saved analysis facet. [Apple Mach-O export encoding](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+
+Apple's `dyld_info -exports` agreed on 392 name/offset pairs across 16
+manifest-verified calculator binaries and four locally linked legacy
+variants. Six separately compiled arm64 and x86_64 dylibs added 14 checked
+records covering absolute, weak, thread-local, re-export and dynamic
+resolver entries. LLVM's export-trie display independently matched the
+stub and resolver offsets. The public CLI paginated both architectures
+after a universal dylib import with analysis still pending.
 
 `fixups` reads the digest-verified imported slice before or after analysis.
 It decodes `DYLD_CHAINED_PTR_64` and `DYLD_CHAINED_PTR_64_OFFSET` chains with

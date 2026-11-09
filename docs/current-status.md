@@ -58,6 +58,8 @@ collections exceed documented bounds despite successful pseudocode output.
   unresolved targets.
 - [x] Store user labels and function/instruction comments with reversible
   revisions, search and separate opt-in export.
+- [ ] Round-trip annotations and accepted type hints between compatible
+  workspaces with validated identity and atomic import.
 - [x] Apply explicitly accepted scalar return hints in fresh Ghidra queries.
   The owned arm64/x86_64 tests verified separate provenance and unchanged
   unassisted snapshots. Parameter and compound hints remain open.
@@ -74,7 +76,9 @@ collections exceed documented bounds despite successful pseudocode output.
   slices. The 16 owned inputs matched Apple tool output for 3,890 fixups.
 - [x] Decode ordinary pointer operations in legacy dyld streams. Four
   separately linked owned binaries matched Apple tooling on 1,086 fixups.
-- [ ] Expand tested dyld pointer formats and add export-trie decoding.
+- [x] Query bounded modern and legacy export tries from the immutable
+  slice. Apple and LLVM comparisons verified 406 exports on owned images.
+- [ ] Expand tested dyld pointer formats.
 - [x] Expose Objective-C classes, methods and selector references with
   static provenance. The owned app matrix matched 216 method addresses.
 - [x] Expose Swift symbol-table names and optional sandboxed demangling

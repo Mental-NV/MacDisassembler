@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotations, bundle, calls, dyld, engine, metadata, objc, search, swift_symbols
+from . import annotations, bundle, calls, dyld, engine, export_trie, metadata, objc, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -93,6 +93,8 @@ def parser():
     s.add_argument('--length',type=int,required=True,dest='byte_length')
     for c in (*metadata.PREFLIGHT_LISTS,*metadata.ENGINE_LISTS):
         s=sub.add_parser(c);project(s);common(s);pagination(s)
+        if c=='exports':
+            s.add_argument('--source',choices=('ghidra','dyld'),default='ghidra')
         if c=='strings':
             s.add_argument('--contains')
             s.add_argument('--min-length',type=int,default=0)
@@ -421,6 +423,20 @@ def metadata_collection(args, project, image, snapshot=None):
     return envelope(args.command,rows,aid,'partial' if gap else 'complete',cov)
 
 
+def dyld_exports(args, project, image):
+    extent, records, gaps = export_trie.exports(metadata.verified_slice(project, image), image)
+    records = [row for row in records if args.name_contains is None or args.name_contains in row['name']]
+    records.sort(key=lambda row: (row['name'], row['name_hex']))
+    rows, cov = page(records, args, image['image_id'], project.project_id,
+                     {'source': 'dyld', 'name_contains': args.name_contains}, order='dyld-export-name/v1')
+    cov['scope'] = 'selected image dyld export trie'
+    if gaps:
+        reasons = [*gaps, *(['page_limit'] if cov['next_cursor'] else [])]
+        cov.update(status='partial', known_total=None, truncation_reason=';'.join(reasons))
+    data = {'image_id': image['image_id'], 'arch': image['arch'], 'extent': extent, 'records': rows}
+    return envelope('exports', data, status='partial' if gaps else 'complete', cov=cov)
+
+
 def swift_collection(args, project, image):
     if args.demangle and not args.experimental_trusted_input:
         raise Error('isolation_required','Native Swift demangling requires --experimental-trusted-input',3)
@@ -578,6 +594,8 @@ def execute(a):
         return envelope(command,rows,status='partial' if gaps else 'complete',cov=cov)
     if a.command in metadata.PREFLIGHT_LISTS:
         return metadata_collection(a,p,image)
+    if a.command == 'exports' and a.source == 'dyld':
+        return dyld_exports(a,p,image)
     snapshot,record=p.snapshot(image)
     if a.command in metadata.ENGINE_LISTS:
         return metadata_collection(a,p,image,snapshot)
