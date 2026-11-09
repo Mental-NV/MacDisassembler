@@ -1,5 +1,5 @@
 .DS_Store
-build/
+/build/
 dist/
 .venv/
 node_modules/
@@ -16,3 +16,6 @@ third-party-exports/
 
 
 .work/
+
+__pycache__/
+*.py[cod]

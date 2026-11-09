@@ -1,4 +1,4 @@
-# Host / dependency lock manifest — Phase 1 (9 November 2026)
+# Host / dependency lock manifest — Phase 1 and hardening (9 November 2026)
 
 Pinned, verified-installed environment. Nothing was downloaded or installed
 during Phase 1; Homebrew paths are recorded for identity only.
@@ -33,10 +33,20 @@ during Phase 1; Homebrew paths are recorded for identity only.
   `-noanalysis`, `-processor`, `-cspec`, `-loader`, `-preScript`,
   `-postScript` (with script args), `-scriptPath`, `-analysisTimeoutPerFile`,
   `-max-cpu`, `-readOnly`, `-deleteProject`, `-okToDelete`.
-- Ghidra writes user state to `~/Library/ghidra/ghidra_12.2_PUBLIC/`
-  (preferences/log). No network use observed or configured.
+- Original runs used `~/Library/ghidra/ghidra_12.2_PUBLIC/` for shared state.
+  New direct runs set `application.settingsdir`, `application.cachedir`, and
+  `application.tempdir` to private per-run paths through `JAVA_TOOL_OPTIONS`.
+  The exact JVM option string and JDK version are recorded per experiment.
 
-## Fixture toolchain pins (recorded per build in `build/manifest.json`)
+## Fixture toolchain pins
+
+Original v1.0: `build/manifest.json` (historical, retained unchanged).
+New v1.1: `build/review-v2/manifest.json` with exact git revision, dirty diff
+and per-source hashes, actual command evidence, and tool versions.
+
+The original `text_hash` field hashed formatted otool output. New schema
+`macscope-phase1-manifest/2` uses `text_bytes_sha256` over raw section bytes.
+Do not compare these fields as if their definitions were the same.
 
 - Scheme `CalculatorFixture`, configurations `DebugAnalysis` (`-O0`) and
   `ReleaseAnalysis` (`-O2`); `LLVM_LTO=NO`; `OTHER_CFLAGS=-fno-fast-math`;
@@ -57,3 +67,23 @@ during Phase 1; Homebrew paths are recorded for identity only.
 - Not claimed: filesystem confinement (none), sandboxing of untrusted
   inputs in general (inputs limited to our own fixtures by runner design).
 - Outputs written with umask 077 (owner-only) under ignored `build/`.
+
+## Hardened direct runner
+
+- `bash fixture/build/build_matrix.sh <new-output-directory>` creates a new
+  build matrix. It refuses any existing output directory, even interrupted.
+- `python3 analysis/run_baseline.py --build-root build/review-v2 --run-id <new-id>`
+  analyzes the selected matrix and freezes a new isolated experiment.
+- Full Ghidra 12.2 remains the only selected engine. Loader class is
+  `MachoLoader`, with `-loader-loadLibraries false` and
+  `-loader-linkExistingProjectLibraries false`. Trusted pre/post scripts
+  only; no scripts or library paths discovered from input directories.
+- Trusted pre-script explicitly disables DWARF/PDB/source/external symbol
+  discovery, including when an analyzer is inapplicable/unregistered.
+  The complete effective analysis options and pre-script success marker
+  are exported and checked. Export diagnostics retain warnings.
+- New baseline schema: `macscope-baseline/2`; run manifest records engine,
+  bridge, runner, native worker and input hashes, JDK, host architecture,
+  effective command arrays and budgets. New freeze schema: version 2.
+- No source/dSYM filesystem confinement is claimed. Network denial remains
+  required; this is restricted to our own calculator/corpus inputs.

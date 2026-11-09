@@ -1,83 +1,145 @@
-# Phase 1 findings — direct Ghidra baseline (9 November 2026)
+# Phase 1 evidence and review corrections (9 November 2026)
 
-## What ran
+## Historical experiment: semantics v1.0
 
-- 16 direct headless pipelines (8 analyst binaries × app/tool, all via
-  `analyzeHeadless -import` + default auto-analysis + `MacscopeBaseline.java`
-  post script, `sandbox-exec` deny-network profile, max-cpu 4,
-  analysis timeout 600 s, decompile timeout 30 s/function, max 5000 funcs).
-- 16 LLVM disassembly retentions (`xcrun llvm-objdump --macho --arch …`).
-- Outputs frozen (`build/workspaces/freeze.json`, sha256 per baseline) BEFORE
-  source-aware evaluation (`analysis/evaluate.py` → `build/eval-results.json`).
-- Classification: analyst runs were binary-only; evaluation is SOURCE-AWARE
-  (same developer). No blind qualitative scores are claimed.
+The original fixture is commit `216f28b`; the first baseline/evaluation is
+`1b6e6d7`. Its ignored local evidence remains under `build/workspaces/`,
+`build/manifest.json`, and `build/eval-results.json`. These are historical
+outputs, not current v1.1 measurements. They have not been replaced.
 
-## Results
+- 16 direct full-Ghidra headless imports/analyses/exports: 8 thin fixtures ×
+  app/tool, both architectures, O0/O2, symbol-preserving/stripped.
+- Ghidra 12.2 + JDK 25; 4 CPUs; auto-analysis timeout 600 seconds **per file**;
+  decompile timeout 30 seconds/function; enumeration limit 5,000 functions.
+  The old runner did **not** enforce a 600-second whole-job limit.
+- All 16 headless exits were 0, and reported no failed/timed-out decompiles.
+  Elapsed observations were 5–33 seconds app and 5–13 seconds tool.
+  The old exporter classified all incomplete results as timeout, so this is
+  the old exporter’s report, not validation of error classification.
+- Output hashes were recorded in `build/workspaces/freeze.json` before the
+  source-aware evaluation. The evaluator now verifies every listed hash
+  before consuming a baseline and refuses an unlisted or changed baseline.
+- Engine inputs were binary-only. Evaluation and qualitative reading were
+  **source-aware by the same developer**, not an independent blind study.
+  Absence of source path strings does not demonstrate absence of source access.
 
-- All 16 runs: exit 0, 0 failed / 0 timed-out functions. Elapsed 5–33 s
-  (app) / 5–13 s (tool), well under the 600 s job budget; cold JVM included.
-- Controlled discovery recall: **120/120** routines at expected VAs in sym
-  builds (26 core + 4 corpus per variant × 4 variants), **120/120** with
-  `complete` pseudocode in stripped builds. Zero eliminated routines (all
-  source routines survive even at O2 — external linkage + noinline markers).
-- Pseudocode completion: **120/120** controlled routines, all variants.
-- ObjC methods recovered by name in sym builds (`pressDigit:`,
-  `pressOperator:`, `pressEquals`, `buttonPressed:`, …).
-- Xref spot: `_calc_engine_equals` → direct call into `_calc_apply_op`
-  confirmed in sampled xrefs (13 code targets).
-- LLVM adjudication (noinline subset, arm64 O0): **8/8** instruction-count
-  agreement between Ghidra and llvm-objdump over identical body ranges
-  (e.g. `calc_add` 20/20, `calc_parse_digits` 130/130).
-- Universal parity: direct fat import analyzes exactly ONE slice (observed:
-  x86_64, 87 functions) — the loader does not multi-slice. That slice's
-  function set (name+VA) is IDENTICAL to the thin x86_64 baseline; plus
-  build-level slice parity 8/8 byte-exact (unsigned payload) and 8/8
-  `__text` hash parity. Gate passes via explicit slice handling, not via
-  fat import.
-- Determinism: repeat run of `DebugAnalysis-arm64-sym-tool` produced a
-  byte-identical baseline JSON (sha256 match).
-- Blind-output hygiene: no source paths, no `src/` references, no dSYM or
-  DWARF mentions in any of the 16 frozen baselines.
-- Reality check on scale: arm64 app sym enumerates 164 functions vs x86_64
-  app sym 87 — same source, different engine recovery by architecture.
-  The gate denominators use the evaluator-confirmed whitelist, not raw
-  engine counts; broader precision (false positives) is UNKNOWN.
+## Narrow results, with denominators
 
-## Gate verdicts (spec §9.1, Phase 1 scope)
+Re-evaluation: `build/eval-integrity-review-v4.json` (new file, original report
+retained). All 16 historical baseline hashes matched the original freeze.
 
-| Gate | Verdict | Denominator / note |
+- Controlled entry recall: 120/120 symbol-bearing and 120/120 stripped
+  routines at evaluator-known VAs (26 core + 4 corpus × 4 configurations).
+  Pseudocode operation completion: separately 120/120 in each symbol state.
+  Entry matches are not function-body correctness or discovery precision.
+- All 30 whitelist symbols survived in each configuration. This is an
+  observation for this externally linked corpus, not a general O2 guarantee.
+- The typed direct-call spot confirms `calc_engine_equals` calls the entry
+  of `calc_apply_op` in arm64 O0. There are 2 distinct sampled typed call
+  targets; the previous count of 13 included non-call references.
+- 8/8 noinline arm64 O0 routines match LLVM instruction starts **and bytes**
+  within Ghidra-selected body ranges (also 8/8 instruction-count matches).
+  Those ranges are not independent function-boundary truth. Branch targets,
+  x86_64 fidelity and optimized fidelity remain unmeasured. The historical
+  LLVM text was not included in the original freeze; its current hash is
+  recorded by the review, not retroactively called frozen before evaluation.
+- One direct universal import selected x86_64 and its name+entry set matched
+  one thin x86_64 baseline. This does not establish all-slice result parity.
+  Original build checks reported 8/8 unsigned payload matches. Its “text
+  hashes” hashed formatted otool text, not raw section bytes; retain that
+  provenance and do not reinterpret those digests.
+- One case (`DebugAnalysis-arm64-sym-tool`) was run twice with matching JSON
+  hashes. The full repeat matrix was not run.
+- Raw engine function counts differ by architecture (arm64 app sym 164,
+  x86_64 app sym 87). False positives and missed non-whitelist routines are
+  unknown.
+
+## Release-gate status (spec §9.1)
+
+| Gate | Status | Actual scope / missing evidence |
 |---|---|---|
-| Full headless path (import→analyze→disasm→pseudocode) | PASS | 16/16 runs, exact Ghidra 12.2 + JDK 25 pins |
-| Import identity (hash/arch/UUID/image mapping) | PASS | 20 artifacts in `build/manifest.json`, no slice substitution |
-| Parser safety (malformed inputs) | UNKNOWN | not run in Phase 1 (expanded corpus is Phase 3) |
-| Controlled discovery O0 (both archs, sym+stripped) | PASS | 60/60 sym recall; 60/60 stripped complete |
-| Optimized discovery O2 (surviving routines) | PASS | 60/60; 0 eliminated (report, not assumption) |
-| Instruction fidelity (noinline subset, adjudicated) | PASS | 8/8 vs LLVM over identical ranges |
-| Pseudocode completion | PASS | 120/120 controlled routines |
-| Core behavior (pseudocode recompiled & run) | UNKNOWN | harness not built in Phase 1; reference outputs recorded evaluator-side |
-| Direct calls / xrefs | PASS (spot) | equals→apply_op confirmed; full coverage not enumerated |
-| Universal parity | PASS | slice-identical sets; explicit single-slice loader behavior documented |
-| Determinism | PASS (spot) | 1 case × 2 runs identical; full 3×20 not run |
-| Annotation round trip | N/A | Phase 2 CLI work |
-| REA adapter | N/A | optional, out of scope for this milestone |
+| Full headless path | PASS (narrow) | 16 historical fixture pipelines returned JSON; old orchestration lacked robust aggregate failure handling |
+| Import identity | PARTIAL | hashes/UUIDs/build mapping exist; complete mapping and all import metadata not independently validated |
+| Parser safety | UNKNOWN | no hostile/malformed engine corpus |
+| O0/O2 discovery | PARTIAL | controlled entry recall/completion only; no full precision or body correctness |
+| Instruction fidelity | PARTIAL | 8 arm64 O0 body-range byte/boundary checks; no full architecture/branch adjudication |
+| Pseudocode completion | PASS (narrow) | 120/120 controlled routines per symbol state, operation completion only |
+| Pseudocode behavior | UNKNOWN / NOT TESTABLE RAW | no validated lowering/recompile harness or executed behavioral comparison |
+| Direct calls/xrefs | PARTIAL | one typed direct-call relationship, not complete call recovery |
+| Universal parity | PARTIAL | build slice checks and one thin/fat function-set comparison, not all result facets/slices |
+| Determinism | PARTIAL | one case twice; not full three-repeat matrix |
+| Annotation round trip | NOT RUN | separate CLI validation |
+| REA adapter | NOT RUN | optional, outside this milestone |
 
-No fabricated semantic-equivalence claims: pseudocode was spot-read
-(`calc_add` shows a genuine `SCARRY8` overflow check; `calc_engine_equals`
-89 instructions with repeat-equals branches) but NOT executed. No broad
-wrapper work started: controlled-core pseudocode succeeded, so the project
-may proceed to the narrow CLI.
+Raw `calc_add`/`calc_div` pseudocode includes Ghidra constructs such as
+`undefined1 [16]`, `auVar1._0_8_`, and uninitialized padding `uStack_4`.
+It is inspectable C-like output, **not compilable C**. Arithmetic spot-reading
+(e.g. `SCARRY8`) is not semantic equivalence. A generic mechanical lowering
+would need its own frozen validation before behavior can be scored.
 
-## Concrete limitations / blockers for Phase 2
+## Post-review semantics and harness
 
-1. Effective analyzer/options list is NOT yet exported (default 12.2 set
-   assumed; per-analyzer options not dumped). The CLI `analyze --profile`
-   must record these explicitly.
-2. No filesystem sandbox: seatbelt `sandbox-exec` gives network denial only.
-   Broad untrusted inputs remain out of scope until stronger isolation lands.
-3. Fat-binary import analyzes one slice silently — the CLI must split
-   slices explicitly (`lipo -thin`) and never present fat import as
-   multi-arch coverage.
-4. Ghidra user state dir (`~/Library/ghidra/…`) is shared/mutable outside
-   the workspace; worker runs should pin or isolate it in Phase 2.
-5. x86_64 binaries were never executed (static analysis only) — no Rosetta
-   use; behavioral reference outputs come from arm64 runs only.
+Semantics **v1.1**, committed separately, fixes controller chain-history
+recording, defines sign-preserving decimal entry and pending RHS sign, and
+revises the formatter rule to actual rendered length plus NUL. Original v1.0
+outputs are neither regenerated in place nor relabeled consistent with v1.1.
+
+- C tests: 59,201 assertions; production-controller tests: 83 assertions
+  across 34 journeys. Each passed at O0, O2 and ASan+UBSan. These are headless
+  controller tests, not assertions about rendered AppKit windows.
+- The tracked `fixture/build/` scripts run from any cwd, refuse a reused
+  build directory, capture actual expanded commands, record git revision,
+  dirty tracked-diff digest, per-source hashes, tool versions, and raw
+  `__TEXT,__text` byte digests. App smoke launch and name-based process
+  termination were removed. No user app session is terminated.
+- New fixture matrix: `build/review-v2/manifest.json`, 20 artifacts (16 thin,
+  4 universal). All four Xcode config/architecture builds passed; strip
+  preserved raw text bytes in 8/8 cases; universal extraction matched the
+  unsigned thin payload and signed-thin raw text in 8/8 cases.
+- New direct baseline evidence: `build/baseline-runs/review-v2-full/`.
+  All 16 cases completed in 122.205 seconds total; engine commands took
+  4.879–11.034 seconds each. It reported 933 complete decompiles and 340
+  thunks/not-requested, with zero failed/timeout/cancelled decompiles.
+  `build/review-v2/eval-results.json` verifies the new freeze and separately
+  confirms 120/120 sym and stripped controlled entry recall/completion and
+  8/8 arm64 O0 byte/boundary comparisons. 12 non-whitelist outgoing-xref
+  samples hit the declared 200-reference cap, explicitly marked truncated.
+  No instruction/CFG truncation occurred. These are bounded facets, not a
+  full-xref gate pass. The historical and new populations remain distinct.
+- Negative integration test: `build/baseline-runs/review-timeout/` applies a
+  0.01-second whole-command limit; both owned Ghidra processes were stopped,
+  results and aggregate status failed, and the completed full run remained
+  unchanged. Earlier failed harness bring-up runs `hardening-old-input-*`
+  are retained as failed experiments, not included in success counts.
+- The direct baseline runner now uses exclusive per-run IDs under
+  `build/baseline-runs/`, private input snapshots and Ghidra settings/cache
+  dirs, explicit loader flags forbidding library loading/linking, a trusted
+  pre-script disabling DWARF/PDB/source/external symbol discovery, and a
+  complete effective analysis-option export. The pre-script completion
+  marker is verified because headless can exit 0 after a script error.
+- Whole experiment budget: 1,800 seconds; each engine command: 600 seconds;
+  auto-analysis: 540 seconds/file; decompile: 30 seconds/function. Captured
+  logs are capped at 16 MiB, result JSON/partial evidence at 64 MiB, and child
+  files at 64 MiB each. Only the exact child’s newly owned process group is
+  stopped on cancellation. Completed earlier cases remain available when a
+  later case times out. An interrupted in-flight export is partial evidence,
+  never published as a completed baseline.
+- Java export uses atomic no-replacement publication, records native
+  `openProgram` failure, actual timeout/cancel/start/error states, successful
+  decompile warnings and facet errors/truncation. Runner validates JSON,
+  profile marker, summaries, function/facet counts and aggregate failures.
+- Regression suite: 20 tests passed, `python3 -m unittest discover -s analysis/tests -v`.
+  Covers evidence tampering/missing/duplicate/unlisted paths, malformed
+  JSON, summary/status rejection, output/log limits, owned timeout with an
+  unrelated process left alive, and raw section hashing.
+
+## Remaining limitations
+
+Seatbelt denies network, **not filesystem access**. Source and dSYM trees
+are on the same readable machine. Disabled analyzers and binary-only input
+directories improve hygiene but do not establish enforced source isolation.
+Only our own fixtures are authorized for this runner; untrusted binaries
+require stronger isolation. User state is isolated in new runner runs, while
+old runs used shared Ghidra state. No x86_64 binary has been executed and no
+Rosetta use is claimed. Neither this review nor the new runner turns partial
+quality gates into a release pass.
