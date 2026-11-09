@@ -100,4 +100,59 @@ made Ghidra print both result fields on both paths. That assisted
 output passed 4,800 directed and 10,000 seeded cases separately from the
 calculator score. Its report SHA-256 is
 `ad43d4f47be741df31886ced1049563d9c1166637797293c6b24e7e68fec1915`.
-Automatic return recovery remains open.
+
+## Automatic recovery on saved Programs
+
+Policy `macscope-dispatch-return-recovery/1` locates candidates from
+Ghidra's captured entries and the binary. The independent decoder checks
+the guarded indirect call, its register-preserving return, the default
+return, and a direct caller that consumes both result registers. The
+worker verifies the same instruction bytes in its Program and requires
+all reachable table callees to agree on the two-register return, return
+type, calling convention, and two input storage locations. It captures
+every candidate's prototype before applying any override.
+
+The headless query applies the common return type at the computed call
+and the enclosing function in a disposable read-only Program copy.
+Original and copied Program digests, instruction bytes, function entries, and
+cross references matched. The override split one basic block at the
+call site. The verifier accepted that split only after merging its
+single fall-through edge reconstructed the exact prior block. The
+computed calls retained their unresolved cross references. The query
+was frozen before the evaluator opened the source-side function maps.
+
+The calculator query recovered both result registers in both profiles
+and both symbol states. Both parameter-inference instances passed
+4,800 directed and 10,000 seeded cases each with zero mismatches. Both
+baseline instances remained untestable because the captured
+`calc_div` dependency prints a wide aggregate division that the C
+compiler rejects. The report SHA-256 is
+`2facf0c0e97571f014cf96e3c91fad9fb2f7c212b437f010738d32dae8424d03`.
+An independent decode identifies `idivq` at `0x1000005b2`. The saved
+baseline Program represents it as `INT_SDIV` with two 16-byte
+`undefined1[16]` operands. The other division at `0x1000005bd` uses
+`INT_DIV` with two eight-byte unsigned operands.
+
+The alternate query brings parameter-inference O2 to 52/52 routines and
+4,269/4,269 instruction bytes in each symbol state. The underlying CLI
+captures retain their 51/52 result. Baseline O2 remains at 47/52 routines
+and 3,689/4,269 bytes. The original O0 cohort scores still apply.
+
+The separate `abi-fixture` source was frozen in `2b7ce96`. It uses a
+different selector mask and table order, and its caller stores both
+registers. All four x86_64 O2 captures passed 4,096 directed and 10,000
+seeded cases with zero mismatches. The report SHA-256 is
+`39c2155fd801490940f9a46ce4206c4152d6ddcd98d211c46e5f691950454627`.
+The original independent dispatch fixture serves as the no-observer
+control. All four controls found the table but lacked a verified
+caller. The report SHA-256 is
+`888677d0f27e57c3302d5610c2a622b08663348e357df8c524f44543986477a8`.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/recover_dispatch_returns.py \
+  --fixture abi-fixture --ghidra /path/to/experimental-full-ghidra \
+  --java-home /path/to/pinned-jdk --output-dir /private/tmp/new-abi-recovery \
+  --experimental-trusted-input
+```
+
+CLI integration and broader return-shape coverage remain open.

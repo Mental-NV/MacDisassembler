@@ -77,7 +77,8 @@ def capture_fixture(output, source, deps, compiler, sdk):
     })
     captures = capture(output, evaluator, inputs, deps["ghidra_path"], deps["java_home"], builds=builds)
     write_new_json(output / "frozen-captures.json", captures)
-    if {(row["symbols"], row["profile"]) for row in captures} != set(product(STATES, PROFILES)):
+    expected = set(product(STATES, PROFILES))
+    if len(captures) != len(expected) or {(row["symbols"], row["profile"]) for row in captures} != expected:
         raise ValueError("Incomplete independent fixture capture")
     return files, digests, captures
 
@@ -199,8 +200,8 @@ def query(directory, project, image, saved, snapshot, plan, deps, excluded):
                        manifest_path=directory / "job.json", manifest={"mode": "dispatch_return_recovery"})
     raw, evidence = read_json(result_path), read_json(decision_path)
     applied, refinements, changed_c = verify_recovery(snapshot, raw, evidence, plan)
-    if engine.tree_digest(source) != original:
-        raise ValueError("Original saved Program changed")
+    if engine.tree_digest(source) != original or engine.tree_digest(directory / "program") != original:
+        raise ValueError("Recovery changed a saved Program on disk")
     return {
         "status": "applied" if applied else "skipped",
         "applied_entries": sorted(applied), "decisions": evidence["results"],
@@ -285,6 +286,8 @@ def evaluate_fixture(output, rows, fixture, files, source, compiler, sdk, decode
     for row in rows:
         if row["input_sha256"] != digests[row["symbols"]]:
             raise ValueError("Independent scoring input differs from the frozen fixture")
+        if source == FIXTURES["no-observer-control"]:
+            verify_observer_control(row, entry)
         if row["status"] != "applied":
             continue
         recovered = read_recovered(output, row, entry)
@@ -297,6 +300,12 @@ def evaluate_fixture(output, rows, fixture, files, source, compiler, sdk, decode
         instructions = instructions_for(path, binary, decoder, record, max_bytes=1024)
         row["behavior"] = evaluate(output / row["label"] / "behavior", HELDOUT, record, source_text,
                                    compiler, sdk, files, source, dispatch=(definitions, request["table"], instructions))
+
+
+def verify_observer_control(row, entry):
+    if row["status"] != "no_request" or row["requests"] or row["skipped"] != [
+            {"entry_va": entry, "reason": "missing_dispatch_return_observer"}]:
+        raise ValueError("Control must find the dispatch and decline it for missing caller evidence")
 
 
 def main():

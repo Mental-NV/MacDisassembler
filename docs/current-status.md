@@ -156,11 +156,19 @@ collections exceed documented bounds despite successful pseudocode output.
   recovered C in all arm64 and x86_64 O0 calculator captures and the
   arm64 O2 captures. The independent fixture verified the table entries
   and exposed separate recovered-C blockers.
+- [x] Validate [automatic x86_64 O2 dispatch return recovery](dispatch-tables.md#automatic-recovery-on-saved-programs)
+  in disposable full-Ghidra queries. Both calculator parameter-inference
+  captures and all four independent fixture captures passed. Four
+  no-observer controls declined recovery.
+- [ ] Integrate verified return recovery into the local CLI. The alternate
+  queries bring O2 parameter inference to 52/52 routines and 4,269/4,269
+  instruction bytes in each symbol state. The original CLI captures
+  score 51/52 routines and 4,206/4,269 bytes.
 - [ ] Meet the recovered-C behavior and testability gates across the full
-  core. The separate baseline O2 score reached 47/52 routines and
-  3,689/4,269 instruction bytes in each symbol state. Parameter inference
-  reached 51/52 routines and 4,206/4,269 bytes. The all-routine O0
-  requirement and automatic x86_64 O2 return recovery remain open.
+  core. Baseline O2 remains at 47/52 routines and 3,689/4,269 instruction
+  bytes in each symbol state. The two recovered baseline dispatch
+  captures are blocked by the wide division printed in a callee. The
+  all-routine O0 requirement remains open.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
