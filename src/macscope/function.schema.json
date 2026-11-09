@@ -1,0 +1,20 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "title":"macscope function evidence 1.0",
+ "type":"object",
+ "required":["function_id","image_id","arch","entry_va","body_ranges","names","signature","pseudocode","address_spans","facets","origin"],
+ "properties":{
+  "function_id":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+  "image_id":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+  "arch":{"enum":["arm64","x86_64"]},
+  "entry_va":{"type":["string","null"],"pattern":"^0x[a-f0-9]+$"},
+  "body_ranges":{"type":"array","items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"string"}}},
+  "names":{"type":"array","items":{"type":"object","required":["name","origin"]}},
+  "signature":{"type":["string","null"]},
+  "pseudocode":{"type":["string","null"]},
+  "address_spans":{"type":"array"},
+  "facets":{"type":"object"},
+  "origin":{"type":"object"}
+ },
+ "additionalProperties":true
+}

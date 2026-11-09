@@ -1,0 +1,18 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://macscope.invalid/schema/envelope/1.0",
+  "title":"macscope 1.0 envelope",
+  "type":"object",
+  "required":["schema_version","command","status","analysis_id","data","diagnostics","coverage"],
+  "properties":{
+    "schema_version":{"const":"1.0"},
+    "command":{"type":"string"},
+    "status":{"enum":["complete","partial","failed","cancelled"]},
+    "analysis_id":{"type":["string","null"]},
+    "data":{},
+    "diagnostics":{"type":"array","items":{"type":"string"}},
+    "coverage":{"type":"object","required":["scope","status","returned_count","known_total","next_cursor","truncation_reason"],"properties":{"scope":{"type":"string"},"status":{"enum":["complete","partial","unknown"]},"returned_count":{"type":"integer","minimum":0},"known_total":{"type":["integer","null"],"minimum":0},"next_cursor":{"type":["string","null"]},"truncation_reason":{"type":["string","null"]}},"additionalProperties":false},
+    "error":{"type":"object","required":["code","message","affected_object","retryable","partial_results"],"properties":{"code":{"type":"string"},"message":{"type":"string"},"affected_object":{"type":["string","null"]},"retryable":{"type":"boolean"},"partial_results":{}},"additionalProperties":false}
+  },
+  "additionalProperties":false
+}

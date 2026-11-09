@@ -1,0 +1,209 @@
+"""Bounded data-only preflight; never loads or executes input code.
+
+Rejecting symlinks in every path component is intentional for this narrow MVP.
+It is stricter than future in-bundle framework-link support.
+"""
+import hashlib
+import os
+import plistlib
+import stat
+import struct
+from xml.parsers.expat import ExpatError
+from pathlib import Path
+from .errors import Error
+
+MAX_INPUT = 256 * 1024 * 1024
+MAX_COMMANDS = 8192
+MAX_PLIST = 1024 * 1024
+ARCHES = {0x100000c: 'arm64', 0x1000007: 'x86_64'}
+
+
+def checked_path(path, directory=False):
+    p = Path(os.path.abspath(path))
+    if len(str(p).encode()) > 4096:
+        raise Error('path_limit', 'Path exceeds 4096 bytes')
+    for component in [*reversed(p.parents), p]:
+        try:
+            s = component.lstat()
+        except OSError as e:
+            raise Error('path_unavailable', str(e)) from e
+        if stat.S_ISLNK(s.st_mode):
+            raise Error('symlink', 'Symlinks are not supported: ' + str(component))
+    s = p.stat()
+    if not (stat.S_ISDIR(s.st_mode) if directory else stat.S_ISREG(s.st_mode)):
+        raise Error('file_type', 'Expected ' + ('directory' if directory else 'regular file'))
+    return p
+
+
+def read_regular(path, maximum=MAX_INPUT):
+    p = checked_path(path)
+    # Open every component relative to an already-open directory. A parent
+    # cannot become an attacker-controlled symlink between lstat and open.
+    directory = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in p.parts[1:-1]:
+            nextfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = nextfd
+        fd = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    except OSError as e:
+        raise Error('path_changed', 'Path changed or contains a symlink: '+str(e)) from e
+    finally:
+        os.close(directory)
+    try:
+        s = os.fstat(fd)
+        if not stat.S_ISREG(s.st_mode) or s.st_size > maximum:
+            raise Error('input_limit', 'Not a regular file or input exceeds byte limit')
+        data = bytearray()
+        while len(data) <= maximum:
+            chunk = os.read(fd, min(1024 * 1024, maximum + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        after = os.fstat(fd)
+        if len(data) > maximum or (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise Error('input_changed', 'Input changed while reading or exceeds limit')
+        return bytes(data)
+    finally:
+        os.close(fd)
+
+
+def resolve_input(path):
+    p = Path(os.path.abspath(path))
+    if p.suffix.lower() != '.app':
+        return checked_path(p), []
+    p = checked_path(p, directory=True)
+    try:
+        info = plistlib.loads(read_regular(p / 'Contents/Info.plist', MAX_PLIST))
+    except (plistlib.InvalidFileException, ValueError, OverflowError, ExpatError) as e:
+        raise Error('bundle_plist', 'Invalid bounded bundle property list') from e
+    name = info.get('CFBundleExecutable') if isinstance(info, dict) else None
+    if not isinstance(name, str) or not name or name in ('.', '..') or '/' in name or '\\' in name or '\x00' in name:
+        raise Error('bundle_executable', 'CFBundleExecutable must be a single filename')
+    binary = checked_path(p / 'Contents/MacOS' / name)
+    if not binary.is_relative_to(p):
+        raise Error('bundle_escape', 'Executable escapes bundle')
+    warnings = []
+    if (binary.parent / (name + '.debug.dylib')).exists():
+        warnings.append('Companion .debug.dylib present; main image may be a launcher. Companion import is not implemented.')
+    return binary, warnings
+
+
+def bounded(off, size, total, label):
+    if off < 0 or size < 0 or off > total or size > total - off:
+        raise Error('macho_bounds', label + ' exceeds file bounds')
+
+
+def thin(data):
+    if len(data) < 32 or data[:4] != b'\xcf\xfa\xed\xfe':
+        raise Error('unsupported_format', 'Only little-endian 64-bit Mach-O images are supported', 3)
+    _, cpu, subtype, filetype, ncmds, cmdbytes, flags, reserved = struct.unpack_from('<8I', data)
+    arch = ARCHES.get(cpu)
+    if not arch or (arch == 'arm64' and (subtype & 0xffffff) != 0) or (arch == 'x86_64' and (subtype & 0xffffff) != 3):
+        raise Error('unsupported_arch', 'Only ordinary arm64 and x86_64 CPU subtypes are validated (arm64e is unsupported)', 3)
+    if filetype not in (2, 6, 8):
+        raise Error('unsupported_filetype', 'Only MH_EXECUTE, MH_DYLIB and MH_BUNDLE are supported', 3)
+    if ncmds > MAX_COMMANDS or cmdbytes > 16 * 1024 * 1024 or ncmds * 8 > cmdbytes:
+        raise Error('command_limit', 'Invalid or excessive load-command table')
+    bounded(32, cmdbytes, len(data), 'Load commands')
+    cursor, end = 32, 32 + cmdbytes
+    sections, commands, warnings, uuid = [], [], [], None
+    for _ in range(ncmds):
+        bounded(cursor, 8, end, 'Load command header')
+        cmd, size = struct.unpack_from('<2I', data, cursor)
+        if size < 8 or size % 8:
+            raise Error('command_size', 'Load command size must be aligned and at least 8')
+        bounded(cursor, size, end, 'Load command')
+        commands.append(hex(cmd))
+        if cmd in (0x21, 0x2c):
+            if size < (24 if cmd == 0x2c else 20):
+                raise Error('encryption_bounds', 'Truncated encryption command')
+            cryptoff, cryptsize, cryptid = struct.unpack_from('<3I', data, cursor + 8)
+            bounded(cryptoff, cryptsize, len(data), 'Encrypted region')
+            if cryptid:
+                raise Error('encrypted', 'Encrypted Mach-O is unsupported; no decryption is attempted', 3)
+        if cmd == 0x1b:
+            if size < 24:
+                raise Error('uuid_bounds', 'Truncated UUID command')
+            uuid = data[cursor+8:cursor+24].hex()
+        if cmd == 0x19:
+            if size < 72:
+                raise Error('segment_bounds', 'Truncated LC_SEGMENT_64')
+            name, va, vmsize, off, filesize, maxprot, prot, nsects, segflags = struct.unpack_from('<16s4Q4I', data, cursor+8)
+            bounded(off, filesize, len(data), 'Segment file bytes')
+            if filesize > vmsize or nsects > 4096 or 72 + nsects * 80 != size or va + vmsize > 2**64:
+                raise Error('section_bounds', 'Invalid segment/section table')
+            for i in range(nsects):
+                at = cursor + 72 + i * 80
+                sn, sg, addr, sz, fo, align, reloff, nreloc, sf, r1, r2, r3 = struct.unpack_from('<16s16s2Q8I', data, at)
+                zero = (sf & 0xff) in (1, 0xc, 0x12)
+                if not zero:
+                    bounded(fo, sz, len(data), 'Section bytes')
+                    if fo < off or fo + sz > off + filesize:
+                        raise Error('section_bounds', 'Section bytes escape owning segment')
+                if addr + sz > 2**64 or addr < va or addr + sz > va + vmsize or align > 63:
+                    raise Error('section_bounds', 'Invalid section virtual range')
+                bounded(reloff, nreloc * 8, len(data), 'Relocations')
+                sections.append({'name': sn.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'segment': sg.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'va': hex(addr), 'size': hex(sz), 'file_offset': None if zero else hex(fo), 'protections': prot})
+        if cmd == 2:
+            if size < 24:
+                raise Error('symtab_bounds', 'Truncated symbol table command')
+            so, ns, stro, strs = struct.unpack_from('<4I', data, cursor+8)
+            bounded(so, ns * 16, len(data), 'Symbol table')
+            bounded(stro, strs, len(data), 'String table')
+        if cmd in (0x1d, 0x26, 0x29, 0x80000033, 0x80000034):
+            if size < 16:
+                raise Error('linkedit_bounds', 'Truncated linkedit command')
+            lo, ls = struct.unpack_from('<2I', data, cursor+8)
+            bounded(lo, ls, len(data), 'Linkedit payload')
+        cursor += size
+    if cursor != end:
+        raise Error('command_size', 'Load-command count and byte size disagree')
+    return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype, 'uuid': uuid, 'sections': sections, 'load_commands': commands, 'warnings': warnings}
+
+
+def inspect_bytes(data):
+    if len(data) > MAX_INPUT:
+        raise Error('input_limit', 'Input exceeds 256 MiB')
+    digest = hashlib.sha256(data).hexdigest()
+    slices = []
+    magic = data[:4]
+    if magic in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf', b'\xbe\xba\xfe\xca', b'\xbf\xba\xfe\xca'):
+        endian = '>' if magic[:2] == b'\xca\xfe' else '<'
+        is64 = magic in (b'\xca\xfe\xba\xbf', b'\xbf\xba\xfe\xca')
+        if len(data) < 8:
+            raise Error('fat_header', 'Truncated universal header')
+        n = struct.unpack_from(endian+'I', data, 4)[0]
+        stride = 32 if is64 else 20
+        if not 1 <= n <= 16:
+            raise Error('fat_limit', 'Universal slice count must be 1..16')
+        bounded(8, n*stride, len(data), 'Universal table')
+        spans, arches = [], set()
+        for i in range(n):
+            record = struct.unpack_from(endian+('IIQQII' if is64 else 'IIIII'), data, 8+i*stride)
+            cpu, subtype, off, size, align = record[:5]
+            if align > 30 or off % (1 << align) or off < 8+n*stride or not size or (is64 and record[5] != 0):
+                raise Error('fat_slice', 'Invalid universal alignment, reserved field or range')
+            bounded(off, size, len(data), 'Universal slice')
+            if any(off < b and a < off+size for a,b in spans):
+                raise Error('fat_overlap', 'Universal slices overlap')
+            spans.append((off, off+size))
+            meta = thin(data[off:off+size])
+            if (cpu, subtype) != (meta['cpu_type'], meta['cpu_subtype']) or meta['arch'] in arches:
+                raise Error('fat_identity', 'Universal CPU mismatch or duplicate architecture')
+            arches.add(meta['arch'])
+            slices.append(dict(meta, offset=hex(off), size=hex(size), sha256=hashlib.sha256(data[off:off+size]).hexdigest()))
+    else:
+        slices.append(dict(thin(data), offset='0x0', size=hex(len(data)), sha256=digest))
+    for s in slices:
+        s['image_id'] = hashlib.sha256((digest+':'+str(s['cpu_type'])+':'+str(s['cpu_subtype'])+':'+s['offset']+':'+s['size']+':'+s['sha256']).encode()).hexdigest()
+    return {'artifact_sha256': digest, 'size': hex(len(data)), 'slices': slices, 'limitations': ['Bounded preflight is not authoritative Ghidra loading.', 'No dyld bind/chained-fixup decoding, signature validation or dependency loading in preflight.']}
+
+
+def inspect_path(path):
+    p, warnings = resolve_input(path)
+    data = read_regular(p)
+    result = inspect_bytes(data)
+    result['warnings'] = warnings
+    result['input_name'] = p.name
+    return result, data

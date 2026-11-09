@@ -1,0 +1,14 @@
+[build-system]
+requires = []
+build-backend = "macscope_build"
+backend-path = ["."]
+
+[project]
+name = "macscope"
+version = "0.2.0"
+description = "Bounded local Mach-O evidence CLI using full Ghidra headless"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+macscope = "macscope.cli:main"
