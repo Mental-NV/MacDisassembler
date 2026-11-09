@@ -54,12 +54,12 @@ def freeze(source):
     return revision, files
 
 
-def build(evaluator, inputs, files, source, compiler, sdk):
+def build(evaluator, inputs, files, source, compiler, sdk, *, builds=BUILDS):
     header, _ = fixture_contract(source)
     for name in (source, header):
         (evaluator / name).write_bytes(files[name])
     digests = {}
-    for arch, opt in BUILDS:
+    for arch, opt in builds:
         variant = f"{arch}-{opt}"
         directory = evaluator / variant
         directory.mkdir()
@@ -105,7 +105,7 @@ def reuse_fixture(origin, evaluator, inputs, files, source):
     return previous["inputs"]
 
 
-def capture(output, evaluator, inputs, ghidra, java_home, origin=None):
+def capture(output, evaluator, inputs, ghidra, java_home, origin=None, *, builds=BUILDS):
     projects = output / "projects"
     projects.mkdir()
     profile = engine.profile
@@ -127,7 +127,7 @@ def capture(output, evaluator, inputs, ghidra, java_home, origin=None):
     paths = []
     engine.profile = isolated
     try:
-        for (arch, opt), state in product(BUILDS, STATES):
+        for (arch, opt), state in product(builds, STATES):
             variant = f"{arch}-{opt}"
             label = f"{variant}-{state}"
             project_path = str(projects / label)
