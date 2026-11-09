@@ -2,7 +2,7 @@
 import re
 
 
-POLICY = "macscope-ghidra-aggregate-compat/6"
+POLICY = "macscope-ghidra-aggregate-compat/7"
 MEMORY_STORES = frozenset(("STORE_LE16", "STORE_LE32", "STORE_LE64"))
 ARM_VECTORS = frozenset(("NEON_rev64", "NEON_ext"))
 BYTE_VECTORS = ARM_VECTORS | {"pshufb"}
@@ -127,8 +127,8 @@ def lower_vector_calls(body, arrays, parameters):
         pieces += [body[end:match.start()], f"{name}({', '.join(adjusted)})"]
         end = finish
     body = "".join([*pieces, body[end:]])
-    body = re.sub(rf"(?<![\w*])({address})\s*=(?!=)\s*([^;{{}}]+);",
-                  lambda m: f"gh_store_vector({m[1]}, {m[2].strip()});", body)
+    body = re.sub(rf"^([ \t]*)({address})\s*=(?!=)\s*([^;{{}}]+);",
+                  lambda m: f"{m[1]}gh_store_vector({m[2]}, {m[3].strip()});", body, flags=re.M)
     return body
 
 

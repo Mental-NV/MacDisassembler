@@ -75,11 +75,13 @@ class AggregateCompatibilityTests(unittest.TestCase):
         code = lowered("""
             undefined1 auVar1 [16];
             auVar1 = pshufb(*param_1, CONCAT88(0x102,0x304));
+            *(long *)*param_1 = auVar1._0_8_;
             *param_1 = auVar1;
             return auVar1;
         """, header="undefined1 [16] FUN_100(undefined1 (*param_1) [16])")
         self.assertIn("pshufb(gh_load_vector(*param_1), CONCAT88(0x102,0x304))", code)
         self.assertIn("gh_store_vector(*param_1, auVar1);", code)
+        self.assertIn("*(long *)*param_1 = ((uint64_t)gh_read(auVar1, 0, 8));", code)
 
     def test_stack_return_address_requires_a_matching_failure_stub(self):
         text = "undefined8 uStack_40; uStack_40 = &UNK_1005;"
