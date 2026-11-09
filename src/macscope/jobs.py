@@ -203,11 +203,11 @@ def analysis_request(project, image, recovery=None):
     return request
 
 
-def query_request(project, image, function, source, revision, hints):
+def query_request(project, image, function, source, revision, hints, *, dispatch_recovery=None):
     program_sha256 = source.get("analysis_program_sha256")
     if not isinstance(program_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", program_sha256):
         raise Error("analysis_program_integrity", "Saved analyzed Program identity is missing; rerun analyze")
-    return {
+    request = {
         "schema": QUERY_REQUEST,
         "project_id": project.project_id,
         "image_id": image["image_id"],
@@ -222,6 +222,9 @@ def query_request(project, image, function, source, revision, hints):
         "type_hint_view_id": identity({"source_analysis_id": image["active_analysis"], "hints": hints})
         if hints is not None else None,
     }
+    if dispatch_recovery is not None:
+        request["dispatch_return_recovery"] = dispatch_recovery
+    return request
 
 
 def query_receipt(project, job_id, request):
@@ -245,6 +248,12 @@ def query_receipt(project, job_id, request):
             or result["data"].get("entry_va") != request.get("entry_va")
             or result.get("analysis_id") != request.get("source_analysis_id")):
         raise Error("query_receipt", "Recorded query result differs from its request")
+    recovery = request.get("dispatch_return_recovery")
+    reported = origin.get("dispatch_return_recovery")
+    if (recovery is None and reported is not None or recovery is not None and (
+            not isinstance(recovery, dict) or not isinstance(reported, dict)
+            or any(reported.get(key) != value for key, value in recovery.items()))):
+        raise Error("query_receipt", "Recorded dispatch decision differs from its query request")
     _, producer = get(project, producer_id)
     if (producer.get("mode") != "query" or producer["status"] != "complete"
             or producer.get("query_request") != request

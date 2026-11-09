@@ -1,4 +1,4 @@
-// Research query on a disposable copy of a previously captured owned Program.
+// Opt-in query on a disposable copy of a previously captured owned Program.
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -16,6 +16,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import ghidra.app.decompiler.DecompInterface;
+import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.util.headless.HeadlessScript;
 import ghidra.program.model.address.Address;
@@ -35,6 +36,7 @@ import ghidra.program.model.symbol.SourceType;
 
 public class RecoverDispatchReturn extends HeadlessScript {
     static final String POLICY = "macscope-dispatch-return-recovery/1";
+    int timeout;
 
     record Recovery(Function root, Address call, FunctionPrototype prior, DataType resultType,
                     JsonArray targets, JsonObject report) {}
@@ -42,8 +44,10 @@ public class RecoverDispatchReturn extends HeadlessScript {
     @Override
     public void run() throws Exception {
         String[] args = getScriptArgs();
-        if (args.length != 2 || isHeadlessAnalysisEnabled())
+        if (args.length != 3 || isHeadlessAnalysisEnabled())
             throw new IllegalArgumentException("Expected a saved Program, request, and result path");
+        timeout = Integer.parseInt(args[2]);
+        if (timeout < 1 || timeout > 300) throw new IllegalArgumentException("Invalid ABI query timeout");
         Path request = Path.of(args[0]);
         if (Files.size(request) > 256 * 1024) throw new IllegalArgumentException("Oversized ABI request");
         JsonObject plan = JsonParser.parseString(Files.readString(request)).getAsJsonObject();
@@ -159,10 +163,16 @@ public class RecoverDispatchReturn extends HeadlessScript {
     FunctionPrototype prototype(Function function) {
         DecompInterface decompiler = new DecompInterface();
         try {
+            DecompileOptions options = new DecompileOptions();
+            options.setDefaultTimeout(timeout);
+            options.setMaxInstructions(100000);
+            options.setMaxJumpTableEntries(4096);
+            options.setMaxPayloadMBytes(8);
+            decompiler.setOptions(options);
             decompiler.toggleSyntaxTree(true);
             if (!decompiler.openProgram(currentProgram))
                 throw new IllegalStateException(decompiler.getLastMessage());
-            DecompileResults result = decompiler.decompileFunction(function, 30, monitor);
+            DecompileResults result = decompiler.decompileFunction(function, timeout, monitor);
             if (!result.decompileCompleted() || result.getHighFunction() == null)
                 throw new IllegalStateException("Cannot verify ABI for " + function.getEntryPoint());
             return result.getHighFunction().getFunctionPrototype();

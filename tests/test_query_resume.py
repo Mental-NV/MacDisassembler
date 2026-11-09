@@ -3,7 +3,7 @@ import hashlib
 import json
 from unittest.mock import patch
 
-from macscope import annotations, cli, engine, jobs, storage
+from macscope import annotations, cli, dispatch_returns, engine, jobs, storage
 from test_core import TemporaryCase
 
 
@@ -112,4 +112,17 @@ class QueryResumeTests(TemporaryCase):
             self.error("job_resume_ownership", self.resume)
             storage.write_json(self.prior_path, dict(self.record, type_hints=[]), force=True)
             self.error("job_resume_inputs", self.resume)
+            run.assert_not_called()
+
+    def test_resume_recomputes_dispatch_proof_before_starting_a_worker(self):
+        original = {'policy': dispatch_returns.POLICY, 'entry_va': self.entry, 'requests': [],
+                    'skipped_reason': 'unsupported_dispatch_architecture'}
+        recovery = dispatch_returns.request_identity(original)
+        request = dict(self.request, type_hint_view_id=None, dispatch_return_recovery=recovery)
+        record = dict(self.record, query_request=request, type_hints=None, type_hint_view_id=None,
+                      dispatch_return_recovery=recovery)
+        storage.write_json(self.prior_path, record, force=True)
+        with (patch.object(dispatch_returns, 'request', return_value=dict(original, skipped_reason='changed')),
+              patch.object(engine, 'run') as run):
+            self.error('job_resume_inputs', self.resume)
             run.assert_not_called()

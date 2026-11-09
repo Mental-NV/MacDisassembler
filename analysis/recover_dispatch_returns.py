@@ -25,7 +25,7 @@ from macscope.storage import Project
 
 
 POLICY = "macscope-dispatch-return-recovery/1"
-SCRIPT = ROOT / "analysis/scripts/RecoverDispatchReturn.java"
+SCRIPT = engine.BRIDGE / "RecoverDispatchReturn.java"
 CALCULATOR = "calc_dispatch_table"
 HELDOUT = "heldout_dispatch"
 FIXTURES = {"abi-fixture": "heldout_dispatch_abi.c", "no-observer-control": "heldout_dispatch.c"}
@@ -58,13 +58,16 @@ def capture_fixture(output, source, deps, compiler, sdk):
     files = {}
     rev = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
     names = (source, *fixture_contract(source), *FROZEN, Path(__file__).name,
-             "dispatch_return_evidence.py", "dispatch_linkage.py", "audit_core_behavior.py",
-             "scripts/" + SCRIPT.name)
+             "dispatch_return_evidence.py", "dispatch_linkage.py", "audit_core_behavior.py")
     for name in names:
         data = read_bytes(ROOT / "analysis" / name)
         if data != subprocess.check_output(["git", "-C", ROOT, "show", f"{rev}:analysis/{name}"]):
             raise ValueError("Owned fixture and evaluator must match a committed revision: " + name)
         files[name] = data
+    script_name = str(SCRIPT.relative_to(ROOT))
+    files[script_name] = read_bytes(SCRIPT)
+    if files[script_name] != subprocess.check_output(["git", "-C", ROOT, "show", f"{rev}:{script_name}"]):
+        raise ValueError("The ABI recovery script must match the committed revision")
     output.mkdir()
     evaluator, inputs = output / "evaluator", output / "inputs"
     evaluator.mkdir()
@@ -187,7 +190,7 @@ def query(directory, project, image, saved, snapshot, plan, deps, excluded):
             str(Path(deps["ghidra_path"]) / "support/analyzeHeadless"), str(directory / "program"), "image",
             "-process", image["image_id"] + ".macho", "-noanalysis", "-readOnly",
             "-scriptPath", str(directory / "scripts"), "-preScript", SCRIPT.name,
-            str(request_path), str(decision_path), "-postScript", "MacscopeBridge.java", str(result_path),
+            str(request_path), str(decision_path), "30", "-postScript", "MacscopeBridge.java", str(result_path),
             "query", "5000", "30", "-max-cpu", "1", "-analysisTimeoutPerFile", "100",
             "-log", str(directory / "engine.log"), "-scriptlog", str(directory / "script.log")]
     home, temp = directory / "home", directory / "tmp"
