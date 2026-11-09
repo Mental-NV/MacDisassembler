@@ -2,6 +2,7 @@
 import unittest
 
 from aggregate_compat import Unsupported, lower_closure
+from compare_printer_behavior import condition_summaries
 from compare_state_operations import bind_return_address
 
 
@@ -94,6 +95,19 @@ class AggregateCompatibilityTests(unittest.TestCase):
         self.assertEqual(evidence["stub_va"], "0x1020")
         with self.assertRaisesRegex(Unsupported, "unverified_stack_return_address"):
             bind_return_address(text, stub, image, call, [{"symbol": "_other", "va": "0x1100"}])
+
+    def test_optimized_gate_keeps_symbol_states_separate(self):
+        rows = {
+            ("ReleaseAnalysis-arm64", "stripped", "baseline/1", "example"):
+                {"status": "not_testable", "llvm_instruction_bytes": 8},
+            ("ReleaseAnalysis-arm64", "sym", "baseline/1", "example"):
+                {"status": "passed", "llvm_instruction_bytes": 8, "results": {}},
+        }
+        report = condition_summaries(rows)
+        stripped = report["binary_only"]["baseline/1"]["O2"]["total"]
+        symbols = report["embedded_symbols"]["baseline/1"]["O2"]["total"]
+        self.assertEqual((stripped["cases"], stripped["passed_bytes"]), (1, 0))
+        self.assertEqual((symbols["cases"], symbols["passed_bytes"]), (1, 8))
 
     def test_does_not_rewrite_a_missing_aggregate_signature_or_unknown_dependency(self):
         with self.assertRaisesRegex(Unsupported, "aggregate_abi_unverified"):

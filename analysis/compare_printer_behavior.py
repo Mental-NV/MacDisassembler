@@ -103,6 +103,27 @@ def summarize(records):
     }
 
 
+def condition_summaries(records):
+    """Keep blind symbol states and analyzer profiles independently scored."""
+    profiles = sorted({key[2] for key in records})
+    conditions = {}
+    for state, label in (("stripped", "binary_only"), ("sym", "embedded_symbols")):
+        conditions[label] = {}
+        for profile in profiles:
+            modes = {}
+            for build, optimization in (("DebugAnalysis", "O0"), ("ReleaseAnalysis", "O2")):
+                by_arch = {
+                    arch: summarize(row for key, row in records.items()
+                                    if key[:3] == (f"{build}-{arch}", state, profile))
+                    for arch in ("arm64", "x86_64")
+                }
+                total = summarize(row for key, row in records.items()
+                                  if key[0].startswith(build + "-") and key[1:3] == (state, profile))
+                modes[optimization] = {"total": total, "by_arch": by_arch}
+            conditions[label][profile] = modes
+    return conditions
+
+
 def heldout_evidence(root, plan):
     manifest = root / "frozen-captures.json"
     report = root / "report.json"
@@ -208,6 +229,7 @@ def run(args):
         "all": {side: summarize(rows.values()) for side, rows in sides.items()},
         "O2": {side: summarize(row for key, row in rows.items() if key[0].startswith("ReleaseAnalysis-"))
                for side, rows in sides.items()},
+        "conditions": {side: condition_summaries(rows) for side, rows in sides.items()},
         "changed_verdicts": changes,
     }
     if args.heldout_pair:
