@@ -107,6 +107,7 @@ def parser():
         if c=='decompile':
             pagination(s);budgets(s)
             s.add_argument('--fresh',action='store_true',help='Reopen the saved Program and decompile one function')
+            s.add_argument('--with-type-hints',action='store_true',help='Apply accepted return hints in the fresh query copy')
         if c=='xrefs':s.add_argument('--direction',choices=('to','from','both'),default='both')
     s=sub.add_parser('search');project(s);common(s);pagination(s)
     s.add_argument('query')
@@ -130,6 +131,15 @@ def parser():
         if action=='set':s.add_argument('text')
     s=sub.add_parser('annotations');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('history');project(s);common(s);selector(s,required=False);pagination(s)
+    s=sub.add_parser('type');ss=s.add_subparsers(dest='action',required=True)
+    for action in ('set','clear','list'):
+        s=ss.add_parser(action);project(s);common(s);selector(s,required=action!='list')
+        if action=='list':
+            pagination(s)
+        else:
+            s.add_argument('--accept',action='store_true')
+            s.add_argument('--author',default='local')
+        if action=='set':s.add_argument('--return-type',required=True)
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl'))
     s.add_argument('--include-annotations',action='store_true')
     return p
@@ -247,11 +257,11 @@ def check_engine_access(args, project):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
 
 
-def fresh_decompile(args, project, image, function, aid):
+def fresh_decompile(args, project, image, function, aid, hints=None):
     if function['entry_va'] is None or function['is_external'] or function['is_thunk']:
         raise Error('fresh_function_unsupported','Fresh decompilation requires a non-thunk function in this image',3)
     deps = engine.dependencies(args.ghidra,args.java_home,full=True)
-    result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'])
+    result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'],hints=hints)
     fresh = result['functions'][0]
     facet = fresh['coverage']['pseudocode']
     complete = facet['status'] == 'complete' and bool(fresh['pseudocode'])
@@ -265,6 +275,9 @@ def fresh_decompile(args, project, image, function, aid):
         'origin': {'mode': 'fresh_readonly', 'job_id': job['job_id'],
                    'analysis_profile': job['analysis_profile'], 'bridge_version': result['bridge_version']},
     }
+    if hints is not None:
+        data['origin'].update(type_hint_view_id=job['type_hint_view_id'],
+                              applied_type_hints=result['applied_type_hints'])
     diagnostics = [fresh['decompile_error']] if fresh.get('decompile_error') else []
     return envelope('decompile',redact(data),aid,'complete' if complete else 'partial',
                     coverage('fresh selected function pseudocode',int(bool(fresh['pseudocode'])),1,
@@ -278,6 +291,11 @@ def revise_annotation(args, project, command):
             raise Error('annotation_value','Supply a user label or --clear',2)
         kind = 'name'
         value = None if args.clear else annotations.valid_text(args.label,'label',256)
+    elif args.command == 'type':
+        if not args.accept:
+            raise Error('type_hint_acceptance','Pass --accept to change a user-supplied type hint',2)
+        kind = 'return_type'
+        value = annotations.return_type(args.return_type) if args.action == 'set' else None
     else:
         kind = 'comment'
         value = annotations.valid_text(args.text,'comment',4096,multiline=True) if args.action == 'set' else None
@@ -286,11 +304,26 @@ def revise_annotation(args, project, command):
         image = project.select(args.image,args.arch)
         snapshot,_ = project.snapshot(image)
         _,rows = annotations.read(project,image['image_id'])
-        function = select_function(annotations.with_labels(snapshot['functions'],rows),args)
+        try:
+            function = select_function(annotations.with_labels(snapshot['functions'],rows),args)
+            entry = function['engine_entry']
+        except Error as error:
+            if kind != 'return_type' or value is not None or not args.address or error.code != 'function_selector':
+                raise
+            entry = hex(int(args.address,16))
+            if not any(row['kind']=='return_type' and row['engine_entry']==entry for row in rows):
+                raise
+            function = None
+        if kind == 'return_type' and value is not None:
+            if function['entry_va'] is None or function['is_external'] or function['is_thunk']:
+                raise Error('type_hint_function','Return hints require a non-thunk function in the image',3)
+            entries = {row['engine_entry'] for row in rows if row['kind']=='return_type'}
+            if len(entries)>=annotations.MAX_TYPE_HINTS and function['engine_entry'] not in entries:
+                raise Error('type_hint_limit','Image return-type hint limit reached',7)
         prior = rows if getattr(args,'action',None) == 'remove' else ()
         instruction = annotations.instruction_at(function,getattr(args,'instruction',None),prior=prior)
         row,changed = annotations.revise(project,image['image_id'],snapshot['analysis_id'],
-                                         function['engine_entry'],instruction,kind,value,author)
+                                         entry,instruction,kind,value,author)
     return envelope(command,{'revision':row,'changed':changed},snapshot['analysis_id'])
 
 
@@ -427,12 +460,15 @@ def swift_collection(args, project, image):
 def execute(a):
     limits(a)
     fresh = a.command == 'decompile' and a.fresh
+    with_hints = a.command == 'decompile' and a.with_type_hints
+    if with_hints and not fresh:
+        raise Error('type_hints_require_fresh','Type-hinted decompilation requires --fresh',3)
     if fresh and a.all:
         raise Error('fresh_selection','--fresh requires one function selector',2)
     term = search.pattern(a.query) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
-        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.3.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
+        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.4.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='doctor':
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
         deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
@@ -466,7 +502,7 @@ def execute(a):
         p=Project.create(a.path)
         return envelope(command,{'project_id':p.project_id,'schema_version':'1.0'})
     p=Project(a.project)
-    if a.command == 'rename' or (a.command == 'comment' and a.action != 'list'):
+    if a.command == 'rename' or (a.command in ('comment','type') and a.action != 'list'):
         return revise_annotation(a,p,command)
     if fresh or a.command in ('import','analyze'):
         check_engine_access(a,p)
@@ -552,15 +588,17 @@ def execute(a):
     else:
         revision, annotations_rows = annotations.read(p,image['image_id'],history=a.command=='annotations')
     functions = annotations.with_labels(functions,annotations_rows)
-    if a.command in ('comment','annotations'):
+    if a.command in ('comment','type','annotations'):
         function = select_function(functions,a) if any((a.address,a.function_id,a.name)) else None
         entry = function['engine_entry'] if function else None
+        kind = {'comment':'comment','type':'return_type'}.get(a.command)
         rows = [row for row in annotations_rows
                 if (entry is None or row['engine_entry'] == entry)
-                and (a.command == 'annotations' or row['kind'] == 'comment')]
+                and (kind is None or row['kind'] == kind)]
         rows,cov = page(rows,a,aid,p.project_id,{'annotation_revision':revision,'entry':entry,'command':command},
                         order='annotation-revision/v1')
-        cov['scope'] = 'image annotation revisions' if a.command == 'annotations' else 'current image comments'
+        cov['scope'] = {'annotations':'image annotation revisions','comment':'current image comments',
+                        'type':'accepted image return-type hints'}[a.command]
         return envelope(command,rows,aid,cov=cov)
     if a.command == 'search':
         view = dict(snapshot,functions=functions)
@@ -595,7 +633,8 @@ def execute(a):
         return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if partial else 'complete',cov)
     f=select_function(functions,a)
     if fresh:
-        return fresh_decompile(a,p,image,f,aid)
+        hints=annotations.type_hints(annotations_rows,functions) if with_hints else None
+        return fresh_decompile(a,p,image,f,aid,hints)
     if a.command=='calls':
         data,gaps=calls.graph(dict(snapshot,functions=functions),f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])

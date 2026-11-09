@@ -802,6 +802,26 @@ class CliTests(TemporaryCase):
         cli.execute(self.args('rename', '--clear', '--function-id', 'function-2'))
         self.error('stale_cursor', cli.execute, self.args('annotations', 'history', '--cursor', cursor))
 
+    def test_type_hints_require_acceptance_and_cannot_reuse_cached_code(self):
+        selector = ('--function-id','function-2')
+        self.error('type_hint_acceptance',cli.execute,
+                   self.args('type','set',*selector,'--return-type','uint64_t'))
+        valid = cli.execute(self.args('type','set',*selector,'--return-type','uint64_t','--accept'))
+        revision = valid['data']['revision']
+        self.assertEqual(revision['kind'],'return_type')
+        self.error('type_hint_type',cli.execute,
+                   self.args('type','set',*selector,'--return-type','struct Guess','--accept'))
+        self.assertEqual(cli.execute(self.args('type','list'))['data'],[revision])
+        self.error('type_hints_require_fresh',cli.execute,
+                   self.args('decompile',*selector,'--with-type-hints'))
+        self.assertEqual(cli.execute(self.args('decompile',*selector))['data']['pseudocode'],
+                         self.snapshot['functions'][2]['pseudocode'])
+        bounded = dict(self.snapshot,functions=self.snapshot['functions'][:2])
+        with mock.patch.object(storage.Project,'snapshot',return_value=(bounded,{})):
+            cli.execute(self.args('type','clear','--address','0x100000020','--accept'))
+        self.assertEqual(cli.execute(self.args('type','list'))['data'],[])
+        self.assertEqual(self.workspace.snapshot(self.workspace.select())[0],self.snapshot)
+
     def test_cached_metadata_filters_keep_address_space_and_coverage(self):
         snapshot = copy.deepcopy(self.snapshot)
         snapshot['engine']['imports'] = [

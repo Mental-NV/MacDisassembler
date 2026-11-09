@@ -58,8 +58,9 @@ collections exceed documented bounds despite successful pseudocode output.
   unresolved targets.
 - [x] Store user labels and function/instruction comments with reversible
   revisions, search and separate opt-in export.
-- [ ] Apply explicitly accepted type hints with separate provenance and
-  affected-cache handling.
+- [x] Apply explicitly accepted scalar return hints in fresh Ghidra queries.
+  The owned arm64/x86_64 tests verified separate provenance and unchanged
+  unassisted snapshots. Parameter and compound hints remain open.
 - [x] Inventory physical bundle images and resources with hashes and
   resumable pages.
 - [x] Import explicit embedded images and resolve bounded in-bundle framework

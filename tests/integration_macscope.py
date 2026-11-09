@@ -96,6 +96,17 @@ try:
             assert '-readOnly' in job['argv'] and '-noanalysis' in job['argv']
             assert engine.tree_digest(program) == program_digest
             assert project.snapshot(project.select()) == (saved, record)
+            hint = cli('type','set',*opts,'--return-type','uint64_t','--accept','--json')['data']['revision']
+            hinted = cli('decompile','--fresh','--with-type-hints',*opts,
+                         '--experimental-trusted-input','--json',expected=(0,6))['data']
+            applied, = hinted['origin']['applied_type_hints']
+            assert applied['revision'] == hint['revision'] and applied['return_type'] == 'uint64_t'
+            assert applied['resolved_type'] != applied['previous_type']
+            assert hinted['pseudocode'] and hinted['pseudocode'] != dec['data']['pseudocode']
+            assert cli('decompile',*opts,'--json')['data']['pseudocode'] == dec['data']['pseudocode']
+            cli('type','clear',*opts,'--accept','--json')
+            assert engine.tree_digest(program) == program_digest
+            assert project.snapshot(project.select()) == (saved, record)
         cli('decompile','--project',p,'--all','--limit','1000','--json',expected=(0,6))
         cli('xrefs',*opts,'--json',expected=(0,6))
         cli('cfg',*opts,'--json',expected=(0,6));cli('cfg',*opts,'--format','dot',dot=True,expected=(0,6))

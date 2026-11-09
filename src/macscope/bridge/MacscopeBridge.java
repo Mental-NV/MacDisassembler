@@ -1,11 +1,13 @@
 // Narrow, bounded exporter of a real Ghidra Program. Ghidra 12.2 public APIs.
-// analyzeHeadless ... -postScript MacscopeBridge.java OUTPUT MODE MAXFUNCS TIMEOUT [QUERY_ENTRY]
+// analyzeHeadless ... -postScript MacscopeBridge.java OUTPUT MODE MAXFUNCS TIMEOUT [QUERY_ENTRY [TYPE_HINTS]]
 // MODE: import (no function work), analyze (post-analysis), query (read-only).
 // The runner owns import/process/readOnly/noanalysis flags and project locking.
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -18,6 +20,7 @@ import java.util.Map;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -36,6 +39,7 @@ import ghidra.app.decompiler.PrettyPrinter;
 import ghidra.app.util.headless.HeadlessScript;
 import ghidra.framework.options.Options;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressFormatException;
 import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressRangeIterator;
@@ -44,6 +48,10 @@ import ghidra.program.model.block.CodeBlock;
 import ghidra.program.model.block.CodeBlockIterator;
 import ghidra.program.model.block.CodeBlockReference;
 import ghidra.program.model.block.CodeBlockReferenceIterator;
+import ghidra.program.model.data.AbstractIntegerDataType;
+import ghidra.program.model.data.BooleanDataType;
+import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.DataIterator;
 import ghidra.program.model.listing.Function;
@@ -57,6 +65,7 @@ import ghidra.program.model.symbol.ExternalLocation;
 import ghidra.program.model.symbol.IllegalCharCppTransformer;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceIterator;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolIterator;
 import ghidra.program.model.symbol.SymbolTable;
@@ -64,7 +73,7 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.3.0";
+    static final String VERSION = "1.4.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final int MAX_INSTRUCTIONS = 2000, MAX_BLOCKS = 500, MAX_EDGES = 500;
@@ -90,8 +99,8 @@ public class MacscopeBridge extends HeadlessScript {
     @Override
     public void run() throws Exception {
         String[] args = getScriptArgs();
-        if (args.length != 4 && args.length != 5) {
-            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [QUERY_ENTRY]");
+        if (args.length < 4 || args.length > 6) {
+            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [QUERY_ENTRY [TYPE_HINTS]]");
         }
         mode = args[1];
         if (!mode.equals("import") && !mode.equals("analyze") && !mode.equals("query")) {
@@ -99,7 +108,8 @@ public class MacscopeBridge extends HeadlessScript {
         }
         int maxFunctions = boundedInt(args[2], 1, 10000, "MAXFUNCS");
         int timeout = boundedInt(args[3], 1, 300, "FUNCTION_TIMEOUT");
-        String entry = args.length == 5 ? args[4] : null;
+        String entry = args.length >= 5 ? args[4] : null;
+        Path typeHints = args.length == 6 ? Path.of(args[5]) : null;
         if (entry != null && (!mode.equals("query") || maxFunctions != 1 || !entry.matches("0x[0-9a-f]{1,16}"))) {
             throw new IllegalArgumentException("Selected decompilation requires query mode and one RAM entry");
         }
@@ -153,7 +163,10 @@ public class MacscopeBridge extends HeadlessScript {
                 exports();
                 strings();
             }
-            if (!fatal && !mode.equals("import")) functions(maxFunctions, timeout, entry);
+            if (!fatal && !mode.equals("import")) {
+                if (typeHints == null) functions(maxFunctions, timeout, entry);
+                else hintedDecompile(timeout, entry, typeHints);
+            }
             else coverage.add("functions", facet(0, 0, false, null,
                 mode.equals("import") ? "not_requested" : "failed"));
         } catch (Exception e) {
@@ -412,9 +425,7 @@ public class MacscopeBridge extends HeadlessScript {
                 }
                 trunc |= it.hasNext() || external.hasNext();
             } else {
-                Address selectedAddress = currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(entry.substring(2));
-                Function f = currentProgram.getFunctionManager().getFunctionAt(selectedAddress);
-                if (f == null) throw new IllegalStateException("Selected entry is absent from saved Program");
+                Function f = functionAt(entry);
                 monitor.checkCancelled();
                 JsonObject item = new JsonObject(), facets = new JsonObject();
                 item.add("coverage", facets);
@@ -436,6 +447,60 @@ public class MacscopeBridge extends HeadlessScript {
         root.addProperty("function_count_attempted", visited);
         int total = entry == null ? currentProgram.getFunctionManager().getFunctionCount() : 1;
         coverage.add("functions", facet(out.size(), total, trunc, err, "complete"));
+    }
+
+    Function functionAt(String entry) throws AddressFormatException {
+        if (!entry.matches("0x[0-9a-f]{1,16}")) throw new IllegalArgumentException("Invalid RAM function entry");
+        Address location = currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(entry.substring(2));
+        Function function = currentProgram.getFunctionManager().getFunctionAt(location);
+        if (function == null) throw new IllegalStateException("Selected entry is absent from saved Program");
+        return function;
+    }
+
+    void hintedDecompile(int timeout, String entry, Path path) throws Exception {
+        byte[] content;
+        try (InputStream input = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
+            content = input.readNBytes(65537);
+        }
+        if (content.length > 65536) throw new IllegalArgumentException("Type hint request exceeds its bound");
+        JsonObject request = JsonParser.parseString(new String(content, StandardCharsets.UTF_8)).getAsJsonObject();
+        JsonArray hints = request.getAsJsonArray("hints");
+        if (!"macscope-return-hints/1".equals(request.get("schema").getAsString()) ||
+            hints.size() < 1 || hints.size() > 128) {
+            throw new IllegalArgumentException("Invalid type hint request");
+        }
+        int transaction = currentProgram.startTransaction("Macscope temporary return-type hints");
+        try {
+            JsonArray applied = new JsonArray();
+            for (JsonElement element : hints) {
+                monitor.checkCancelled();
+                JsonObject hint = element.getAsJsonObject();
+                Function function = functionAt(hint.get("entry_va").getAsString());
+                if (function.isExternal() || function.isThunk()) throw new IllegalArgumentException("Invalid type hint function");
+                String name = hint.get("return_type").getAsString();
+                String previous = function.getReturnType().getDisplayName();
+                function.setReturnType(returnType(name), SourceType.USER_DEFINED);
+                JsonObject row = hint.deepCopy();
+                put(row, "previous_type", previous);
+                put(row, "resolved_type", function.getReturnType().getDisplayName());
+                applied.add(row);
+            }
+            root.add("applied_type_hints", applied);
+            functions(1, timeout, entry);
+        } finally {
+            currentProgram.endTransaction(transaction, false);
+        }
+    }
+
+    DataType returnType(String name) {
+        if (name.equals("void")) return VoidDataType.dataType;
+        if (name.equals("bool")) return BooleanDataType.dataType;
+        if (!name.matches("u?int(8|16|32|64)_t")) throw new IllegalArgumentException("Unsupported return type");
+        boolean unsigned = name.startsWith("u");
+        int bytes = Integer.parseInt(name.substring(unsigned ? 4 : 3, name.length()-2))/8;
+        return unsigned
+            ? AbstractIntegerDataType.getUnsignedDataType(bytes, currentProgram.getDataTypeManager())
+            : AbstractIntegerDataType.getSignedDataType(bytes, currentProgram.getDataTypeManager());
     }
 
     JsonObject function(Function f, BasicBlockModel model, DecompInterface decomp, int timeout) {

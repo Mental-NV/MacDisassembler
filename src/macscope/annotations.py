@@ -7,6 +7,8 @@ from .errors import Error
 
 
 MAX_REVISIONS = 10000
+MAX_TYPE_HINTS = 128
+RETURN_TYPES = {"void","bool",*(f"{sign}int{width}_t" for sign in ("","u") for width in (8,16,32,64))}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS annotation_revisions (
@@ -127,3 +129,27 @@ def instruction_at(function, requested, *, prior=()):
            and row["kind"] == "comment" for row in prior):
         return address
     raise Error("annotation_address", "Address is absent from the function's saved instructions", 2)
+
+
+def return_type(value):
+    if value not in RETURN_TYPES:
+        raise Error("type_hint_type", "Use void, bool, or a fixed-width signed or unsigned integer type", 2)
+    return value
+
+
+def type_hints(rows, functions):
+    available = {f["engine_entry"] for f in functions
+                 if f["entry_va"] is not None and not f["is_external"] and not f["is_thunk"]}
+    hints = []
+    for row in rows:
+        if row["kind"] != "return_type":
+            continue
+        entry = row["engine_entry"]
+        if entry not in available:
+            raise Error("type_hint_stale", "An accepted type hint has no matching function in this analysis", 3)
+        hints.append({"entry_va":entry,"return_type":return_type(row["value"]),"revision":row["revision"]})
+    if not hints:
+        raise Error("type_hints_missing", "No accepted return-type hints for the selected image", 3)
+    if len(hints)>MAX_TYPE_HINTS:
+        raise Error("type_hint_limit", "Image return-type hint limit reached", 7)
+    return sorted(hints,key=lambda hint:int(hint["entry_va"],16))

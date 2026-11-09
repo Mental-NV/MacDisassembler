@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
 from .macho import read_regular
@@ -194,7 +195,7 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
         write_json(manifest_path, manifest, force=True)
 
 
-def run(project, image, mode, args, deps, *, entry=None):
+def run(project, image, mode, args, deps, *, entry=None, hints=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -207,6 +208,8 @@ def run(project, image, mode, args, deps, *, entry=None):
         raise Error('startup_budget_unsupported', 'Separate startup deadlines are not yet supported; use --timeout for a total wall deadline', 3)
     if entry is not None and (mode != 'query' or not re.fullmatch(r'0x[0-9a-f]{1,16}', entry)):
         raise Error('query_entry', 'Selected query requires an exact saved RAM function entry', 2)
+    if hints is not None and (entry is None or not 1<=len(hints)<=MAX_TYPE_HINTS):
+        raise Error('type_hint_scope', 'Accepted hints require a bounded selected-function query', 2)
     requested_profile = analysis_profile(getattr(args, 'profile', 'baseline')) if mode == 'analyze' else None
     if mode == 'query':
         saved_snapshot, active = project.snapshot(image)
@@ -252,6 +255,10 @@ def run(project, image, mode, args, deps, *, entry=None):
              str(outfile), mode, str(max_functions), str(args.function_timeout)]
     if entry is not None:
         argv.append(entry)
+    if hints is not None:
+        request = job/'type-hints.json'
+        write_json(request, {'schema':'macscope-return-hints/1','hints':hints})
+        argv.append(str(request))
     argv += ['-max-cpu', '1', '-analysisTimeoutPerFile', str(args.timeout), '-log',
              str(job/'engine.log'), '-scriptlog', str(job/'script.log')]
     worker_home = project.path/'home'
@@ -263,6 +270,9 @@ def run(project, image, mode, args, deps, *, entry=None):
     manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':{'timeout_seconds':args.timeout,'function_timeout_seconds':args.function_timeout,'max_functions':max_functions,'jobs':1,'java_heap_mib':args.heap_mib,'process_memory_limit':None,'sampled_job_storage_bytes':512*1024*1024,'storage_is_hard_quota':False}, 'environment':env, 'sandbox_sha256':digest(sandbox)}
     if entry is not None:
         manifest.update(selected_entry=entry, source_analysis_id=image['active_analysis'])
+    if hints is not None:
+        manifest.update(type_hint_view_id=identity({'source_analysis_id':image['active_analysis'],'hints':hints}),
+                        type_hints_sha256=digest(request),type_hints=hints)
     run_process(argv, cwd=job, env=env, timeout=args.timeout, log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
     try:
         if b'Skipping unsupported -loader-' in read_regular(job/'launcher.log',8*1024*1024):
@@ -295,6 +305,15 @@ def run(project, image, mode, args, deps, *, entry=None):
             if (result.get('selected_entry') != entry or len(rows) != 1
                     or rows[0].get('entry_va') != entry):
                 raise Error('query_result_mismatch', 'Worker did not return the exact selected function', 10)
+        applied = result.get('applied_type_hints', [])
+        if not isinstance(applied,list) or any(not isinstance(row,dict) for row in applied):
+            raise Error('type_hint_result_mismatch','Worker returned malformed type-hint provenance',10)
+        if hints is not None:
+            received = [{key:row.get(key) for key in ('entry_va','return_type','revision')} for row in applied]
+            if received != hints:
+                raise Error('type_hint_result_mismatch','Worker did not apply the exact accepted hints',10)
+        elif applied:
+            raise Error('type_hint_result_mismatch','Worker applied unrequested type hints',10)
         if mode == 'import':
             destination = project.path/'engine'/image['image_id']
             if destination.exists():

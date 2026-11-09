@@ -141,6 +141,26 @@ as a separate field. History retains edits and removals and supports
 `--limit` and `--cursor`. Search and annotation cursors that depend on labels
 or comments are tied to the annotation revision.
 
+`type set --return-type TYPE --accept` records a user-supplied return type
+for a selected function. Supported types are `void`, `bool`, and the signed
+and unsigned fixed-width integer typedefs from 8 to 64 bits. Invalid types
+leave existing revisions intact. Use `type list` to inspect current hints
+and `type clear --accept` to remove one.
+
+```sh
+macscope type set --name _calc_add --return-type uint64_t --accept \
+  --project workspaces/calculator --json
+macscope decompile --name _calc_add --fresh --with-type-hints \
+  --project workspaces/calculator --experimental-trusted-input --json
+```
+
+The explicit hint view applies accepted types to the private Program copy
+inside a rolled-back Ghidra transaction. It uses a distinct identity and
+reports applied revisions and resolved types. The hint view always starts a
+fresh worker and leaves the unassisted cached analysis available separately.
+The owned arm64 and x86_64 tests verified changed hinted output and unchanged
+original Programs and snapshots. This first hint workflow covers return types.
+
 ## Input preflight
 
 `bundle list APP` inventories physical files by relative path. `--kind images`
