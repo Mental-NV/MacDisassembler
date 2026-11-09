@@ -6,20 +6,11 @@
 #include <string.h>
 
 #include "calc_core.h"
-
-typedef uint32_t undefined4;
-typedef unsigned long undefined8;
-typedef unsigned int uint;
-typedef unsigned long ulong;
+#include "aggregate_compat.h"
 
 static void ___memset_chk(long address, int value, size_t size, size_t capacity) {
     if (size > capacity) abort();
     memset((void *)(uintptr_t)address, value, size);
-}
-
-static int SBORROW8(long left, long right) {
-    long ignored;
-    return __builtin_sub_overflow(left, right, &ignored);
 }
 
 #include "candidate.c"

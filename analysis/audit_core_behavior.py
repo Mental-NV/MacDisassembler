@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 
+from aggregate_compat import MEMORY_STORES, POLICY
 from evaluate import CORE_ROUTINES
 from prototype_experiment import ROOT, fixture_input
 from recovered_compare import HARNESS, LOCALS, ROUTINES, SOURCE_FILES, evaluate, run_candidate
@@ -27,6 +28,7 @@ calc_apply_op calc_dispatch_table calc_parse_digits calc_digit_append calc_sign_
 """.split())
 HISTORY_HARNESS = ROOT / "analysis/compare_history_harness.c"
 STATE_HARNESS = ROOT / "analysis/compare_state_harness.c"
+STATE_COMPAT = ROOT / "analysis/aggregate_compat.h"
 HISTORY_PARAMETERS = (
     (r"void", (r"long|void\s*\*",)),
     (r"void", (r"long", r"undefined8", r"undefined1", r"undefined8", r"undefined8")),
@@ -148,7 +150,7 @@ def compare_state(directory, routine, record, records, compiler, sdk, harness, r
                 if not bounded_declaration(body, init_name, "void", argument, ZERO_ROUTINES):
                     return {"status": "unsupported_recovered_dependency"}
                 dependencies[init_name] = body
-    allowed = ZERO_ROUTINES | {"SBORROW8"} | dependencies.keys()
+    allowed = ZERO_ROUTINES | {"SBORROW8"} | MEMORY_STORES | dependencies.keys()
     declaration = bounded_declaration(text, name, "void", argument, allowed)
     if declaration is None:
         return {"status": "unsupported_state_declaration_or_body"}
@@ -281,6 +283,7 @@ def run(args):
         raise ValueError("Choose a new output directory under canonical /tmp")
     references = {name: read_bytes(ROOT / name) for name in SOURCE_FILES}
     source_hashes = {name: sha(data) for name, data in references.items()}
+    references[STATE_COMPAT.name] = read_bytes(STATE_COMPAT)
     scalar_harness, history_harness = read_bytes(HARNESS), read_bytes(HISTORY_HARNESS)
     state_harness = read_bytes(STATE_HARNESS)
     compiler, decoder = xcrun("--find", "clang"), xcrun("--find", "llvm-objdump")
@@ -292,6 +295,7 @@ def run(args):
         "matrix_report_sha256": sha(read_bytes(matrix / "report.json")), "source_sha256": source_hashes,
         "scalar_harness_sha256": sha(scalar_harness), "history_harness_sha256": sha(history_harness),
         "state_harness_sha256": sha(state_harness),
+        "state_compat_sha256": sha(references[STATE_COMPAT.name]), "state_compat_policy": POLICY,
         "compiler_sha256": engine.digest(Path(compiler)), "decoder_sha256": engine.digest(Path(decoder)),
     }
     try:

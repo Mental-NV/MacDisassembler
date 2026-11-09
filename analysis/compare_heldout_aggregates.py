@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 
-from aggregate_compat import POLICY, Unsupported, lower_closure
+from aggregate_compat import POLICY, Unsupported, lower_closure, source_parts
 from audit_core_behavior import complete
 from compare_heldout_switch import PROFILES, truth_for
 from prototype_experiment import ROOT
@@ -21,18 +21,23 @@ from macscope.macho import thin
 ROUTINES = ("heldout_packet", "heldout_checked")
 BUILDS = tuple(product(("arm64", "x86_64"), ("O0", "O2")))
 STATES = ("sym", "stripped")
-SOURCES = {"aggregate": "heldout_aggregate.c", "arithmetic": "heldout_arithmetic.c"}
-HEADER = "heldout_aggregate.h"
-HARNESS = "compare_heldout_aggregate_harness.c"
+STORE_SOURCE = "heldout_store.c"
+SOURCES = {"aggregate": "heldout_aggregate.c", "arithmetic": "heldout_arithmetic.c", "stores": STORE_SOURCE}
 COMPAT = "aggregate_compat.h"
-FROZEN = (HEADER, HARNESS, COMPAT, "aggregate_compat.py", "compare_heldout_aggregates.py",
+FROZEN = (COMPAT, "aggregate_compat.py", "compare_heldout_aggregates.py",
           "compare_heldout_switch.py", "recovered_compare.py")
+
+
+def fixture_contract(source):
+    if source == STORE_SOURCE:
+        return "heldout_store.h", "compare_heldout_store_harness.c"
+    return "heldout_aggregate.h", "compare_heldout_aggregate_harness.c"
 
 
 def freeze(source):
     revision = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
     files = {}
-    for name in (source, *FROZEN):
+    for name in (source, *fixture_contract(source), *FROZEN):
         committed = subprocess.check_output(["git", "-C", ROOT, "show", f"{revision}:analysis/{name}"])
         if committed != read_bytes(ROOT / "analysis" / name):
             raise ValueError("The held-out contract must match a committed revision: " + name)
@@ -41,7 +46,8 @@ def freeze(source):
 
 
 def build(evaluator, inputs, files, source, compiler, sdk):
-    for name in (source, HEADER):
+    header, _ = fixture_contract(source)
+    for name in (source, header):
         (evaluator / name).write_bytes(files[name])
     digests = {}
     for arch, opt in BUILDS:
@@ -69,7 +75,8 @@ def reuse_fixture(origin, evaluator, inputs, files, source):
     if (previous.get("input_plan_sha256") or previous["policy"] != POLICY or previous["source"] != source
             or any(previous["files_sha256"].get(name) != digest for name, digest in contract_files.items())):
         raise ValueError("Prior fixture was frozen with a different source or evaluator")
-    for name in (source, HEADER):
+    header, _ = fixture_contract(source)
+    for name in (source, header):
         contents = read_bytes(origin / "evaluator" / name)
         if contents != files[name]:
             raise ValueError("Prior evaluator source differs from the committed fixture")
@@ -141,7 +148,12 @@ def evaluate(directory, routine, record, definitions, compiler, sdk, files, sour
     directory.mkdir()
     (directory / "candidate.c").write_text(lowered)
     flags = ["-fsanitize=address", f"-DRECOVERED={record['name']}", f"-DCHECKED={int(routine == ROUTINES[1])}"]
-    result = run_candidate(directory, compiler, sdk, files[HARNESS], {n: files[n] for n in (source, HEADER, COMPAT)},
+    if source == STORE_SOURCE:
+        _, parameters, _, _ = source_parts(record["pseudocode"], record["name"])
+        pointer = "*" in parameters.split(",", 1)[0]
+        flags += ["-fno-strict-aliasing", f"-DPOINTER_INPUT={int(pointer)}"]
+    header, harness = fixture_contract(source)
+    result = run_candidate(directory, compiler, sdk, files[harness], {n: files[n] for n in (source, header, COMPAT)},
                            flags, reference_source=source)
     result.update(lowered_sha256=sha(lowered.encode()), captured_definitions=dependencies)
     counts = result.get("results")

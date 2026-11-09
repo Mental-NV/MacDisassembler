@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef uint8_t byte;
 typedef uint8_t undefined1;
@@ -73,5 +74,19 @@ static bool SBORROW8(int64_t left, int64_t right) {
 static __int128 SEXT816(int64_t value) { return value; }
 static gh_wide ZEXT816(uint64_t value) { return value; }
 static uint64_t SUB168(gh_wide value, unsigned offset) { return (uint64_t)(value >> (offset*8)); }
+
+_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "Store evaluator requires little-endian memory");
+
+static void STORE_LE16(void *address, uint16_t value) {
+    memcpy(address, &value, sizeof(value));
+}
+
+static void STORE_LE32(void *address, uint32_t value) {
+    memcpy(address, &value, sizeof(value));
+}
+
+static void STORE_LE64(void *address, uint64_t value) {
+    memcpy(address, &value, sizeof(value));
+}
 
 #endif
