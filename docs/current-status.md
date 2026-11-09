@@ -63,8 +63,10 @@ collections exceed documented bounds despite successful pseudocode output.
   copies using the saved binary-derived boundary evidence. The
   [control comparison](phase1-findings.md#temporary-split-body-recovery)
   matched all 196 other functions per profile.
-- [ ] Validate split-body recovery against a held-out variation and decide
-  how the production CLI should apply it.
+- [x] Validate split-body recovery on a [held-out arm64 fixture](heldout-fallthrough.md).
+  Both profiles recovered the eligible 11-instruction body and refused a
+  second join because of an outside branch into the competing body.
+- [ ] Expose and validate guarded split-body recovery in the production CLI.
 - [ ] Measure controlled data-reference completeness.
 - [x] Match three normalized exports per case and profile on the owned
   patched app and tool matrix. The [determinism run](parameter-inference.md#three-run-determinism)

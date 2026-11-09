@@ -2,6 +2,7 @@
 //@category Macscope research
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
@@ -12,6 +13,9 @@ import ghidra.program.model.symbol.SourceType;
 public class JoinUnconfirmedFallthrough extends GhidraScript {
     @Override
     public void run() throws Exception {
+        if (!isRunningHeadless()) {
+            throw new IllegalStateException("Use a disposable read-only headless Program copy");
+        }
         String[] args = getScriptArgs();
         if (args.length != 3) {
             throw new IllegalArgumentException("Expected owner entry, competing entry and next linker start");
@@ -35,11 +39,16 @@ public class JoinUnconfirmedFallthrough extends GhidraScript {
             body.getNumAddressRanges() != 1) {
             throw new IllegalStateException("Joined body crosses a linker extent or contains a gap");
         }
-        ReferenceIterator refs = currentProgram.getReferenceManager().getReferencesTo(competing);
-        while (refs.hasNext()) {
+        var references = currentProgram.getReferenceManager();
+        AddressIterator targets = references.getReferenceDestinationIterator(extra.getBody(), true);
+        while (targets.hasNext()) {
             monitor.checkCancelled();
-            if (!body.contains(refs.next().getFromAddress())) {
-                throw new IllegalStateException("A reference to the competing entry originates outside the joined body");
+            ReferenceIterator refs = references.getReferencesTo(targets.next());
+            while (refs.hasNext()) {
+                monitor.checkCancelled();
+                if (!body.contains(refs.next().getFromAddress())) {
+                    throw new IllegalStateException("A reference to the competing body originates outside the joined body");
+                }
             }
         }
         int transaction = currentProgram.startTransaction("Macscope temporary fallthrough experiment");
