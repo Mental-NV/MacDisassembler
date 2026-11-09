@@ -7,7 +7,7 @@ import stat
 
 from .errors import Error
 from .macho import read_regular
-from .storage import atomic
+from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity
 
 
 JOB_ID = re.compile(r"[0-9a-f]{32}")
@@ -20,6 +20,8 @@ DETAILS = ("analysis_profile", "limits", "sandbox_sha256", "selected_entry", "so
            "resumed_from")
 ANALYSIS_REQUEST = "macscope-analysis-request/1"
 IMPORT_REQUEST = "macscope-import-request/1"
+QUERY_REQUEST = "macscope-query-request/1"
+QUERY_RECEIPT = "macscope-query-receipt/1"
 PUBLISH = """
 CREATE TABLE IF NOT EXISTS analysis_publications (
     job_id TEXT PRIMARY KEY,
@@ -174,6 +176,76 @@ def analysis_request(project, image):
         "import_baseline_sha256": image["engine_baseline_sha256"],
         "previous_analysis_id": image["active_analysis"],
     }
+
+
+def query_request(project, image, function, source, revision, hints):
+    program_sha256 = source.get("analysis_program_sha256")
+    if not isinstance(program_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", program_sha256):
+        raise Error("analysis_program_integrity", "Saved analyzed Program identity is missing; rerun analyze")
+    return {
+        "schema": QUERY_REQUEST,
+        "project_id": project.project_id,
+        "image_id": image["image_id"],
+        "slice_sha256": image["sha256"],
+        "artifact_sha256": image["artifact_sha256"],
+        "source_analysis_id": image["active_analysis"],
+        "source_snapshot_sha256": source["snapshot_sha256"],
+        "source_program_sha256": program_sha256,
+        "function_id": function["function_id"],
+        "entry_va": function["entry_va"],
+        "annotation_revision": revision,
+        "type_hint_view_id": identity({"source_analysis_id": image["active_analysis"], "hints": hints})
+        if hints is not None else None,
+    }
+
+
+def query_receipt(project, job_id, request):
+    if not isinstance(job_id, str) or not JOB_ID.fullmatch(job_id) or not isinstance(request, dict):
+        raise Error("query_receipt", "Invalid recorded query result identity")
+    path = project.path / "jobs" / job_id / "query-result.json"
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        receipt = json.loads(read_regular(path, MAX_SNAPSHOT_BYTES))
+        result = receipt["result"]
+        origin = result["data"]["origin"]
+        producer_id = origin["job_id"]
+    except (ValueError, KeyError, TypeError, RecursionError) as error:
+        raise Error("query_receipt", "Invalid recorded query result") from error
+    if (receipt.get("schema") != QUERY_RECEIPT or receipt.get("request_sha256") != identity(request)
+            or receipt.get("result_sha256") != identity(result)
+            or not isinstance(producer_id, str) or not JOB_ID.fullmatch(producer_id)
+            or result["data"].get("image_id") != request.get("image_id")
+            or result["data"].get("function_id") != request.get("function_id")
+            or result["data"].get("entry_va") != request.get("entry_va")
+            or result.get("analysis_id") != request.get("source_analysis_id")):
+        raise Error("query_receipt", "Recorded query result differs from its request")
+    _, producer = get(project, producer_id)
+    if (producer.get("mode") != "query" or producer["status"] != "complete"
+            or producer.get("query_request") != request
+            or (producer_id != job_id and producer.get("resumed_from") != job_id)):
+        raise Error("query_receipt", "Recorded query result differs from its producing job")
+    return result
+
+
+def publish_query(project, job_id, request, result):
+    path = project.path / "jobs" / job_id / "query-result.json"
+    receipt = {"schema": QUERY_RECEIPT, "request_sha256": identity(request),
+               "result_sha256": identity(result), "result": result}
+    payload = canonical(receipt) + b"\n"
+    if len(payload) > MAX_SNAPSHOT_BYTES:
+        raise Error("query_result_limit", "Fresh query result exceeds its read limit", 7,
+                    partial={"job_id": job_id})
+    try:
+        atomic(path, payload, mode=0o400)
+    except Error as error:
+        if error.code != "output_exists":
+            raise
+        existing = query_receipt(project, job_id, request)
+        if existing is None:
+            raise
+        return existing
+    return result
 
 
 def publication(project, job_id, mode="analyze"):

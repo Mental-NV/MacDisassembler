@@ -129,8 +129,11 @@ collections exceed documented bounds despite successful pseudocode output.
   removal of the original input and preserved the committed arm64 Program.
   Journal recovery verifies and publishes a saved Program across interruption
   before or after its directory move.
-- [ ] Extend recorded restarts to fresh query jobs and verify worker exit
-  after supervisor loss before automatic restart.
+- [x] Restart fresh decompilation with the original saved Program and
+  accepted hint revisions. A live cancelled query resumed after a newer
+  analysis, label and hint were committed. A repeat read the durable result
+  without launching another worker.
+- [ ] Verify worker exit after supervisor loss before automatic restart.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

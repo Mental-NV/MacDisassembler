@@ -84,7 +84,8 @@ def synthetic_snapshot(project, aid='analysis-one', *, slice_bytes=None):
                 'limitations': ['Synthetic test fixture only.']}
     payload = storage.canonical(snapshot) + b'\n'
     storage.atomic(project.path / 'snapshots' / (aid + '.json'), payload, mode=0o400)
-    record = {'snapshot_sha256': hashlib.sha256(payload).hexdigest(), 'job_id': 'synthetic-job'}
+    record = {'snapshot_sha256': hashlib.sha256(payload).hexdigest(), 'job_id': 'synthetic-job',
+              'analysis_program_sha256': '0' * 64}
     with project.db(False) as db:
         db.execute('INSERT OR REPLACE INTO images(id,arch,metadata,imported,active_analysis) VALUES(?,?,?,1,?)',
                    (image['image_id'], image['arch'], json.dumps(image), aid))
@@ -745,7 +746,8 @@ class CliTests(TemporaryCase):
                   'decompile_status': 'complete', 'pseudocode_truncated': False,
                   'coverage': {'pseudocode': {'status': 'complete'}}}
         raw = {'functions': [record], 'bridge_version': '1.2.0'}
-        job = {'job_id': 'private-job', 'analysis_profile': engine.analysis_profile()}
+        job = {'job_id': 'a' * 32, 'analysis_profile': engine.analysis_profile()}
+        (self.workspace.path / 'jobs' / job['job_id']).mkdir()
         with mock.patch.object(engine, 'dependencies', return_value={}), \
              mock.patch.object(engine, 'run', return_value=(raw, job)) as run:
             result = cli.execute(self.args('decompile', '--fresh', '--name', 'unique',

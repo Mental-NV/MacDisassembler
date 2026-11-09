@@ -274,11 +274,15 @@ def check_engine_access(args, project):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
 
 
-def fresh_decompile(args, project, image, function, aid, hints=None):
+def fresh_decompile(args, project, image, function, source, revision, hints=None, *,
+                    deps=None, resumed_from=None):
     if function['entry_va'] is None or function['is_external'] or function['is_thunk']:
         raise Error('fresh_function_unsupported','Fresh decompilation requires a non-thunk function in this image',3)
-    deps = engine.dependencies(args.ghidra,args.java_home,full=True)
-    result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'],hints=hints)
+    if deps is None:
+        deps = engine.dependencies(args.ghidra,args.java_home,full=True)
+    request = jobs.query_request(project,image,function,source,revision,hints)
+    result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'],hints=hints,
+                             query_request=request,resumed_from=resumed_from)
     fresh = flow_evidence.review(result['functions'][0], blocks=function.get('blocks', ()))
     facet = fresh['coverage']['pseudocode']
     complete = facet['status'] == 'complete' and bool(fresh['pseudocode'])
@@ -300,10 +304,11 @@ def fresh_decompile(args, project, image, function, aid, hints=None):
             data[field] = fresh[field]
     diagnostics = [fresh['decompile_error']] if fresh.get('decompile_error') else []
     reason = 'unresolved_control_flow' if 'control_flow_gaps' in fresh else 'pseudocode_incomplete'
-    return envelope('decompile',redact(data),aid,'complete' if complete else 'partial',
-                    coverage('fresh selected function pseudocode',int(bool(fresh['pseudocode'])),1,
-                             not complete,reason=None if complete else reason),
-                    redact(diagnostics))
+    response = envelope('decompile',redact(data),image['active_analysis'],'complete' if complete else 'partial',
+                        coverage('fresh selected function pseudocode',int(bool(fresh['pseudocode'])),1,
+                                 not complete,reason=None if complete else reason),
+                        redact(diagnostics))
+    return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
 
 
 def revise_annotation(args, project, command):
@@ -366,7 +371,13 @@ def job_command(args, project, command):
         path, record = jobs.get(project,args.job_id)
         data = jobs.request_cancel(path,record) if args.action == 'cancel' else jobs.view(path,record,detail=True)
         if args.action == 'show':
-            receipt = jobs.publication(project,args.job_id,record.get('mode'))
+            mode = record.get('mode')
+            if mode == 'query' and record.get('query_request'):
+                result = jobs.query_receipt(project,record.get('resumed_from',args.job_id),record['query_request'])
+                receipt = ({'job_id':result['data']['origin']['job_id'],'analysis_id':result['analysis_id']}
+                           if result else None)
+            else:
+                receipt = jobs.publication(project,args.job_id,mode)
             if receipt:
                 data['publication'] = receipt
         return envelope(command,redact(data))
@@ -437,20 +448,25 @@ def resume_job(args, project, command):
     with project.writer():
         path, record = jobs.get(project,args.job_id)
         mode = record.get('mode')
-        if mode not in ('analyze','import'):
+        schemas = {'analyze':('analysis_request',jobs.ANALYSIS_REQUEST),
+                   'import':('import_request',jobs.IMPORT_REQUEST),
+                   'query':('query_request',jobs.QUERY_REQUEST)}
+        if not isinstance(mode,str) or mode not in schemas:
             raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
-        request = record.get('analysis_request' if mode == 'analyze' else 'import_request')
-        schema = jobs.ANALYSIS_REQUEST if mode == 'analyze' else jobs.IMPORT_REQUEST
+        key,schema = schemas[mode]
+        request = record.get(key)
         if not isinstance(request,dict) or request.get('schema') != schema:
             raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
         if record['status'] in jobs.ACTIVE or jobs.leased(path):
             raise Error('job_resume_ownership','Cannot verify that the previous worker stopped',8)
         if mode == 'import':
             return resume_import(args,project,command,record,request)
+        if mode == 'query':
+            return resume_query(args,project,command,record,request)
         return resume_analysis(args,project,command,record,request)
 
 
-def replay_worker_request(args, project, record):
+def replay_worker_request(args, project, record, *, query_profile=None):
     mode, budgets, policy = record['mode'], record.get('limits'), record.get('analysis_profile')
     fields = {'timeout':'timeout_seconds','function_timeout':'function_timeout_seconds',
               'max_functions':'max_functions','heap_mib':'java_heap_mib'}
@@ -466,7 +482,8 @@ def replay_worker_request(args, project, record):
                                 **{arg:budgets[key] for arg,key in fields.items()})
     limits(replay)
     check_engine_access(replay,project)
-    if ((engine.analysis_profile(profile) if profile else None) != policy
+    expected_profile = engine.analysis_profile(profile) if profile else query_profile
+    if (expected_profile != policy
             or engine.worker_limits(replay,replay.max_functions) != budgets):
         raise Error('job_resume_policy','The recorded profile or worker limits differ from the supported policy',3)
     deps = engine.dependencies(args.ghidra,args.java_home,full=True)
@@ -474,6 +491,52 @@ def replay_worker_request(args, project, record):
             or hashlib.sha256(engine.profile(project,deps).encode()).hexdigest() != record.get('sandbox_sha256')):
         raise Error('job_resume_engine','Select the exact recorded engine, JDK and isolation policy to restart',4)
     return replay,deps
+
+
+def resume_query(args, project, command, record, request):
+    image_id, aid = request.get('image_id'), request.get('source_analysis_id')
+    function_id, entry = request.get('function_id'), request.get('entry_va')
+    revision = request.get('annotation_revision')
+    digests = (image_id, aid, function_id)
+    if (not all(isinstance(value,str) and re.fullmatch(r'[0-9a-f]{64}',value) for value in digests)
+            or not isinstance(entry,str) or not re.fullmatch(r'0x[0-9a-f]{1,16}',entry)
+            or type(revision) is not int or revision < 0):
+        raise Error('job_manifest','Invalid recorded fresh query identity')
+    if (request.get('project_id') != project.project_id or record.get('image_id') != image_id
+            or record.get('source_analysis_id') != aid or record.get('selected_entry') != entry):
+        raise Error('job_resume_inputs','The recorded fresh query belongs to different inputs',8)
+    if 'resumed_from' in record:
+        raise Error('job_resume_conflict','Resume the original fresh query job',8,
+                    partial={'job_id':record['resumed_from']})
+    image = dict(project.select(image_id),active_analysis=aid)
+    snapshot,source = project.snapshot(image)
+    snapshot = flow_evidence.snapshot_view(snapshot)
+    observed_revision,rows = annotations.read(project,image_id,at_revision=revision)
+    if observed_revision != revision:
+        raise Error('job_resume_inputs','The recorded annotation revision is unavailable',8)
+    functions = annotations.with_labels(snapshot['functions'],rows)
+    function = select_function(functions,argparse.Namespace(address=None,function_id=function_id))
+    hints = annotations.type_hints(rows,functions) if request.get('type_hint_view_id') is not None else None
+    if (jobs.query_request(project,image,function,source,revision,hints) != request
+            or record.get('type_hint_view_id') != request['type_hint_view_id']
+            or record.get('type_hints') != hints):
+        raise Error('job_resume_inputs','The fresh query request differs from its saved analysis or hints',8)
+    response = jobs.query_receipt(project,args.job_id,request)
+    reused = response is not None
+    if response is None:
+        policy = engine.profile_for_snapshot(snapshot)
+        replay,deps = replay_worker_request(args,project,record,query_profile=policy)
+        if replay.max_functions != 1:
+            raise Error('job_manifest','A recorded selected-function query requires max_functions=1')
+        metadata.verified_slice(project,image)
+        artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
+        if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
+            raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
+        response = fresh_decompile(replay,project,image,function,source,revision,hints,
+                                   deps=deps,resumed_from=args.job_id)
+    data = response['data']
+    reused = reused or data['origin']['job_id'] == args.job_id
+    return dict(response,command=command,data=dict(data,resumed_from=args.job_id,reused_restart=reused))
 
 
 def resume_analysis(args, project, command, record, request):
@@ -818,7 +881,7 @@ def execute(a):
     f=select_function(functions,a)
     if fresh:
         hints=annotations.type_hints(annotations_rows,functions) if with_hints else None
-        return fresh_decompile(a,p,image,f,aid,hints)
+        return fresh_decompile(a,p,image,f,record,revision,hints)
     if a.command=='calls':
         data,gaps=calls.graph(dict(snapshot,functions=functions),f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])

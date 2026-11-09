@@ -75,7 +75,7 @@ def revise(project, image_id, analysis_id, engine_entry, instruction, kind, valu
         return record(new), True
 
 
-def read(project, image_id, *, engine_entry=None, kind=None, history=False):
+def read(project, image_id, *, engine_entry=None, kind=None, history=False, at_revision=None):
     """Return a consistent image revision and matching records, including legacy workspaces."""
     with project.db() as db:
         db.row_factory = sqlite3.Row
@@ -85,10 +85,14 @@ def read(project, image_id, *, engine_entry=None, kind=None, history=False):
         ).fetchone()
         if table is None:
             return 0, []
-        revision = db.execute(
-            "SELECT COALESCE(MAX(revision),0) FROM annotation_revisions WHERE image_id=?", (image_id,),
-        ).fetchone()[0]
         conditions, params = ["image_id=?"], [image_id]
+        if at_revision is not None:
+            conditions.append("revision<=?")
+            params.append(at_revision)
+        revision = db.execute(
+            "SELECT COALESCE(MAX(revision),0) FROM annotation_revisions WHERE " + " AND ".join(conditions),
+            params,
+        ).fetchone()[0]
         if engine_entry is not None:
             conditions.append("engine_entry=?")
             params.append(engine_entry)

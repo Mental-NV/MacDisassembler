@@ -246,7 +246,7 @@ def worker_limits(args, max_functions):
 
 
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
-        import_request=None, resumed_from=None):
+        import_request=None, query_request=None, resumed_from=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -323,6 +323,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         manifest['analysis_request'] = analysis_request
     if import_request is not None:
         manifest['import_request'] = import_request
+    if query_request is not None:
+        manifest['query_request'] = query_request
     if resumed_from is not None:
         manifest['resumed_from'] = resumed_from
     if entry is not None:
@@ -344,10 +346,12 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if isinstance(e,Error) and e.code=='loader_option_unsupported':
             manifest.update(status='failed',error={'code':e.code,'message':str(e)})
             write_json(job/'job.json',manifest,force=True)
+            e.partial = {'job_id':jobid}
             raise
         manifest.update(status='failed', error={'code':'bridge_result','message':'Missing, oversized or invalid bridge result'})
         write_json(job/'job.json',manifest,force=True)
-        raise Error('bridge_result', 'Worker did not publish a valid bridge result; see private log', 10) from e
+        raise Error('bridge_result', 'Worker did not publish a valid bridge result; see private log', 10,
+                    partial={'job_id':jobid}) from e
     try:
         if result.get('schema') != 'macscope-bridge/1' or result.get('mode') != mode or result.get('ghidra_version') != '12.2':
             raise Error('bridge_contract', 'Bridge result version/mode mismatch', 10)
@@ -387,5 +391,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     except (Error, OSError) as e:
         manifest.update(status='failed',error={'code':getattr(e,'code','bridge_publication'),'message':str(e)})
         write_json(job/'job.json',manifest,force=True)
+        if isinstance(e,Error) and e.partial is None:
+            e.partial = {'job_id':jobid}
         raise
     return result, manifest
