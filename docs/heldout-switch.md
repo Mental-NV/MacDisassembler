@@ -81,7 +81,12 @@ the original pseudocode and machine evidence. Cached queries returned
 partial for all eight affected captures. Seven fresh checks, including
 all four affected held-out captures and one resolved control, matched
 the saved code and preserved the source Program and snapshot.
-The live calculator tool rerun passed 79 checks across eight owned images.
+The live calculator matrix passed 152 CLI checks across eight tool and
+eight AppKit main images. Both x86_64 O0 AppKit symbol states also
+reported the unresolved `calc_apply_op` jump in both profiles. LLVM and
+the AppKit table bytes confirmed the corresponding four omitted blocks.
+The paired raw machine facets remained equal and the sole analyzer
+option difference was the selected parameter-inference setting.
 
 The detector reports unresolved control flow and leaves reconstruction
 of those cases open. Ghidra upstream closed a matching regression with

@@ -95,7 +95,10 @@ collections exceed documented bounds despite successful pseudocode output.
 - [ ] Recover the missing x86_64 O0 case blocks. Ghidra 12.2 remains pinned.
   The related upstream change and local limits are recorded in the
   [switch validation](heldout-switch.md#measured-results).
-- [ ] Exercise isolation, malformed-input fuzzing, schema migrations and
+- [x] Exercise data-only parsers with 10,350 seeded Mach-O mutations and
+  10,000 bundle plist mutations. Deep binary plist nesting, unexpected
+  XML keys and unknown encodings now return typed `bundle_plist` errors.
+- [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.
 - [ ] Separately gated: desktop UI acceptance, private real-app and Taskovsky

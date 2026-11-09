@@ -85,9 +85,10 @@ def resolve_input(path):
     if p.suffix.lower() != '.app':
         return checked_path(p), []
     p = checked_path(p, directory=True)
+    raw_info = read_regular(p / 'Contents/Info.plist', MAX_PLIST)
     try:
-        info = plistlib.loads(read_regular(p / 'Contents/Info.plist', MAX_PLIST))
-    except (plistlib.InvalidFileException, ValueError, OverflowError, ExpatError) as e:
+        info = plistlib.loads(raw_info)
+    except (plistlib.InvalidFileException, ValueError, OverflowError, RecursionError, LookupError, ExpatError) as e:
         raise Error('bundle_plist', 'Invalid bounded bundle property list') from e
     name = info.get('CFBundleExecutable') if isinstance(info, dict) else None
     if not isinstance(name, str) or not name or name in ('.', '..') or '/' in name or '\\' in name or '\x00' in name:

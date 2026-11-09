@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import plistlib
 import struct
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -397,6 +398,24 @@ class PathAndBundleTests(ErrorAssertions):
         binary = app / "Contents/MacOS/Fixture"
         binary.write_bytes(image())
         return app, binary
+
+    def test_excessive_binary_plist_nesting_is_typed(self):
+        app, _ = self.make_bundle()
+        depth = sys.getrecursionlimit() + 20
+        # Each one-element array references the next object, ending at a null.
+        objects = b"".join(b"\xa1" + struct.pack(">I", i + 1) for i in range(depth)) + b"\x00"
+        offsets = struct.pack(f">{depth + 1}I", *(8 + 5 * i for i in range(depth + 1)))
+        trailer = struct.pack(">6xBBQQQ", 4, 4, depth + 1, 0, 8 + len(objects))
+        (app / "Contents/Info.plist").write_bytes(b"bplist00" + objects + offsets + trailer)
+        self.assert_error("bundle_plist", macho.resolve_input, app)
+
+    def test_xml_plist_stack_and_encoding_errors_are_typed(self):
+        app, _ = self.make_bundle()
+        for raw in (b'<?xml version="1.0"?><plist><key>name</key></plist>',
+                    b'<?xml version="1.0" encoding="U2F-8"?><plist><dict/></plist>'):
+            with self.subTest(raw=raw):
+                (app / "Contents/Info.plist").write_bytes(raw)
+                self.assert_error("bundle_plist", macho.resolve_input, app)
 
     def test_regular_file_read_and_inspect(self):
         path = self.root / "fixture"
