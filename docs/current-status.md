@@ -56,7 +56,10 @@ collections exceed documented bounds despite successful pseudocode output.
   with resumable pages and scoped coverage.
 - [x] Traverse saved call references with depth/edge bounds and explicit
   unresolved targets.
-- [ ] Add revisioned annotations and explicitly applied type hints.
+- [x] Store user labels and function/instruction comments with reversible
+  revisions, search and separate opt-in export.
+- [ ] Apply explicitly accepted type hints with separate provenance and
+  affected-cache handling.
 - [ ] Add Objective-C/Swift views and explicit bundle image/resource selection.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.

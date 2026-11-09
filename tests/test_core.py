@@ -749,6 +749,54 @@ class CliTests(TemporaryCase):
         self.assertIn('$HOME/private', result['data']['pseudocode'])
         self.assertEqual(self.workspace.snapshot(self.workspace.select())[0], self.snapshot)
 
+    def test_annotation_commands_preserve_engine_names_and_committed_snapshot(self):
+        selector = ('--function-id', 'function-2')
+        label = cli.execute(self.args('rename', 'Review anchor', *selector, '--author', 'reviewer'))
+        self.assertTrue(label['data']['changed'])
+        self.assertEqual(label['data']['revision']['author'], 'reviewer')
+        note = 'Follow stack behavior'
+        function_comment = cli.execute(self.args('comment', 'set', note, '--name', 'Review anchor'))
+        instruction = '0x100000020'
+        cli.execute(self.args('comment', 'set', 'Entry point', *selector, '--instruction', instruction))
+        self.error('annotation_address', cli.execute,
+                   self.args('comment', 'set', 'unlinked', *selector, '--instruction', '0x100000021'))
+        shown = cli.execute(self.args('functions', 'show', '--name', 'Review anchor'))['data']
+        self.assertEqual(shown['names'][0], {'name': 'unique', 'origin': 'ghidra'})
+        self.assertEqual(shown['names'][1]['origin'], 'user_supplied')
+        self.assertEqual(len(shown['annotations']), 3)
+        search = cli.execute(self.args('search', 'stack', '--in', 'comments'))
+        self.assertEqual(search['data'][0]['context'], note)
+        self.assertEqual(search['data'][0]['function_id'], 'function-2')
+        self.assertEqual(search['data'][0]['origin'], 'user_supplied')
+        search = cli.execute(self.args('search', 'review anchor', '--in', 'names'))
+        self.assertEqual(search['data'][0]['origin'], 'user_supplied')
+        exported = cli.execute(self.args('export'))['data']
+        self.assertEqual(exported, self.snapshot)
+        annotated = cli.execute(self.args('export', '--include-annotations'))['data']
+        self.assertEqual(len(annotated.pop('annotations')['records']), 3)
+        self.assertEqual(annotated, self.snapshot)
+        removed = cli.execute(self.args('comment', 'remove', *selector))
+        self.assertEqual(removed['data']['revision']['previous_value'], note)
+        self.assertEqual(len(cli.execute(self.args('comment', 'list', *selector))['data']), 1)
+        cli.execute(self.args('rename', '--clear', *selector))
+        self.error('function_selector', cli.execute, self.args('functions', 'show', '--name', 'Review anchor'))
+        history = cli.execute(self.args('annotations', 'history', *selector))['data']
+        self.assertEqual(len(history), 5)
+        self.assertEqual(history[1], function_comment['data']['revision'])
+        self.assertEqual(self.workspace.snapshot(self.workspace.select())[0], self.snapshot)
+
+    def test_annotation_revision_invalidates_affected_cursors(self):
+        before = cli.execute(self.args('functions', 'list', '--limit', '1'))
+        cursor = before['coverage']['next_cursor']
+        cli.execute(self.args('rename', 'New label', '--function-id', 'function-2'))
+        self.error('stale_cursor', cli.execute, self.args('functions', 'list', '--cursor', cursor))
+        cli.execute(self.args('rename', 'Second label', '--function-id', 'function-2'))
+        first = cli.execute(self.args('annotations', 'history', '--limit', '1'))
+        cursor = first['coverage']['next_cursor']
+        self.assertIsNotNone(cursor)
+        cli.execute(self.args('rename', '--clear', '--function-id', 'function-2'))
+        self.error('stale_cursor', cli.execute, self.args('annotations', 'history', '--cursor', cursor))
+
     def assert_envelope(self, result):
         required = {'schema_version', 'command', 'status', 'analysis_id', 'data', 'diagnostics', 'coverage'}
         self.assertTrue(required <= result.keys())

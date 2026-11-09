@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import calls, engine, search
+from . import annotations, calls, engine, search
 from .schema import validate_envelope, validate_function
 
 
@@ -90,7 +90,23 @@ def parser():
     s.add_argument('--direction',choices=('callers','callees','both'),default='both')
     s.add_argument('--depth',type=int,default=1)
     s.add_argument('--max-edges',type=int,default=500)
+    s=sub.add_parser('rename');project(s);common(s);selector(s)
+    s.add_argument('label',nargs='?')
+    s.add_argument('--clear',action='store_true')
+    s.add_argument('--author',default='local')
+    s=sub.add_parser('comment');ss=s.add_subparsers(dest='action',required=True)
+    for action in ('set','remove','list'):
+        s=ss.add_parser(action);project(s);common(s);selector(s,required=action!='list')
+        if action=='list':
+            pagination(s)
+        else:
+            s.add_argument('--instruction')
+            s.add_argument('--author',default='local')
+        if action=='set':s.add_argument('text')
+    s=sub.add_parser('annotations');ss=s.add_subparsers(dest='action',required=True)
+    s=ss.add_parser('history');project(s);common(s);selector(s,required=False);pagination(s)
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl'))
+    s.add_argument('--include-annotations',action='store_true')
     return p
 
 
@@ -231,6 +247,28 @@ def fresh_decompile(args, project, image, function, aid):
                     redact(diagnostics))
 
 
+def revise_annotation(args, project, command):
+    if args.command == 'rename':
+        if (args.label is not None) == args.clear:
+            raise Error('annotation_value','Supply a user label or --clear',2)
+        kind = 'name'
+        value = None if args.clear else annotations.valid_text(args.label,'label',256)
+    else:
+        kind = 'comment'
+        value = annotations.valid_text(args.text,'comment',4096,multiline=True) if args.action == 'set' else None
+    author = annotations.valid_text(args.author,'author',128)
+    with project.writer():
+        image = project.select(args.image,args.arch)
+        snapshot,_ = project.snapshot(image)
+        _,rows = annotations.read(project,image['image_id'])
+        function = select_function(annotations.with_labels(snapshot['functions'],rows),args)
+        prior = rows if getattr(args,'action',None) == 'remove' else ()
+        instruction = annotations.instruction_at(function,getattr(args,'instruction',None),prior=prior)
+        row,changed = annotations.revise(project,image['image_id'],snapshot['analysis_id'],
+                                         function['engine_entry'],instruction,kind,value,author)
+    return envelope(command,{'revision':row,'changed':changed},snapshot['analysis_id'])
+
+
 def execute(a):
     limits(a)
     fresh = a.command == 'decompile' and a.fresh
@@ -251,6 +289,8 @@ def execute(a):
         p=Project.create(a.path)
         return envelope(command,{'project_id':p.project_id,'schema_version':'1.0'})
     p=Project(a.project)
+    if a.command == 'rename' or (a.command == 'comment' and a.action != 'list'):
+        return revise_annotation(a,p,command)
     if fresh or a.command in ('import','analyze'):
         check_engine_access(a,p)
     if a.command=='status':
@@ -322,10 +362,27 @@ def execute(a):
     snapshot,record=p.snapshot(image)
     aid=snapshot['analysis_id']
     functions=snapshot['functions']
+    if a.command == 'export' and not a.include_annotations:
+        revision, annotations_rows = 0, []
+    else:
+        revision, annotations_rows = annotations.read(p,image['image_id'],history=a.command=='annotations')
+    functions = annotations.with_labels(functions,annotations_rows)
+    if a.command in ('comment','annotations'):
+        function = select_function(functions,a) if any((a.address,a.function_id,a.name)) else None
+        entry = function['engine_entry'] if function else None
+        rows = [row for row in annotations_rows
+                if (entry is None or row['engine_entry'] == entry)
+                and (a.command == 'annotations' or row['kind'] == 'comment')]
+        rows,cov = page(rows,a,aid,p.project_id,{'annotation_revision':revision,'entry':entry,'command':command},
+                        order='annotation-revision/v1')
+        cov['scope'] = 'image annotation revisions' if a.command == 'annotations' else 'current image comments'
+        return envelope(command,rows,aid,cov=cov)
     if a.command == 'search':
-        hits, gaps = search.snapshot_matches(snapshot, term, a.search_scope)
-        rows, cov = page(hits, a, aid, p.project_id,
-                         {'query': a.query, 'scope': a.search_scope}, order='search-kind/address/v1')
+        view = dict(snapshot,functions=functions)
+        hits, gaps = search.snapshot_matches(view,term,a.search_scope,comments=annotations_rows)
+        filters={'query':a.query,'scope':a.search_scope}
+        if revision and a.search_scope in ('names','comments','all'):filters['annotation_revision']=revision
+        rows, cov = page(hits,a,aid,p.project_id,filters,order='search-kind/address/v1')
         cov['scope'] = 'committed image search: ' + a.search_scope
         if gaps:
             reasons = [*gaps, *(['page_limit'] if cov['next_cursor'] else [])]
@@ -333,10 +390,14 @@ def execute(a):
         return envelope(command, rows, aid, 'partial' if gaps else 'complete', cov,
                         ['Search hits are leads from the selected committed analysis.'])
     if a.command=='export':
+        if a.include_annotations:
+            snapshot=dict(snapshot,annotations=redact({'revision':revision,'records':annotations_rows}))
         return envelope(command,snapshot,aid,snapshot['status'],coverage('committed normalized image export',len(functions),snapshot['engine'].get('function_count_total_reported_by_engine'),snapshot['status']!='complete'),['Private recovered code/strings may be sensitive. Absolute host paths and volatile job timings are omitted.'])
     if a.command=='functions' and a.action=='list':
         rows=[f for f in functions if not a.name_contains or any(a.name_contains in n['name'] for n in f['names'])]
-        rows,cov=page(rows,a,aid,p.project_id,{'name_contains':a.name_contains})
+        filters={'name_contains':a.name_contains}
+        if revision:filters['annotation_revision']=revision
+        rows,cov=page(rows,a,aid,p.project_id,filters)
         if snapshot['engine'].get('functions_truncated'):
             cov.update(status='partial',known_total=None,truncation_reason='discovery_limit'+(';page_limit' if cov['next_cursor'] else ''))
         return envelope(command,[{k:f[k] for k in ('function_id','image_id','arch','entry_va','address_space','engine_entry','body_ranges','names','signature','is_thunk','is_external','decompile_status')} for f in rows],aid,cov=cov)
@@ -351,12 +412,14 @@ def execute(a):
     if fresh:
         return fresh_decompile(a,p,image,f,aid)
     if a.command=='calls':
-        data,gaps=calls.graph(snapshot,f,a.direction,a.depth,a.max_edges)
+        data,gaps=calls.graph(dict(snapshot,functions=functions),f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])
         return envelope(command,data,aid,'partial' if gaps else 'complete',
                         coverage('recorded call edges within requested depth',count,None if gaps else count,
                                  bool(gaps),reason=';'.join(gaps) or None))
     if a.command=='functions':
+        notes=[row for row in annotations_rows if row['engine_entry']==f['engine_entry']]
+        if notes:f=dict(f,annotations=notes)
         incomplete=any(c.get('truncated') or c.get('error') for c in f.get('coverage',{}).values())
         return envelope(command,f,aid,'partial' if incomplete else 'complete',coverage('selected function evidence',1,1,incomplete,reason='facet_incomplete' if incomplete else None))
     if a.command=='disasm':

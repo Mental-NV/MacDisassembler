@@ -86,8 +86,9 @@ functions, not every possible routine in the binary.
 `search QUERY` matches a literal, case-insensitive query of up to 256 printable
 characters against the selected committed image. `--in names` covers
 function and symbol names, `--in strings` covers Ghidra-defined strings,
-and `--in pseudocode` covers saved decompiler text. The default `all` searches
-these three scopes. Each matching source record returns one bounded excerpt
+`--in pseudocode` covers saved decompiler text, and `--in comments` covers
+current user comments. The default `all` searches all four scopes.
+Each matching source record returns one bounded excerpt
 with image identity, engine address when available, and a function ID when
 the record identifies a function. Pseudocode addresses identify the function
 entry. Use `--limit` and `--cursor` to page through the hits. A partial source
@@ -103,6 +104,33 @@ ambiguous or unavailable instruction ownership retain an unresolved caller.
 Depth defines the requested scope. A reached `--max-edges` bound (default 500,
 maximum 2000) or incomplete scanned facets produces partial coverage. Call
 traversal uses the selected snapshot and does not enumerate runtime targets.
+
+## User labels and comments
+
+```sh
+macscope rename 'Checked addition' --name _calc_add --project workspaces/calculator --json
+macscope comment set 'Review the overflow path' --name 'Checked addition' \
+  --project workspaces/calculator --json
+macscope comment list --project workspaces/calculator --json
+macscope annotations history --name _calc_add --project workspaces/calculator --json
+```
+
+Labels are separate from Ghidra names. Both can select a function, subject
+to the usual ambiguity check. Comments can target a function or a saved
+instruction via `--instruction 0xVA`. Use `rename --clear` or
+`comment remove` to append a removal revision. Repeating the same edit is
+idempotent. Each revision records its author label, time, prior value,
+creation analysis ID, and exact image/function scope.
+
+These edits update the private SQLite index and preserve input bytes,
+saved Programs and committed analysis snapshots. They follow the same
+immutable image and engine entry across analyses. Default exports omit
+annotations. Use `export --include-annotations` to include current records
+as a separate field. History retains edits and removals and supports
+`--limit` and `--cursor`. Search and annotation cursors that depend on labels
+or comments are tied to the annotation revision.
+
+## Input preflight
 
 `inspect` is a bounded stdlib preflight for thin/fat/fat64 little-endian
 64-bit arm64 and x86_64 executable/dylib/bundle images. It resolves a main
