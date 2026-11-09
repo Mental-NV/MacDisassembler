@@ -49,10 +49,13 @@ class TemporaryCase(unittest.TestCase):
         return storage.Project.create(self.root / name)
 
 
-def synthetic_snapshot(project, aid='analysis-one'):
+def synthetic_snapshot(project, aid='analysis-one', *, slice_bytes=None):
     """Commit a deterministic, engine-independent snapshot through the public DB."""
     image = {'image_id': 'image-one', 'arch': 'arm64', 'sha256': '0' * 64,
              'artifact_sha256': '1' * 64, 'input_name': 'synthetic.macho'}
+    if slice_bytes is not None:
+        image['sha256'] = hashlib.sha256(slice_bytes).hexdigest()
+        storage.atomic(project.path / 'inputs' / 'image-one.macho', slice_bytes, mode=0o400)
     functions = []
     for index, name in enumerate(('duplicate', 'duplicate', 'unique')):
         address = hex(0x100000000 + index * 0x10)

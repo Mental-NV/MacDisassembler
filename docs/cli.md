@@ -142,6 +142,25 @@ as a separate field. History retains edits and removals and supports
 `--limit` and `--cursor`. Search and annotation cursors that depend on labels
 or comments are tied to the annotation revision.
 
+Use the dedicated private transfer format to preserve the full history
+including removed values, author labels, timestamps, original analysis
+IDs, and original workspace/revision identities. It keeps text verbatim.
+
+```sh
+macscope annotations export --project workspaces/calculator \
+  --json --output private-annotations.json
+macscope annotations import private-annotations.json \
+  --project workspaces/second-calculator --accept-type-hints --json
+```
+
+The destination must have the same imported image and a committed
+analysis whose functions and instructions match the active annotations.
+Import appends the missing history in one transaction, assigning local
+revision numbers. Replaying an existing prefix makes no edits. Diverging
+histories, invalid targets and malformed files are rejected before any
+revision is written. Importing type-hint revisions requires the explicit
+`--accept-type-hints` flag. The transfer file is limited to 64 MiB.
+
 `type set --return-type TYPE --accept` records a user-supplied return type
 for a selected function. Supported types are `void`, `bool`, and the signed
 and unsigned fixed-width integer typedefs from 8 to 64 bits. Invalid types

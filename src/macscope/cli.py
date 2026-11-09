@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotations, bundle, calls, dyld, engine, export_trie, metadata, objc, search, swift_symbols
+from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, metadata, objc, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -133,6 +133,9 @@ def parser():
         if action=='set':s.add_argument('text')
     s=sub.add_parser('annotations');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('history');project(s);common(s);selector(s,required=False);pagination(s)
+    s=ss.add_parser('export');project(s);common(s,('text','json'))
+    s=ss.add_parser('import');project(s);common(s)
+    s.add_argument('path');s.add_argument('--accept-type-hints',action='store_true')
     s=sub.add_parser('type');ss=s.add_subparsers(dest='action',required=True)
     for action in ('set','clear','list'):
         s=ss.add_parser(action);project(s);common(s);selector(s,required=action!='list')
@@ -329,6 +332,17 @@ def revise_annotation(args, project, command):
     return envelope(command,{'revision':row,'changed':changed},snapshot['analysis_id'])
 
 
+def import_annotations(args, project):
+    bundle = annotation_transfer.load(args.path)
+    with project.writer():
+        image = project.select(args.image, args.arch)
+        snapshot, _ = project.snapshot(image)
+        metadata.verified_slice(project, image)
+        added = annotation_transfer.apply(project, image, snapshot, bundle, args.accept_type_hints)
+    return envelope('annotations import', {'image_id': image['image_id'], 'appended_revisions': added},
+                    snapshot['analysis_id'], cov=coverage('appended image annotation history', added, added))
+
+
 def import_slice(project, image, original, args, deps):
     artifact = project.path/'inputs'/(image['artifact_sha256']+'.artifact')
     if not artifact.exists():
@@ -520,6 +534,8 @@ def execute(a):
     p=Project(a.project)
     if a.command == 'rename' or (a.command in ('comment','type') and a.action != 'list'):
         return revise_annotation(a,p,command)
+    if a.command == 'annotations' and a.action == 'import':
+        return import_annotations(a,p)
     if fresh or a.command in ('import','analyze'):
         check_engine_access(a,p)
     if a.command=='status':
@@ -601,6 +617,10 @@ def execute(a):
         return metadata_collection(a,p,image,snapshot)
     aid=snapshot['analysis_id']
     functions=snapshot['functions']
+    if a.command == 'annotations' and a.action == 'export':
+        transfer = annotation_transfer.export(p,image)
+        total = len(transfer['revisions'])
+        return envelope(command,transfer,aid,cov=coverage('portable image annotation history',total,total))
     if a.command == 'export' and not a.include_annotations:
         revision, annotations_rows = 0, []
     else:

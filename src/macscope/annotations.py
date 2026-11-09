@@ -28,6 +28,11 @@ INDEX = """
 CREATE INDEX IF NOT EXISTS annotation_scope
 ON annotation_revisions(image_id, engine_entry, instruction, kind, revision)
 """
+INSERT = """
+INSERT INTO annotation_revisions
+(image_id,engine_entry,instruction,kind,analysis_id,value,previous_value,author,created_at)
+VALUES (?,?,?,?,?,?,?,?,?)
+"""
 
 
 def valid_text(value, field, limit, *, multiline=False):
@@ -63,9 +68,7 @@ def revise(project, image_id, analysis_id, engine_entry, instruction, kind, valu
         if db.execute("SELECT COUNT(*) FROM annotation_revisions").fetchone()[0] >= MAX_REVISIONS:
             raise Error("annotation_limit", "Project annotation revision limit reached", 7)
         revision = db.execute(
-            "INSERT INTO annotation_revisions "
-            "(image_id,engine_entry,instruction,kind,analysis_id,value,previous_value,author,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            INSERT,
             (*scope, analysis_id, value, previous, author, datetime.now(timezone.utc).isoformat()),
         ).lastrowid
         new = db.execute("SELECT * FROM annotation_revisions WHERE revision=?", (revision,)).fetchone()

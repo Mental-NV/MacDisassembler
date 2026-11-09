@@ -58,8 +58,8 @@ collections exceed documented bounds despite successful pseudocode output.
   unresolved targets.
 - [x] Store user labels and function/instruction comments with reversible
   revisions, search and separate opt-in export.
-- [ ] Round-trip annotations and accepted type hints between compatible
-  workspaces with validated identity and atomic import.
+- [x] Round-trip full annotation history and accepted return-type hints
+  between compatible workspaces, with validated identity and atomic import.
 - [x] Apply explicitly accepted scalar return hints in fresh Ghidra queries.
   The owned arm64/x86_64 tests verified separate provenance and unchanged
   unassisted snapshots. Parameter and compound hints remain open.
