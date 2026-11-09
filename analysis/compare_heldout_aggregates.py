@@ -91,9 +91,8 @@ def capture(output, evaluator, inputs, ghidra, java_home):
             invoke(output / (label + "-create.json"), ["project", "create", project_path])
             invoke(output / (label + "-import.json"), ["import", str(inputs / variant / state), *project, *worker])
             for profile_name in PROFILES:
-                if profile_name != "baseline":
-                    invoke(output / (label + "-analyze.json"),
-                           ["analyze", "--profile", profile_name, *project, *worker])
+                invoke(output / (label + "-" + profile_name + "-analyze.json"),
+                       ["analyze", "--profile", profile_name, *project, *worker])
                 path = output / (label + "-" + profile_name + ".json")
                 invoke(path, ["export", *project])
                 paths.append((variant, state, profile_name, path.name))
