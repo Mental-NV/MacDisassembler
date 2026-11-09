@@ -17,7 +17,8 @@ contains documentation only.
   explicit thin/universal slice import without autoanalysis, versioned baseline
   analysis and explicitly selected binary-derived parameter inference,
   function list/show, disassembly, cached pseudocode, references,
-  CFG JSON/DOT, project/job status, cached search and normalized exports.
+  CFG JSON/DOT, project/job status, cached search, bounded call traversal
+  and normalized exports.
 - Package-owned Java bridge, effective analyzer-option recording, real saved
   Program databases, immutable digest identities, SQLite committed snapshots,
   writer lock, atomic result/output publication and pagination-bound cursors.
@@ -51,8 +52,9 @@ collections exceed documented bounds despite successful pseudocode output.
   decompilation, token/address spans and reproducible timing measurements.
 - [x] Search committed function names, symbols, strings and pseudocode
   with resumable pages and scoped coverage.
-- [ ] Add bounded call traversal, revisioned annotations and explicitly
-  applied type hints.
+- [x] Traverse saved call references with depth/edge bounds and explicit
+  unresolved targets.
+- [ ] Add revisioned annotations and explicitly applied type hints.
 - [ ] Add Objective-C/Swift views and explicit bundle image/resource selection.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.

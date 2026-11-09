@@ -61,6 +61,7 @@ macscope decompile --project workspaces/calculator --all --limit 1000 --json
 macscope xrefs --project workspaces/calculator --name _calc_add --direction both --json
 macscope cfg --project workspaces/calculator --name _calc_add --format dot
 macscope search calc_add --in all --project workspaces/calculator --json
+macscope calls --name _calc_add --direction callers --depth 2 --project workspaces/calculator --json
 macscope status --project workspaces/calculator --json
 macscope export --project workspaces/calculator --json --output private-results.json
 ```
@@ -90,6 +91,16 @@ the record identifies a function. Pseudocode addresses identify the function
 entry. Use `--limit` and `--cursor` to page through the hits. A partial source
 facet yields partial coverage even when there are no matches. Search uses
 the saved evidence and requires no engine startup.
+
+`calls` follows recorded direct call references breadth-first, by function
+entry, with `--direction callers|callees|both` and `--depth 1..8`. The default
+is both directions at depth 1. The graph reports the instruction address,
+reported target and resolution on each edge. It preserves indirect calls and
+inferred target hints without traversing them. Incoming references with
+ambiguous or unavailable instruction ownership retain an unresolved caller.
+Depth defines the requested scope. A reached `--max-edges` bound (default 500,
+maximum 2000) or incomplete scanned facets produces partial coverage. Call
+traversal uses the selected snapshot and does not enumerate runtime targets.
 
 `inspect` is a bounded stdlib preflight for thin/fat/fat64 little-endian
 64-bit arm64 and x86_64 executable/dylib/bundle images. It resolves a main

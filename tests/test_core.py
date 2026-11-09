@@ -627,6 +627,74 @@ class CliTests(TemporaryCase):
         for value in ('', ' ', 'x' * 257, '\n'):
             self.error('search_query', cli.execute, self.args('search', value))
 
+    def call_snapshot(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        a, b, c = snapshot['functions']
+        for caller, callee in ((a, b), (b, c), (c, a)):
+            ref = {'from': caller['entry_va'], 'to': callee['entry_va'],
+                   'type': 'UNCONDITIONAL_CALL', 'source': 'DEFAULT', 'operand_index': 0}
+            caller['instructions'][0]['flow'] = 'UNCONDITIONAL_CALL'
+            caller['xrefs_from_sample'] = [ref]
+            callee['xrefs_to_entry'] = [ref]
+        return snapshot
+
+    def test_calls_traverses_saved_callers_and_callees_without_revisiting_cycle(self):
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(self.call_snapshot(), {})):
+            for direction, ids in (('callers', ['function-0', 'function-2', 'function-1']),
+                                   ('callees', ['function-0', 'function-1', 'function-2'])):
+                with self.subTest(direction=direction), mock.patch.object(engine, 'run') as run:
+                    result = cli.execute(self.args('calls', '--function-id', 'function-0',
+                                                   '--direction', direction, '--depth', '8'))
+                    run.assert_not_called()
+                self.assertEqual(result['status'], 'complete')
+                self.assertEqual([n['function_id'] for n in result['data']['nodes']], ids)
+                self.assertEqual([n['distance'] for n in result['data']['nodes']], [0, 1, 2])
+                self.assertEqual(len(result['data']['edges']), 3)
+            both = cli.execute(self.args('calls', '--function-id', 'function-0', '--depth', '8'))
+        self.assertEqual(len(both['data']['edges']), 3)
+
+    def test_calls_keeps_computed_targets_unresolved_and_reports_edge_limit(self):
+        snapshot = self.call_snapshot()
+        function = snapshot['functions'][0]
+        function['instructions'][0]['flow'] = 'COMPUTED_CALL'
+        function['instructions'].append({'addr': '0x100000004', 'flow': 'COMPUTED_CALL'})
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            result = cli.execute(self.args('calls', '--function-id', 'function-0', '--direction', 'callees'))
+            limited = cli.execute(self.args('calls', '--function-id', 'function-0',
+                                            '--direction', 'callees', '--max-edges', '1'))
+        self.assertEqual(len(result['data']['nodes']), 1)
+        from_ref, from_instruction = result['data']['edges']
+        self.assertEqual(from_ref['reported_target'], '0x100000010')
+        self.assertIsNone(from_ref['callee_function_id'])
+        self.assertEqual(from_instruction['resolution'], 'indirect_or_inferred')
+        self.assertEqual(from_instruction['evidence'], 'instruction')
+        self.assertEqual(limited['status'], 'partial')
+        self.assertEqual(limited['coverage']['truncation_reason'], 'edge_limit')
+
+    def test_calls_reports_incomplete_scanned_references_and_honors_depth(self):
+        snapshot = self.call_snapshot()
+        snapshot['functions'][0]['xrefs_from_truncated'] = True
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            result = cli.execute(self.args('calls', '--function-id', 'function-0',
+                                           '--direction', 'callees', '--depth', '1'))
+        self.assertEqual(len(result['data']['nodes']), 2)
+        self.assertEqual(result['data']['expanded_functions'], 1)
+        self.assertEqual(len(result['data']['edges']), 1)
+        self.assertEqual(result['coverage']['truncation_reason'], 'xrefs_from_incomplete')
+        self.error('argument_limit', cli.execute, self.args('calls', '--name', 'unique', '--depth', '9'))
+
+    def test_calls_does_not_invent_an_owner_for_an_overlapping_callsite(self):
+        snapshot = self.call_snapshot()
+        first, second, third = snapshot['functions']
+        third['instructions'].extend(first['instructions'])
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            result = cli.execute(self.args('calls', '--function-id', second['function_id'],
+                                           '--direction', 'callers'))
+        edge, = result['data']['edges']
+        self.assertEqual(edge['callee_function_id'], second['function_id'])
+        self.assertIsNone(edge['caller_function_id'])
+        self.assertEqual(edge['resolution'], 'unresolved_caller')
+
     def assert_envelope(self, result):
         required = {'schema_version', 'command', 'status', 'analysis_id', 'data', 'diagnostics', 'coverage'}
         self.assertTrue(required <= result.keys())

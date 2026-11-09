@@ -12,7 +12,7 @@ from . import __version__, SCHEMA_VERSION
 from .errors import Error
 from .macho import inspect_path, read_regular
 from .storage import Project, atomic, canonical, identity, write_json
-from . import engine, search
+from . import calls, engine, search
 from .schema import validate_envelope, validate_function
 
 
@@ -83,12 +83,16 @@ def parser():
     s=sub.add_parser('search');project(s);common(s);pagination(s)
     s.add_argument('query')
     s.add_argument('--in',dest='search_scope',choices=(*search.SCOPES,'all'),default='all')
+    s=sub.add_parser('calls');project(s);common(s);selector(s)
+    s.add_argument('--direction',choices=('callers','callees','both'),default='both')
+    s.add_argument('--depth',type=int,default=1)
+    s.add_argument('--max-edges',type=int,default=500)
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl'))
     return p
 
 
 def limits(args):
-    for key, low, high in [('timeout',1,3600),('function_timeout',1,120),('heap_mib',256,4096),('max_functions',1,10000),('limit',1,1000)]:
+    for key, low, high in [('timeout',1,3600),('function_timeout',1,120),('heap_mib',256,4096),('max_functions',1,10000),('limit',1,1000),('depth',1,8),('max_edges',1,2000)]:
         v=getattr(args,key,None)
         if v is not None and not low<=v<=high:
             raise Error('argument_limit', key+' must be '+str(low)+'..'+str(high),2)
@@ -294,6 +298,12 @@ def execute(a):
         partial=any(k not in ('complete','not_requested') for k in states)
         return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if partial else 'complete',cov)
     f=select_function(functions,a)
+    if a.command=='calls':
+        data,gaps=calls.graph(snapshot,f,a.direction,a.depth,a.max_edges)
+        count=len(data['edges'])
+        return envelope(command,data,aid,'partial' if gaps else 'complete',
+                        coverage('recorded call edges within requested depth',count,None if gaps else count,
+                                 bool(gaps),reason=';'.join(gaps) or None))
     if a.command=='functions':
         incomplete=any(c.get('truncated') or c.get('error') for c in f.get('coverage',{}).values())
         return envelope(command,f,aid,'partial' if incomplete else 'complete',coverage('selected function evidence',1,1,incomplete,reason='facet_incomplete' if incomplete else None))
