@@ -11,6 +11,7 @@ import platform
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import time
 import uuid
@@ -133,27 +134,51 @@ def profile(project, dependencies):
 
 
 
+def worker_exited(proc):
+    # Keep the group leader's PID reserved until all group signaling is done.
+    return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+
+
+def signal_owned(proc, signum):
+    try:
+        worker_exited(proc)  # Confirm the leader is still our unreaped child.
+        os.killpg(proc.pid, signum)
+    except (ChildProcessError, ProcessLookupError):
+        pass
+    except PermissionError:
+        # Darwin skips zombie group members and returns EPERM when no member
+        # can receive the signal. Trusted workers keep the caller's identity.
+        if platform.system() != 'Darwin' or not worker_exited(proc):
+            raise
+
+
 def terminate_owned(proc):
-    # start_new_session creates a new session/group, retained only while its
-    # group leader is our unreaped child. No PID files are used to kill jobs.
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        proc.wait(timeout=2)
-        # Reap leader then terminate remaining descendants in this owned group.
-        time.sleep(0.1)
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if not worker_exited(proc):
+            signal_owned(proc, signal.SIGTERM)
+            deadline = time.monotonic() + 2
+            while not worker_exited(proc) and time.monotonic() < deadline:
+                time.sleep(0.05)
+    except ChildProcessError:
+        pass
+    finally:
+        signal_owned(proc, signal.SIGKILL)
         proc.wait(timeout=10)
+
+
+def check_worker_budgets(cwd, log_path, max_log):
+    if log_path.stat().st_size > max_log:
+        raise Error('worker_output_limit', 'Worker log exceeds its byte limit', 7)
+    total = 0
+    for path in cwd.rglob('*'):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue  # Workers may remove temporary files between samples.
+        if stat.S_ISREG(info.st_mode):
+            total += info.st_size
+            if total > 512*1024*1024:
+                raise Error('worker_storage_limit', 'Sampled job storage exceeds 512 MiB (not a hard filesystem quota)', 7)
 
 
 def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, max_log=8*1024*1024):
@@ -164,17 +189,17 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
     try:
         with open(log_path, 'xb', buffering=0) as log:
             proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            manifest.update(status='running', pid=proc.pid, process_group=proc.pid)
-            write_json(manifest_path, manifest, force=True)
-            while proc.poll() is None:
-                if time.monotonic()-start > timeout:
-                    raise Error('worker_timeout', 'Worker wall-clock timeout', 7, retryable=True)
-                if Path(log_path).stat().st_size > max_log:
-                    raise Error('worker_output_limit', 'Worker log exceeds 8 MiB', 7)
-                total = sum(p.stat().st_size for p in Path(cwd).rglob('*') if p.is_file() and not p.is_symlink())
-                if total > 512*1024*1024:
-                    raise Error('worker_storage_limit', 'Sampled job storage exceeds 512 MiB (not a hard filesystem quota)', 7)
-                time.sleep(0.1)
+            try:
+                manifest.update(status='running', pid=proc.pid, process_group=proc.pid)
+                write_json(manifest_path, manifest, force=True)
+                while not worker_exited(proc):
+                    if time.monotonic()-start > timeout:
+                        raise Error('worker_timeout', 'Worker wall-clock timeout', 7, retryable=True)
+                    check_worker_budgets(Path(cwd), Path(log_path), max_log)
+                    time.sleep(0.1)
+            finally:
+                terminate_owned(proc)
+            check_worker_budgets(Path(cwd), Path(log_path), max_log)
         if proc.returncode:
             raise Error('worker_failed', 'Headless worker exited '+str(proc.returncode)+'; see private job log', 10)
         manifest['status'] = 'complete'
@@ -189,7 +214,8 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
         raise Error('worker_startup', str(e), 4) from e
     finally:
         if proc is not None:
-            terminate_owned(proc)
+            if proc.returncode is None:
+                terminate_owned(proc)
             manifest['returncode'] = proc.returncode
         manifest['elapsed_seconds'] = round(time.monotonic()-start, 6)
         write_json(manifest_path, manifest, force=True)

@@ -1189,6 +1189,20 @@ class WorkerTests(TemporaryCase):
         self.assertEqual(self.record()['error']['code'], 'worker_output_limit')
         self.assert_reaped()
 
+    def test_final_log_budget_catches_output_from_an_already_exited_worker(self):
+        observe = engine.worker_exited
+
+        def observe_only_after_exit(proc):
+            until = time.monotonic() + 2
+            while not observe(proc) and time.monotonic() < until:
+                time.sleep(0.01)
+            return observe(proc)
+
+        with mock.patch.object(engine, 'worker_exited', side_effect=observe_only_after_exit):
+            self.error('worker_output_limit', self.run_worker, 'print("x"*8192)', max_log=100)
+        self.assertEqual(self.record()['returncode'], 0)
+        self.assert_reaped()
+
     def test_parent_exit_does_not_leave_owned_descendant_running(self):
         # The child ignores SIGTERM, proving cleanup reaches SIGKILL after the
         # group leader has already exited. Heartbeats also avoid treating an
@@ -1203,24 +1217,21 @@ class WorkerTests(TemporaryCase):
                   f'subprocess.Popen([sys.executable,"-c",{child!r}]); '
                   '\nfor _ in range(200):\n if p.exists(): break\n time.sleep(0.01)\n'
                   'os._exit(0)')
-        try:
+        killpg = os.killpg
+
+        def require_unreaped_leader(group, signum):
+            self.assertEqual(group, self.processes[0].pid)
+            # waitid raises ChildProcessError if the leader has been reaped.
+            os.waitid(os.P_PID, group, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            killpg(group, signum)
+
+        with mock.patch.object(engine.os, 'killpg', side_effect=require_unreaped_leader):
             self.run_worker(parent)
-            self.assertTrue(heartbeat.exists(), 'descendant did not start')
-            before = heartbeat.read_bytes()
-            time.sleep(0.3)
-            self.assertEqual(heartbeat.read_bytes(), before, 'descendant still executing after leader exit')
-            self.assert_reaped()
-        finally:
-            # Only the session created by this test's observed Popen is touched.
-            # This bounded immediate cleanup prevents a failed regression from
-            # leaking the synthetic child; no persisted PID is ever used.
-            for proc in self.processes:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                if proc.poll() is None:
-                    proc.wait(timeout=5)
+        self.assertTrue(heartbeat.exists(), 'descendant did not start')
+        before = heartbeat.read_bytes()
+        time.sleep(0.3)
+        self.assertEqual(heartbeat.read_bytes(), before, 'descendant still executing after leader exit')
+        self.assert_reaped()
 
 
 if __name__ == '__main__':

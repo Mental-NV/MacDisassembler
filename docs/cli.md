@@ -457,17 +457,19 @@ Fixed bridge bounds include 2000 instructions/function, 500 blocks and
 Every cut facet has explicit partial coverage; some totals are unknown.
 
 The worker launcher log is sampled at 8MiB and combined job storage at
-512MiB. These sampled checks can overshoot; they are not hard filesystem
-quotas. `--max-memory-mib` is rejected because a hard process-memory limit
+512MiB. The runner checks both again after process-group cleanup, before
+accepting any result. These are sampled checks and can overshoot.
+`--max-memory-mib` is rejected because a hard process-memory limit
 is not enforceable here. `--heap-mib` limits only the Java heap, not native
 memory or total process RSS. `--jobs` values other than 1 and independent
 `--startup-timeout` are rejected. `--timeout` bounds startup plus analysis
 plus export as one owned worker wall deadline.
 
-The worker starts a private process group, records an ownership token,
-and terminates only its live owned group, including remaining descendants
-if the launcher exits first. Timeout/interrupt/failure manifests preserve
-prior committed results. There is no PID-file based kill/recovery operation.
+The worker starts a private process group and records an ownership token.
+The supervisor observes the launcher exit without reaping it, stops
+remaining group members while the child PID is still reserved, then
+reaps the launcher. Timeout, interruption, and failure preserve prior
+committed results.
 
 The tested macOS seatbelt profile denies network and user-home reads/writes
 outside the private project, bridge, and exact engine/JDK paths. HOME, Java

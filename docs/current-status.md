@@ -24,7 +24,9 @@ contains documentation only.
   writer lock, atomic result/output publication and pagination-bound cursors.
 - Owned-process cancellation, wall/per-function deadlines, bounded facets,
   partial/error envelopes, and explicit rejection of unsupported hard-memory,
-  independent-startup and parallel-worker budgets.
+  independent-startup and parallel-worker budgets. Group cleanup retains
+  the launcher's child identity through signaling and checks budgets before
+  accepting the result.
 - Durable malformed-input, storage, selector, schema, dependency, cached-query
   and process-lifecycle tests; controlled thin/fat64 integration and a clean
   local wheel install. See [CLI validation](cli.md#reproduce-validation).
