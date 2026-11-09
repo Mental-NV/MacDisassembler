@@ -446,7 +446,8 @@ def resume_job(args, project, command):
     if not args.experimental_trusted_input:
         raise Error('isolation_required','Restarting a job requires --experimental-trusted-input',3)
     with project.writer():
-        path, record = jobs.get(project,args.job_id)
+        path,record = jobs.get(project,args.job_id)
+        record = jobs.record_for_resume(path,record)
         mode = record.get('mode')
         schemas = {'analyze':('analysis_request',jobs.ANALYSIS_REQUEST),
                    'import':('import_request',jobs.IMPORT_REQUEST),
@@ -457,8 +458,6 @@ def resume_job(args, project, command):
         request = record.get(key)
         if not isinstance(request,dict) or request.get('schema') != schema:
             raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
-        if record['status'] in jobs.ACTIVE or jobs.leased(path):
-            raise Error('job_resume_ownership','Cannot verify that the previous worker stopped',8)
         if mode == 'import':
             return resume_import(args,project,command,record,request)
         if mode == 'query':

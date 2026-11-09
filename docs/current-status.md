@@ -133,7 +133,11 @@ collections exceed documented bounds despite successful pseudocode output.
   accepted hint revisions. A live cancelled query resumed after a newer
   analysis, label and hint were committed. A repeat read the durable result
   without launching another worker.
-- [ ] Verify worker exit after supervisor loss before automatic restart.
+- [x] Fence a disconnected worker until the launch guard or the same-boot
+  process-group check confirms it has stopped. A live owned Ghidra query
+  outlived its supervisor. The CLI refused replay until the group exited,
+  then replayed successfully. Older disconnected jobs and unverified boot
+  identities remain ineligible.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

@@ -5,6 +5,7 @@ import os
 import re
 import stat
 
+from . import worker_lifecycle
 from .errors import Error
 from .macho import read_regular
 from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity
@@ -96,13 +97,34 @@ def token_for(record):
     return token if isinstance(token, str) and JOB_ID.fullmatch(token) else None
 
 
+def record_for_resume(path, record):
+    if leased(path):
+        raise Error("job_resume_ownership", "Cannot verify that the previous worker stopped", 8)
+    # An owner could have released the launch gate and exited after the
+    # caller first read "starting". Read again once its lease is gone.
+    if record["status"] in ACTIVE:
+        record = load(path)
+        if record["status"] in ACTIVE and not worker_lifecycle.disconnected_exit_confirmed(record):
+            raise Error("job_resume_ownership", "Cannot verify that the previous worker stopped", 8)
+    return record
+
+
 def view(path, record, *, detail=False):
+    lease = record["status"] in ACTIVE and leased(path)
+    if not lease and record["status"] in ACTIVE and record.get("launch_protocol") == worker_lifecycle.PROTOCOL:
+        record = load(path)
     fields = SUMMARY + DETAILS if detail else SUMMARY
     summary = {key: record[key] for key in fields if key in record}
     token = token_for(record)
     active = record["status"] in ACTIVE
-    owned = bool(active and token and leased(path))
-    summary["status"] = "unknown_after_disconnect" if active and not owned else record["status"]
+    owned = bool(token and lease)
+    status = record["status"]
+    if active and not owned:
+        if not lease and worker_lifecycle.disconnected_exit_confirmed(record):
+            status = "stopped_after_disconnect"
+        else:
+            status = "unknown_after_disconnect"
+    summary["status"] = status
     summary["cancellation_requested"] = bool(owned and cancel_requested(path, token))
     if detail:
         deps = record.get("dependencies", {})

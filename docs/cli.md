@@ -420,10 +420,17 @@ result if the original or restarted query already published one. This
 replay leaves the active analysis and annotation revisions intact.
 
 The result and its publication receipt commit together. Repeating a
-successful restart returns the recorded result. An active job or a
-disconnected job with unconfirmed exit is ineligible, as is an older job
-without a recorded request. Analysis restart also checks that its preceding
-active analysis is still current.
+successful restart returns the recorded result. Analysis restart also
+checks that its preceding active analysis is still current.
+
+New Ghidra jobs record the process group before releasing the launcher.
+If the supervisor disconnects during the same macOS boot, `jobs show`
+reports `stopped_after_disconnect` when the CLI can verify that the group
+is gone or that the launch guard never released it. Such jobs can be
+restarted explicitly. A live worker, a job with unconfirmed exit or an
+older job without a recorded request remains ineligible. The process-group
+check requires the recorded macOS boot identity and sends no signal to
+the worker.
 
 Raw bridge JSON and job manifests/logs remain private in the workspace.
 Normalized exports sort function and unordered cross-reference records (retaining

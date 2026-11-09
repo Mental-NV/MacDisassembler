@@ -15,7 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
-from . import jobs
+from . import jobs, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -193,14 +193,19 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
     manifest_path = Path(manifest_path)
     owner = jobs.claim(manifest_path)
     try:
+        gated = manifest.get('mode') in ('import','analyze','query') and 'job_id' in manifest
+        if gated:
+            manifest.update(launch_protocol=worker_lifecycle.PROTOCOL, boot_session_id=worker_lifecycle.boot_session())
         manifest.update(status='starting', argv=argv, timeout_seconds=timeout, started_unix=time.time(), ownership_token=uuid.uuid4().hex)
         write_json(manifest_path, manifest, force=True)
         check_worker_cancellation(manifest_path, manifest)
         with open(log_path, 'xb', buffering=0) as log:
-            proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            proc, gate = worker_lifecycle.start(argv, gated=gated, cwd=cwd, env=env, log=log)
             try:
                 manifest.update(status='running', pid=proc.pid, process_group=proc.pid)
                 write_json(manifest_path, manifest, force=True)
+                if gate is not None:
+                    worker_lifecycle.release(gate)
                 while not worker_exited(proc):
                     check_worker_cancellation(manifest_path, manifest)
                     if time.monotonic()-start > timeout:
@@ -208,6 +213,8 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
                     check_worker_budgets(Path(cwd), Path(log_path), max_log)
                     time.sleep(0.1)
             finally:
+                if gate is not None:
+                    os.close(gate)
                 terminate_owned(proc)
             check_worker_cancellation(manifest_path, manifest)
             check_worker_budgets(Path(cwd), Path(log_path), max_log)
