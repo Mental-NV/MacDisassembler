@@ -13,8 +13,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /opt/homebrew/bin/python3 \
   tests/integration_macscope.py
 ```
 
-- **126 unit tests passed**, 1.637s on the pinned arm64 host. Evidence:
-  `build/cli-unit-tests.txt`. Includes malformed thin/fat/fat64 and app inputs,
+- **126 unit tests passed**, 2.396s on the pinned arm64 host. Evidence:
+  `build/cli-unit-tests-final.txt`. Includes malformed thin/fat/fat64 and app inputs,
   parent-symlink swap, FIFO, encryption/subtype rejection, bounded reads,
   atomic no-replace/force/failure cleanup, writer conflicts, database rollback/
   connection closure, integrity checks, cursor binding, ambiguous selectors,
@@ -26,7 +26,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /opt/homebrew/bin/python3 \
   explicitly selected x86_64 fat64. Every phase-2 public command, JSON
   envelopes, CFG DOT, output overwrite refusal/force, and deterministic
   export bytes were exercised. Evidence:
-  `build/cli-integration-20261109-094732/report.json` and numbered stdout/
+  `build/cli-integration-20261109-095203/report.json` and numbered stdout/
   stderr artifacts. All inputs came from this repository's own calculator.
 - Each case exported **44 functions**, **36/36 requested pseudocode results
   completed**, **8 external/thunk results not requested**, zero native
@@ -43,17 +43,24 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /opt/homebrew/bin/python3 \
   A separate earlier direct API smoke is in `build/cli-query-smoke/`.
 - Actual sandbox probes under the generated worker profile returned EPERM
   for loopback network connection, other user-home reads and writes, while
-  own-workspace reads succeeded. Evidence: `sandbox-verification.json`.
+  own-workspace reads succeeded. Evidence: `build/cli-integration-20261109-094732/sandbox-verification.json`.
   This proves these restrictions, **not full filesystem confinement**.
 - A real import also succeeded in `build/cli Unicode Ω`, verifying non-ASCII
   and space-containing paths. Workspace quotes/backslashes/linebreaks are
   explicitly unsupported before engine invocation.
+- Real Ghidra deadline/interrupt probes returned exit7 and exit130, preserved
+  the prior active snapshot and left no owned process group. Evidence:
+  `build/cli-integration-20261109-094732/timeout-interrupt-verification.json`.
+- The final invocation uses verified `-loader-loadLibraries false`,
+  `-loader-linkExistingProjectLibraries false` and `-loader-reexport false`.
+  No requested loader safety option was skipped. A skipped option now fails
+  closed, instead of relying on an assumed flag spelling.
 
 ## Local timings, not release performance gates
 
-The four import commands took 3.9690, 4.4717, 3.8736 and 4.5955 seconds.
-The four analysis commands took 5.5293, 6.0769, 5.6956 and 6.5848 seconds.
-Successful cached query commands ranged 0.0466–0.0686 seconds, median0.0551s.
+The four import commands took 3.8435, 4.0832, 3.9686 and 4.8150 seconds.
+The four analysis commands took 5.2200, 5.8068, 5.4609 and 16.4262 seconds.
+Successful cached query commands ranged 0.0455–0.1688 seconds, median0.0564s.
 These measurements include CLI process startup; import/analyze also include
 full installed-engine tree hashing. Java user-state/class caches can already
 be warm. They are not OS-cache-cold or cross-machine performance claims.
@@ -73,8 +80,9 @@ build/cli-wheel-env/bin/macscope doctor --json
 
 The local wheel installed and its entrypoint, isolated import, package schemas,
 doctor and cached queries passed without global Python changes or downloaded
-dependencies. Final wheel SHA-256 is recorded beside the generated artifact
-when rebuilt; implementation/checkpoint commits identify the source. No
+dependencies. Final wheel SHA-256:
+`b93e0b805029a2c02e4669d3eee6fc99ebc2d295aa9c661bbbed199daf782783`.
+A checksum file accompanies the generated artifact; commits identify source. No
 Ghidra/JDK files are redistributed in it.
 
 ## Remaining phase-2 and release gates

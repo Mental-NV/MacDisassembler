@@ -179,7 +179,7 @@ def run(project, image, mode, args, deps):
         shutil.copytree(source, engine_dir, symlinks=False)
     argv = ['/usr/bin/sandbox-exec', '-f', str(sandbox), str(g/'support/analyzeHeadless'), str(engine_dir), 'image']
     if mode == 'import':
-        argv += ['-import', str(project.path/'inputs'/(image['image_id']+'.macho')), '-noanalysis', '-loader', 'MachoLoader', '-loader-loadLibraries', 'false', '-loader-linkExistingProjectLibraries', 'false', '-loader-performReexports', 'false']
+        argv += ['-import', str(project.path/'inputs'/(image['image_id']+'.macho')), '-noanalysis', '-loader', 'MachoLoader', '-loader-loadLibraries', 'false', '-loader-linkExistingProjectLibraries', 'false', '-loader-reexport', 'false']
     else:
         argv += ['-process', image['image_id']+'.macho']
         if mode == 'query':
@@ -191,8 +191,14 @@ def run(project, image, mode, args, deps):
     manifest = {'job_id':jobid, 'mode':mode, 'image_id':image['image_id'], 'dependencies':deps, 'limits':{'timeout_seconds':args.timeout,'function_timeout_seconds':args.function_timeout,'max_functions':args.max_functions,'jobs':1,'java_heap_mib':args.heap_mib,'process_memory_limit':None,'sampled_job_storage_bytes':512*1024*1024,'storage_is_hard_quota':False}, 'environment':env, 'sandbox_sha256':digest(sandbox)}
     run_process(argv, cwd=job, env=env, timeout=args.timeout, log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
     try:
+        if b'Skipping unsupported -loader-' in read_regular(job/'launcher.log',8*1024*1024):
+            raise Error('loader_option_unsupported','Pinned loader rejected a requested safety option',4)
         result = json.loads(read_regular(outfile,64*1024*1024))
     except (ValueError, Error) as e:
+        if isinstance(e,Error) and e.code=='loader_option_unsupported':
+            manifest.update(status='failed',error={'code':e.code,'message':str(e)})
+            write_json(job/'job.json',manifest,force=True)
+            raise
         manifest.update(status='failed', error={'code':'bridge_result','message':'Missing, oversized or invalid bridge result'})
         write_json(job/'job.json',manifest,force=True)
         raise Error('bridge_result', 'Worker did not publish a valid bridge result; see private log', 10) from e
