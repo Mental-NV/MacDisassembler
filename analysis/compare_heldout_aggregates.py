@@ -22,7 +22,7 @@ ROUTINES = ("heldout_packet", "heldout_checked")
 BUILDS = tuple(product(("arm64", "x86_64"), ("O0", "O2")))
 STATES = ("sym", "stripped")
 STORE_SOURCES = {"stores": "heldout_store.c", "store-alias": "heldout_store_alias.c",
-                 "arm-vector": "heldout_arm_vector.c"}
+                 "arm-vector": "heldout_arm_vector.c", "vector-mix": "heldout_vector_mix.c"}
 SOURCES = {"aggregate": "heldout_aggregate.c", "arithmetic": "heldout_arithmetic.c",
            "return-width": "heldout_return_width.c", **STORE_SOURCES}
 COMPAT = "aggregate_compat.h"

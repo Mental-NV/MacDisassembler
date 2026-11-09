@@ -69,6 +69,16 @@ class AggregateCompatibilityTests(unittest.TestCase):
         self.assertIn("NEON_ext(auVar1, gh_load_vector(*pauVar2), 9, 1)", code)
         self.assertIn("gh_store_vector(*pauVar2, auVar1);", code)
 
+    def test_byte_shuffle_accepts_a_vector_pointer_parameter_and_a_nested_mask(self):
+        code = lowered("""
+            undefined1 auVar1 [16];
+            auVar1 = pshufb(*param_1, CONCAT88(0x102,0x304));
+            *param_1 = auVar1;
+            return auVar1;
+        """, header="undefined1 [16] FUN_100(undefined1 (*param_1) [16])")
+        self.assertIn("pshufb(gh_load_vector(*param_1), CONCAT88(0x102,0x304))", code)
+        self.assertIn("gh_store_vector(*param_1, auVar1);", code)
+
     def test_does_not_rewrite_a_missing_aggregate_signature_or_unknown_dependency(self):
         with self.assertRaisesRegex(Unsupported, "aggregate_abi_unverified"):
             lowered("return param_1;", header="long FUN_100(long param_1)")

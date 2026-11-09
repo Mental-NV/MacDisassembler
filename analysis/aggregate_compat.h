@@ -101,6 +101,25 @@ static gh_bits NEON_ext(gh_bits first, gh_bits second, unsigned offset, unsigned
     return result;
 }
 
+static gh_bits CONCAT88(uint64_t high, uint64_t low) {
+    return gh_known(((gh_wide)high << 64) | low);
+}
+
+static gh_bits pshufb(gh_bits input, gh_bits controls) {
+    gh_bits result = {0};
+    for (unsigned i = 0; i < 16; ++i) {
+        if (controls.known & (1u << i)) {
+            unsigned char control = (unsigned char)(controls.bits >> (i * 8));
+            if (control & 0x80) {
+                gh_set(&result, i, 1, 0);
+            } else {
+                gh_copy_byte(&result, i, input, control & 15);
+            }
+        }
+    }
+    return result;
+}
+
 static bool SCARRY8(int64_t left, int64_t right) {
     int64_t ignored;
     return __builtin_add_overflow(left, right, &ignored);

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import re
 
-from aggregate_compat import BYTE_VECTORS, POLICY, Unsupported, check_tokens, lower_closure, lower_function, source_parts
+from aggregate_compat import ARM_VECTORS, BYTE_VECTORS, POLICY, Unsupported, check_tokens, lower_closure, lower_function, source_parts
 from audit_core_behavior import complete, core_extents, count_status, inventory, llvm_instructions
 from audit_core_data_references import references as decoded_data_references
 from compare_aggregates import COMPAT, LOWERER
@@ -52,7 +52,8 @@ def compare_format(directory, record, binary, decoded, compiler, sdk, harness, r
                 or not any(row["target_va"] == address for row in targets)):
             raise Unsupported("unverified_stack_guard_linkage")
         if any(intrinsic in body for intrinsic in BYTE_VECTORS):
-            if image["arch"] != "arm64":
+            if (any(intrinsic in body for intrinsic in ARM_VECTORS) and image["arch"] != "arm64"
+                    or "pshufb" in body and image["arch"] != "x86_64"):
                 raise Unsupported("unverified_vector_architecture")
             text, _ = lower_function(text, name, {guard, "___stack_chk_fail"}, aggregate_required=False)
     except Unsupported as error:
