@@ -13,6 +13,11 @@ PAYLOAD = 0x200
 START = 0x100
 
 
+def library_command():
+    lib = struct.pack("<4I",24,0,0,0)+b"/usr/lib/libExample.dylib\0"
+    return command(0xC,lib+bytes((-len(lib))%8))
+
+
 def fixture(pointer_format=6, import_format=1, page_start=START, step=2, bind_ordinal=0):
     symbol = b"_imported\0"
     if import_format == 3:
@@ -28,13 +33,26 @@ def fixture(pointer_format=6, import_format=1, page_start=START, step=2, bind_or
     payload = header+starts+pages+imports+symbol
     length = PAYLOAD+len(payload)
     segment = command(0x19,struct.pack("<16s4Q4I",b"__TEXT",BASE,4096,0,length,7,5,0,0))
-    lib = struct.pack("<4I",24,0,0,0)+b"/usr/lib/libExample.dylib\0"
-    lib = command(0xC,lib+bytes((-len(lib))%8))
     fixups = command(0x80000034,struct.pack("<2I",PAYLOAD,len(payload)))
-    data = bytearray(image(commands=[segment,lib,fixups]))
+    data = bytearray(image(commands=[segment,library_command(),fixups]))
     data.extend(bytes(PAYLOAD-len(data))+payload)
     target = BASE+0x80 if pointer_format==2 else 0x80
     struct.pack_into("<2Q",data,START,target|(step<<51),1<<63|4<<24|bind_ordinal)
+    return bytes(data)
+
+
+def legacy_fixture(*, rebase=b"", bind=b"", weak=b"", lazy=b""):
+    parts = (rebase,bind,weak,lazy,b"")
+    pairs = []
+    offset = PAYLOAD
+    for stream in parts:
+        pairs.extend((offset if stream else 0,len(stream)))
+        offset += len(stream)
+    segment = command(0x19,struct.pack("<16s4Q4I",b"__TEXT",BASE,4096,0,offset,7,5,0,0))
+    streams = command(0x80000022,struct.pack("<10I",*pairs))
+    data = bytearray(image(commands=[segment,library_command(),streams]))
+    data.extend(bytes(PAYLOAD-len(data))+b"".join(parts))
+    struct.pack_into("<Q",data,START,BASE+0x80)
     return bytes(data)
 
 
@@ -76,3 +94,43 @@ class ChainedFixupsTests(unittest.TestCase):
             with self.subTest(code=code), self.assertRaises(Error) as caught:
                 self.decode(data)
             self.assertEqual(caught.exception.code,code)
+
+
+class LegacyFixupsTests(unittest.TestCase):
+    def decode(self, **streams):
+        data = legacy_fixture(**streams)
+        return dyld.fixups(data,{"offset":"0x1000"})
+
+    def test_legacy_lazy_entries_reset_state_and_keep_distinct_rebase_evidence(self):
+        rebase = bytes.fromhex("11 20 80 02 51 00")
+        lazy = b"\x70\x80\x02\x11\x41_first\0\x60\x7d\x90\0"
+        lazy += b"\x70\x88\x02\x3e\x40_second\0\x90\0"
+        weak = b"\x70\x90\x02\x40_weak\0\x90\0"
+        info,rows,gaps = self.decode(rebase=rebase,lazy=lazy,weak=weak)
+        self.assertEqual(info["format"],"legacy")
+        self.assertFalse(gaps)
+        self.assertEqual([row["stream"] for row in rows],
+                         ["rebase","weak_bind","lazy_bind","lazy_bind"])
+        self.assertEqual(rows[0]["va"],rows[2]["va"])
+        self.assertEqual(rows[0]["target_va"],hex(BASE+0x80))
+        self.assertEqual(rows[1]["library_ordinal"],-3)
+        self.assertEqual(rows[2]["import_addend"],-3)
+        self.assertTrue(rows[2]["weak_import"])
+        self.assertEqual(rows[3]["library_ordinal"],-2)
+        self.assertEqual(rows[3]["import_addend"],0)
+
+    def test_legacy_linker_backward_delta_is_bounded(self):
+        # ld encodes a -24-byte ADD_ADDR delta using ten ULEB128 bytes.
+        backward = bytes.fromhex("80 e8 ff ff ff ff ff ff ff ff 01")
+        bind = b"\x11\x40_symbol\0\x70\x90\x02\x90"+backward+b"\x90\0"
+        _,rows,gaps = self.decode(bind=bind)
+        self.assertFalse(gaps)
+        self.assertEqual([row["va"] for row in rows],[hex(BASE+0x110),hex(BASE+0x100)])
+        with self.assertRaises(Error) as caught:
+            self.decode(bind=b"\x70\0"+backward+b"\0")
+        self.assertEqual(caught.exception.code,"legacy_fixup_stream")
+
+    def test_unsupported_opcode_does_not_claim_coverage(self):
+        _,rows,gaps = self.decode(bind=b"\xd0\0")
+        self.assertEqual(rows,[])
+        self.assertEqual(gaps,["bind_opcode_0xd0"])

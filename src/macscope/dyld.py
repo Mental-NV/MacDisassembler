@@ -1,7 +1,8 @@
-"""Decode supported dyld chained fixups from immutable Mach-O bytes."""
+"""Decode supported dyld fixups from immutable Mach-O bytes."""
 import struct
 
 from .errors import Error
+from .dyld_legacy import decode_legacy, library_for_ordinal
 from .macho import thin
 from .macho_load import bounded
 
@@ -10,7 +11,6 @@ MAX_FIXUPS = 10000
 MAX_PAGE_RECORDS = 262144
 POINTER_FORMATS = {2: "DYLD_CHAINED_PTR_64", 6: "DYLD_CHAINED_PTR_64_OFFSET"}
 IMPORT_WIDTHS = {1: 4, 2: 8, 3: 16}
-SPECIAL_LIBRARIES = {0: "self", -1: "main_executable", -2: "flat_lookup", -3: "weak_lookup"}
 
 
 def import_symbol(data, payload, end, table, symbols, count, format_id, index, libraries):
@@ -36,11 +36,9 @@ def import_symbol(data, payload, end, table, symbols, count, format_id, index, l
     name_end = data.find(b"\0",name_start,min(end,name_start+4097))
     if name_end <= name_start:
         raise Error("fixup_symbol", "Chained import symbol is missing or oversized")
-    if ordinal > len(libraries):
-        raise Error("fixup_ordinal", "Chained bind library ordinal exceeds its load-command table")
     return {"symbol": data[name_start:name_end].decode("utf-8","backslashreplace"),
             "library_ordinal": ordinal,
-            "library": libraries[ordinal-1] if ordinal>0 else SPECIAL_LIBRARIES.get(ordinal),
+            "library": library_for_ordinal(ordinal,libraries),
             "weak_import": bool(value >> width & 1), "import_addend": addend}
 
 
@@ -172,6 +170,7 @@ def fixups(data, image):
         raise Error("fixup_layout", "Ambiguous chained fixup payload")
     if extents:
         return decode_chained(data,image,parsed,extents[0])
-    if any(row["kind"]!="export_trie" and row["size"]!="0x0" for row in loader["dyld_streams"]):
-        return {"format":"legacy"}, [], ["legacy_streams"]
+    streams = [row for row in loader["dyld_streams"] if row["kind"]!="export_trie" and row["size"]!="0x0"]
+    if streams:
+        return decode_legacy(data,image,parsed,streams,MAX_FIXUPS)
     return {"format":"none"}, [], []

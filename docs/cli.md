@@ -190,14 +190,21 @@ recorded as extents.
 It decodes `DYLD_CHAINED_PTR_64` and `DYLD_CHAINED_PTR_64_OFFSET` chains with
 uncompressed names and import record formats 1–3. Rebase records carry
 unslid targets. Bind records carry declared symbols, ordinals, weak flags
-and addends, with an unresolved runtime address. Other pointer formats,
-compressed names and legacy opcode streams receive explicit partial
-coverage. No dependencies are loaded. Use `--kind bind|rebase|all`,
+and addends, with an unresolved runtime address. The ordinary 64-bit
+legacy rebase, bind, weak-bind and lazy-bind opcode streams are also
+decoded. Records preserve stream identity where streams share a pointer
+address. Threaded legacy binds, other chained pointer formats, and
+compressed names receive partial coverage. No dependencies are loaded.
+Use `--kind bind|rebase|all`,
 `--limit` and `--cursor` to inspect the evidence.
 
 On 16 owned fixtures, `dyld_info -fixups` agreed on all 3,296 rebase
 addresses/targets and 594 bind addresses/symbols. Those binaries used
 `DYLD_CHAINED_PTR_64_OFFSET` and import format 1.
+Four separately linked owned tools and AppKit binaries using
+`-Wl,-no_fixup_chains` matched Apple tooling on 906 rebases, 142 ordinary
+binds and 38 lazy binds. Synthetic tests cover weak binds and a backward
+address delta emitted by the linker.
 
 `bytes --address 0xVA --length N`
 reads 1–4096 bytes within a single file-backed section of that same slice

@@ -71,7 +71,9 @@ collections exceed documented bounds despite successful pseudocode output.
   16-binary comparison checked 708 function starts and 56 dylib paths.
 - [x] Decode ordinary 64-bit chained bind and rebase pointers from immutable
   slices. The 16 owned inputs matched Apple tool output for 3,890 fixups.
-- [ ] Decode legacy dyld bind/rebase opcodes and expand tested pointer formats.
+- [x] Decode ordinary pointer operations in legacy dyld streams. Four
+  separately linked owned binaries matched Apple tooling on 1,086 fixups.
+- [ ] Expand tested dyld pointer formats and add export-trie decoding.
 - [ ] Add Objective-C/Swift views with source and coverage distinctions.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.
