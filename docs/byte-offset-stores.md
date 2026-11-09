@@ -94,3 +94,43 @@ store patch. The original `coreaction.cc` and `coreaction.hh`
 SHA-256 digests are
 `c41b8f4563591820a8a9904f4b745a631e6470d6484b9967dbe465dc28863876`
 and `4d2b5aacd9d6aed0e98036009042a3f7b37f46888c060933105d3c56f6fbf8f2`.
+
+## Paired overlap results
+
+A clean build reproduced the byte-range executable with SHA-256
+`deec187a2f54c8441b1ad7b26ea284adf9f45d8c6ce423f49dfacceecddff861`.
+The original eight cases that mismatched after the store-only change
+all passed with the byte-range rule. Twenty-four remained outside the
+frozen policy. The reproducer report SHA-256 is
+`642a5b728ea2f0bcb6eb159b05bcb3787a03a9141d30973269668e81c1c9f0e9`.
+
+In the separate held-out fixture, the store-only control mismatched
+in eight overlap cases and passed eight adjacent cases. The byte-range
+candidate passed all 16, with zero mismatches in 164,096 comparisons.
+Sixteen cases retained their unsupported verdicts. Each paired fixture
+preserved all 56 function records, signatures, instructions, CFGs and
+cross references. Each candidate denied the original evaluator root in
+all 24 worker policies. The independent report SHA-256 is
+`3be953fdd46be32b31bd502b840dc752c7c8a07162c062407f62e566eceacbec`.
+
+The byte-range build also passed all 79 calculator CLI checks. All
+664 recovered function records matched the store-printer control,
+including byte-identical pseudocode across the 16 paired captures.
+The strict behavior rerun passed the same 342 of 416 cases. The
+combined report ties the independent held-out capture to the exact
+native and full-tree identities used in the calculator matrix. Its
+SHA-256 is
+`12ba056a64626d07c74b5fa87490ffba49705cb0e5640d373fb3f3bc22646021`.
+
+## Remaining C coverage evidence
+
+Eight O2 state cases still use a 12-byte temporary for a direct
+dispatcher call. Four have a captured dispatcher with a 16-byte
+return form. The other four print a scalar dispatcher return, so
+their aggregate calling convention still needs binary evidence.
+
+The O2 x86_64 formatter prints both a read and a write to
+`_DAT_100001700`. The Mach-O places those 16 bytes in the read-only
+`__TEXT,__const` section. LLVM identifies the direct reference at
+`0x1000008e4` as a `movdqa` load. Supporting the printed
+`pshufb` expression alone would leave the apparent store unresolved.

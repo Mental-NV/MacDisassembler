@@ -1,6 +1,6 @@
 # Current status and remaining gates
 
-Updated 9 November 2026. The specification is a staged roadmap; its historic
+Updated 10 November 2026. The specification is a staged roadmap; its historic
 pre-development wording is not a statement that the current repository still
 contains documentation only.
 
@@ -144,10 +144,14 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Test [byte-offset store rendering](byte-offset-stores.md) across
   the calculator matrix. All 20 alignment failures moved to full
   passes. The independent fixture exposed a separate load-order error.
+- [x] Verify [byte-range overlap handling](byte-offset-stores.md#paired-overlap-results)
+  on the original reproducer and a separate fixture. All eligible
+  overlap and adjacency cases passed. The calculator rerun retained
+  the same 342 full passes.
 - [ ] Meet the recovered-C behavior and testability gates across the full
-  core. The store-printer calculator experiment reached 86.5% of O2
-  routine instances and 67.4% of O2 instruction bytes. Held-out load
-  order, unsupported signatures, vector operations and linkage remain open.
+  core. The store and byte-range calculator experiment reached 86.5%
+  of O2 routine instances and 67.4% of O2 instruction bytes.
+  Unsupported signatures, vector operations and linkage remain open.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the

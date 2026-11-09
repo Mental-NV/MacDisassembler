@@ -211,7 +211,15 @@ def run(args):
         "changed_verdicts": changes,
     }
     if args.heldout_pair:
-        report["heldout"] = compare_heldout(*args.heldout_pair)
+        heldout = compare_heldout(*args.heldout_pair)
+        for side in ("control", "candidate"):
+            fields = (side + "_native_sha256", side + "_tree_sha256")
+            identities = {tuple(row[field] for field in fields) for row in pairs.values()}
+            if len(identities) != 1 or identities != {
+                tuple(row[field] for field in fields) for row in heldout["captures"]
+            }:
+                raise ValueError("Held-out engines differ from the paired calculator engines")
+        report["heldout"] = heldout
     return report
 
 
