@@ -2,7 +2,7 @@
 import re
 
 
-POLICY = "macscope-ghidra-aggregate-compat/7"
+POLICY = "macscope-ghidra-aggregate-compat/8"
 MEMORY_STORES = frozenset(("STORE_LE16", "STORE_LE32", "STORE_LE64"))
 ARM_VECTORS = frozenset(("NEON_rev64", "NEON_ext"))
 BYTE_VECTORS = ARM_VECTORS | {"pshufb"}
@@ -31,6 +31,8 @@ UNDEFINED_STACK = re.compile(r"\bundefined[1248]\s+([a-z]+Stack_[0-9a-f]+)\s*;")
 VECTOR_CAST = r"\*\s*\(\s*undefined1\s*\(\s*\*\s*\)\s*\[16\]\s*\)\s*"
 VECTOR_CALL = re.compile(r"\b(NEON_rev64|NEON_ext|pshufb)\s*\(")
 VECTOR_CAST_LOAD = VECTOR_CAST + r"(?:param_[0-9]+|\([^;{}]+\))"
+SHIFT = r"(0[xX][0-9a-fA-F]{1,2}|0|[1-9][0-9]{0,2})"
+EXTENDED = r"ZEXT(?:412|816)\s*\([^;{},()]+\)\s*<<\s*" + SHIFT
 
 
 class Unsupported(ValueError):
@@ -160,6 +162,8 @@ def lower_function(text, name, functions, aggregate_required, *, initialized_sta
             expression = match[5].strip()
             if expression in undefined:
                 return f"gh_undef(&{match[1]}, {offset}, {width});"
+            if arrays.get(expression) == width:
+                return f"gh_copy_field(&{match[1]}, {offset}, {width}, {expression});"
             return f"gh_set(&{match[1]}, {offset}, {width}, ({expression}));"
 
         body = re.sub(slot + r"\s*=(?!=)\s*([^;{}]+);", store, body)
@@ -183,16 +187,24 @@ def lower_function(text, name, functions, aggregate_required, *, initialized_sta
     def fit(expression, width):
         return expression if width == 16 else f"gh_low_bytes({expression}, {width})"
 
+    def shift_value(expression, width, count):
+        bits = int(count, 0)
+        if bits % 8 or not 0 <= bits < 128:
+            raise Unsupported("unsupported_aggregate_shift")
+        return fit(f"gh_shift({expression}, {bits // 8})", width)
+
     def value(expression):
         expression = expression.strip()
         if re.fullmatch(name_pattern, expression):
             return expression
-        shift = re.fullmatch(rf"({name_pattern})\s*<<\s*(0[xX][0-9a-fA-F]{{1,2}}|0|[1-9][0-9]{{0,2}})", expression)
+        shift = re.fullmatch(rf"({name_pattern})\s*<<\s*{SHIFT}", expression)
         if shift:
-            bits = int(shift[2], 0)
-            if bits % 8 or not 0 <= bits < 128:
-                raise Unsupported("unsupported_aggregate_shift")
-            return fit(f"gh_shift({shift[1]}, {bits // 8})", arrays[shift[1]])
+            return shift_value(shift[1], arrays[shift[1]], shift[2])
+        extended = re.fullmatch(EXTENDED, expression)
+        if extended:
+            width = 12 if expression.startswith("ZEXT412") else 16
+            operand = fit(f"gh_known({expression.split('<<', 1)[0].rstrip()})", width)
+            return shift_value(operand, width, extended[1])
         call = CALL.match(expression)
         if call and (call[1] in functions or call[1] in BYTE_VECTORS or call[1] == "CONCAT88"):
             return expression
@@ -200,6 +212,8 @@ def lower_function(text, name, functions, aggregate_required, *, initialized_sta
             return f"gh_known(({expression}))"
         raise Unsupported("unsupported_aggregate_expression")
 
+    body = re.sub(rf"(\(\s*)({name_pattern})\s*=\s*({EXTENDED})\s*,",
+                  lambda m: f"{m[1]}{m[2]} = {fit(value(m[3]), arrays[m[2]])},", body)
     body = re.sub(rf"\b({name_pattern})\s*=(?!=)\s*([^;{{}}]+);",
                   lambda m: f"{m[1]} = {fit(value(m[2]), arrays[m[1]])};", body)
     if result_width is not None:
@@ -213,7 +227,7 @@ def lower_function(text, name, functions, aggregate_required, *, initialized_sta
     return f"{return_type} {name}({params})\n{{{body}}}\n", arity
 
 
-def lower_closure(root, records, expected_arity, *, aggregate_required=True):
+def lower_closure(root, records, expected_arity, *, aggregate_required=True, helpers=None):
     """Resolve direct calls to their captured definitions, with no oracle stubs."""
     emitted, active = {}, set()
 
@@ -226,12 +240,19 @@ def lower_closure(root, records, expected_arity, *, aggregate_required=True):
             raise Unsupported("dependency_limit")
         active.add(name)
         body = source_parts(records[name], name)[2]
-        lowered, arity = lower_function(records[name], name, records.keys(), aggregate_required and name == root)
+        bindings = helpers if name == root and helpers else {}
+        lowered, arity = lower_function(records[name], name, records.keys() | bindings.keys(),
+                                        aggregate_required and name == root)
         if name == root and arity != expected_arity:
             raise Unsupported("unsupported_root_arity")
         for call in dict.fromkeys(CALL.findall(body)):
             if call in records:
                 visit(call)
+            elif call in bindings:
+                definition, dependencies = bindings[call]
+                for dependency in dependencies:
+                    visit(dependency)
+                lowered = definition + "\n" + lowered
         active.remove(name)
         emitted[name] = lowered
 

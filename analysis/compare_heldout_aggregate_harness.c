@@ -7,6 +7,10 @@
 
 _Static_assert(sizeof(packet_t) == 16 && offsetof(packet_t, flags) == 8, "Unexpected packet layout");
 
+#if DISPATCH
+packet_t heldout_dispatch(char selector, uint64_t left, uint64_t right);
+#endif
+
 static uint64_t seed = UINT64_C(0x313A5BCF76D0914D);
 static unsigned mismatches, undefined_results, unspecified_padding, first_mismatch;
 
@@ -17,8 +21,11 @@ static uint64_t next_word(void) {
     return seed * UINT64_C(0x2545F4914F6CDD1D);
 }
 
-static void compare(unsigned ordinal, uint64_t left, uint64_t right) {
-#if CHECKED
+static void compare(unsigned ordinal, int selector, uint64_t left, uint64_t right) {
+#if DISPATCH
+    packet_t want = heldout_dispatch((char)selector, left, right);
+    gh_bits got = RECOVERED((char)selector, left, right);
+#elif CHECKED
     int64_t a, b;
     memcpy(&a, &left, sizeof(a));
     memcpy(&b, &right, sizeof(b));
@@ -47,14 +54,27 @@ int main(void) {
     };
     const size_t length = sizeof(edges) / sizeof(edges[0]);
     unsigned directed = 0;
-    for (size_t i = 0; i < length; ++i) {
-        for (size_t j = 0; j < length; ++j) {
-            compare(directed++, edges[i], edges[j]);
+#if DISPATCH
+    for (int selector = 0; selector < 256; ++selector) {
+        for (size_t i = 0; i < length; ++i) {
+            compare(directed++, selector, edges[i], edges[(i + selector) % length]);
         }
     }
+#else
+    for (size_t i = 0; i < length; ++i) {
+        for (size_t j = 0; j < length; ++j) {
+            compare(directed++, 0, edges[i], edges[j]);
+        }
+    }
+#endif
     for (unsigned i = 0; i < 10000; ++i) {
         uint64_t left = next_word(), right = next_word();
-        compare(directed+i, left, right);
+#if DISPATCH
+        int selector = i % 2 ? 'A' + next_word() % 6 : (uint8_t)next_word();
+#else
+        int selector = 0;
+#endif
+        compare(directed+i, selector, left, right);
     }
     printf("{\"directed\":%u,\"seeded\":10000,\"mismatches\":%u,"
            "\"first_mismatch\":%u,\"undefined_results\":%u,\"unspecified_padding\":%u}\n",

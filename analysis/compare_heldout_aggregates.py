@@ -8,8 +8,9 @@ from pathlib import Path
 import subprocess
 
 from aggregate_compat import POLICY, Unsupported, lower_closure, source_parts
-from audit_core_behavior import complete
+from audit_core_behavior import complete, decode_instructions
 from compare_heldout_switch import PROFILES, truth_for
+from dispatch_linkage import bind_dispatch, table_targets
 from prototype_experiment import ROOT
 from recovered_compare import run_candidate
 from reference_coverage import xcrun
@@ -19,6 +20,8 @@ from macscope.macho import thin
 
 
 ROUTINES = ("heldout_packet", "heldout_checked")
+DISPATCH = "heldout_dispatch"
+DISPATCH_SOURCE = DISPATCH + ".c"
 BUILDS = tuple(product(("arm64", "x86_64"), ("O0", "O2")))
 STATES = ("sym", "stripped")
 STORE_SOURCES = {"stores": "heldout_store.c", "store-alias": "heldout_store_alias.c",
@@ -26,7 +29,7 @@ STORE_SOURCES = {"stores": "heldout_store.c", "store-alias": "heldout_store_alia
                  "readonly-shuffle": "heldout_readonly_shuffle.c",
                  "vector-slices": "heldout_vector_slices.c"}
 SOURCES = {"aggregate": "heldout_aggregate.c", "arithmetic": "heldout_arithmetic.c",
-           "return-width": "heldout_return_width.c", **STORE_SOURCES}
+           "return-width": "heldout_return_width.c", "dispatch": DISPATCH_SOURCE, **STORE_SOURCES}
 COMPAT = "aggregate_compat.h"
 FROZEN = (COMPAT, "aggregate_compat.py", "compare_heldout_aggregates.py",
           "compare_heldout_switch.py", "recovered_compare.py")
@@ -41,7 +44,9 @@ def fixture_contract(source):
 def freeze(source):
     revision = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
     files = {}
-    for name in (source, *fixture_contract(source), *FROZEN):
+    dispatch_files = ("dispatch_linkage.py", "audit_core_behavior.py", "audit_core_data_references.py",
+                      "audit_core_instructions.py", "score_discovery.py") if source == DISPATCH_SOURCE else ()
+    for name in (source, *fixture_contract(source), *FROZEN, *dispatch_files):
         committed = subprocess.check_output(["git", "-C", ROOT, "show", f"{revision}:analysis/{name}"])
         if committed != read_bytes(ROOT / "analysis" / name):
             raise ValueError("The held-out contract must match a committed revision: " + name)
@@ -144,14 +149,21 @@ def capture(output, evaluator, inputs, ghidra, java_home, origin=None):
             for variant, state, profile_name, name in paths]
 
 
-def evaluate(directory, routine, record, definitions, compiler, sdk, files, source):
+def evaluate(directory, routine, record, definitions, compiler, sdk, files, source, *, dispatch=None):
+    helpers, arity, directed = None, 2, 256
     try:
-        lowered, dependencies = lower_closure(record["name"], definitions, 2)
+        if dispatch is not None:
+            names_by_address, layout, instructions = dispatch
+            definitions, helpers = bind_dispatch(record, definitions, names_by_address, layout, instructions)
+            arity, directed = 3, 4096
+        lowered, dependencies = lower_closure(record["name"], definitions, arity, helpers=helpers)
     except Unsupported as error:
         return {"status": "not_testable", "reason": str(error)}
     directory.mkdir()
     (directory / "candidate.c").write_text(lowered)
     flags = ["-fsanitize=address", f"-DRECOVERED={record['name']}", f"-DCHECKED={int(routine == ROUTINES[1])}"]
+    if dispatch is not None:
+        flags.append("-DDISPATCH=1")
     if source in STORE_SOURCES.values():
         _, parameters, _, _ = source_parts(record["pseudocode"], record["name"])
         pointer = "*" in parameters.split(",", 1)[0]
@@ -162,8 +174,9 @@ def evaluate(directory, routine, record, definitions, compiler, sdk, files, sour
     result.update(lowered_sha256=sha(lowered.encode()), captured_definitions=dependencies)
     counts = result.get("results")
     if counts is not None:
-        if counts["directed"] != 256 or counts["seeded"] != 10000 or any(
-            not 0 <= counts[key] <= 10256 for key in ("mismatches", "undefined_results", "unspecified_padding")
+        if counts["directed"] != directed or counts["seeded"] != 10000 or any(
+            not 0 <= counts[key] <= directed + 10000
+            for key in ("mismatches", "undefined_results", "unspecified_padding")
         ):
             raise ValueError("Evaluator did not complete the declared held-out domain")
         result["status"] = ("undefined_result" if counts["undefined_results"]
@@ -174,10 +187,17 @@ def evaluate(directory, routine, record, definitions, compiler, sdk, files, sour
 def score(output, evaluator, inputs, compiler, sdk, files, source):
     plan = read_json(output / "frozen-plan.json")
     frozen = read_json(output / "frozen-captures.json")
-    truth = {}
+    expected = {(f"{arch}-{opt}", state, profile) for (arch, opt), state, profile in
+                product(BUILDS, STATES, PROFILES)}
+    observed = {(row["variant"], row["symbols"], row["profile"]) for row in frozen}
+    if observed != expected or len(frozen) != len(expected):
+        raise ValueError("Incomplete or duplicate held-out captures")
+    routines = (DISPATCH,) if source == DISPATCH_SOURCE else ROUTINES
+    truth, tables = {}, {}
+    decoder = xcrun("--find", "llvm-objdump") if source == DISPATCH_SOURCE else None
     for arch, opt in BUILDS:
         variant = f"{arch}-{opt}"
-        addresses, digests = truth_for(evaluator, inputs, variant, ROUTINES)
+        extents, digests = truth_for(evaluator, inputs, variant, routines, include_extents=True)
         if digests != plan["inputs"][variant]:
             raise ValueError("Captured bytes differ from the frozen inputs")
         paths = [inputs / variant / state for state in STATES]
@@ -186,9 +206,19 @@ def score(output, evaluator, inputs, compiler, sdk, files, source):
             raise ValueError("Stripping changed linker function starts")
         nm = xcrun("--find", "nm")
         names = [subprocess.check_output([nm, "-j", path], text=True, timeout=10).splitlines() for path in paths]
-        if any("_" + routine not in names[0] or "_" + routine in names[1] for routine in ROUTINES):
+        if any("_" + routine not in names[0] or "_" + routine in names[1] for routine in routines):
             raise ValueError("Unexpected held-out symbol state")
-        truth[variant] = addresses
+        truth[variant] = {routine: hex(entry) for routine, (entry, _) in extents.items()}
+        if decoder:
+            for state, path in zip(STATES, paths):
+                binary = read_bytes(path)
+                if sha(binary) != digests[state]:
+                    raise ValueError("Held-out table bytes differ from the frozen image")
+                decoded = decode_instructions(path, binary, decoder, extents)[DISPATCH]
+                try:
+                    tables[variant, state] = {"status": "verified", **table_targets(binary, decoded)}, decoded
+                except Unsupported as error:
+                    tables[variant, state] = {"status": "unsupported", "reason": str(error)}, decoded
 
     results = []
     for row in frozen:
@@ -200,21 +230,33 @@ def score(output, evaluator, inputs, compiler, sdk, files, source):
                 or identity["engine"]["native_decompiler_sha256"] != plan["native_sha256"]
                 or snapshot["image"]["sha256"] != plan["inputs"][variant][state]):
             raise ValueError("Export differs from the frozen capture")
-        records = {f["entry_va"]: f for f in snapshot["functions"] if complete(f)}
+        records = {f["entry_va"]: f for f in snapshot["functions"]
+                   if complete(f) and not f["is_external"] and not f["is_thunk"]}
         addresses = truth[variant]
-        definitions = {records[entry]["name"]: records[entry]["pseudocode"]
-                       for entry in addresses.values() if entry in records}
+        dispatch, layout = None, None
+        linkage = list(addresses.values())
+        if decoder:
+            layout, decoded = tables[variant, state]
+            if layout["status"] == "verified":
+                linkage.extend(slot["target_va"] for slot in layout["slots"])
+                dispatch = {entry: records[entry]["name"] for entry in linkage if entry in records}, layout, decoded
+        definitions = {records[entry]["name"]: records[entry]["pseudocode"] for entry in linkage if entry in records}
         for routine, entry in addresses.items():
             record = records.get(entry)
             result = {"status": "not_testable", "reason": "Missing complete pseudocode"}
-            if record is not None:
+            if record is not None and (layout is None or dispatch is not None):
                 directory = output / (Path(row["file"]).stem + "-" + routine)
-                result = evaluate(directory, routine, record, definitions, compiler, sdk, files, source)
+                result = evaluate(directory, routine, record, definitions, compiler, sdk, files, source,
+                                  dispatch=dispatch)
                 result["pseudocode_sha256"] = sha(record["pseudocode"].encode())
+            if layout is not None:
+                result["dispatch_table"] = layout
+                if record is not None and dispatch is None:
+                    result["reason"] = layout["reason"]
             results.append(dict(row, analysis_id=snapshot["analysis_id"], routine=routine, entry=entry, **result))
     counts = dict(Counter(row["status"] for row in results))
     return {"schema": "macscope-heldout-aggregate/1", "counts": counts, "results": results,
-            "status": "passed" if counts == {"passed": len(BUILDS)*len(STATES)*len(PROFILES)*len(ROUTINES)} else "partial",
+            "status": "passed" if counts == {"passed": len(BUILDS)*len(STATES)*len(PROFILES)*len(routines)} else "partial",
             "plan_sha256": sha(read_bytes(output / "frozen-plan.json")),
             "captures_sha256": sha(read_bytes(output / "frozen-captures.json"))}
 

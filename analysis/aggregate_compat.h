@@ -48,6 +48,12 @@ static void gh_set(gh_bits *value, unsigned offset, unsigned width, gh_wide bits
     value->known |= gh_byte_mask(offset, width);
 }
 
+static void gh_copy_field(gh_bits *dest, unsigned offset, unsigned width, gh_bits source) {
+    unsigned mask = gh_byte_mask(offset, width);
+    gh_set(dest, offset, width, source.bits);
+    dest->known = (dest->known & ~mask) | ((source.known << offset) & mask);
+}
+
 static gh_wide gh_read(gh_bits value, unsigned offset, unsigned width) {
     unsigned mask = gh_byte_mask(offset, width);
     if ((value.known & mask) != mask) {

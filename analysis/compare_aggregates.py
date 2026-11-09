@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 
 from aggregate_compat import POLICY, Unsupported, lower_closure
-from audit_core_behavior import AGGREGATES, complete, core_extents, inventory, llvm_instructions, recovered_name
-from prototype_experiment import ROOT
+from audit_core_behavior import (AGGREGATES, complete, core_extents, decode_instructions, inventory,
+                                llvm_instructions, recovered_name)
+from dispatch_linkage import bind_dispatch, table_targets
+from prototype_experiment import ROOT, fixture_input
 from recovered_compare import SOURCE_FILES, run_candidate
 from reference_coverage import xcrun
 from score_discovery import verified_captures
@@ -23,12 +25,20 @@ ROUTINES = (
 )
 COMPAT = ROOT / "analysis" / "aggregate_compat.h"
 LOWERER = ROOT / "analysis" / "aggregate_compat.py"
+DISPATCH_LINKER = ROOT / "analysis" / "dispatch_linkage.py"
 HARNESS = ROOT / "analysis" / "compare_aggregate_harness.c"
+DISPATCH = "calc_dispatch_table"
 
 
-def compare(directory, routine, kind, arity, directed, name, source, compiler, sdk, harness, references):
+def compare(directory, routine, kind, arity, directed, name, source, compiler, sdk, harness, references,
+            *, dispatch=None):
+    definitions = source
     try:
-        lowered, linkage = lower_closure(name, source, arity)
+        helpers = None
+        if dispatch is not None:
+            record, names_by_address, layout, instructions = dispatch
+            definitions, helpers = bind_dispatch(record, source, names_by_address, layout, instructions)
+        lowered, linkage = lower_closure(name, definitions, arity, helpers=helpers)
     except Unsupported as error:
         return {"status": "not_testable", "reason": str(error)}
     directory.mkdir(mode=0o700)
@@ -66,12 +76,13 @@ def run(args):
     compiler, decoder = xcrun("--find", "clang"), xcrun("--find", "llvm-objdump")
     sdk = xcrun("--sdk", "macosx", "--show-sdk-path")
     output.mkdir(mode=0o700)
-    captures, decodes = [], {}
+    captures, decodes, tables = [], {}, {}
     report = {
         "schema": "macscope-aggregate-behavior/1", "policy": POLICY, "status": "failed",
         "source_sha256": source_hashes, "captures": captures,
         "matrix_report_sha256": sha(read_bytes(args.profile_matrix / "report.json")),
         "lowerer_sha256": sha(read_bytes(LOWERER)), "compat_sha256": sha(references[COMPAT.name]),
+        "dispatch_linker_sha256": sha(read_bytes(DISPATCH_LINKER)), "decoder_sha256": engine.digest(Path(decoder)),
         "harness_sha256": sha(harness), "compiler_sha256": engine.digest(Path(compiler)),
     }
     try:
@@ -83,19 +94,34 @@ def run(args):
             extents = core_extents(truth)
             if case not in decodes:
                 decodes[case] = llvm_instructions(args.fixture_build_root, case, decoder, extents)
+            if DISPATCH in extents and (case, state) not in tables:
+                path, binary, _ = fixture_input(args.fixture_build_root, case, symbols=state)
+                instructions = decode_instructions(path, binary, decoder, {DISPATCH: extents[DISPATCH]})[DISPATCH]
+                try:
+                    layout = {"status": "verified", **table_targets(binary, instructions)}
+                except Unsupported as error:
+                    layout = {"status": "unsupported", "reason": str(error)}
+                tables[case, state] = layout, instructions
             rows, records = inventory(snapshot, extents, decodes[case])
             names = {routine: recovered_name(record, routine) for routine, record in records.items() if complete(record)}
             if len(set(names.values())) != len(names):
                 raise ValueError("Recovered names are ambiguous within the captured cohort")
             source = {name: records[routine]["pseudocode"] for routine, name in names.items()}
+            names_by_address = {records[routine]["entry_va"]: name for routine, name in names.items()}
             results = {}
             for kind, (routine, arity, directed) in enumerate(ROUTINES, 1):
                 row = results[routine] = dict(rows[routine])
                 if routine not in names:
                     continue
+                dispatch = None
+                if routine == DISPATCH:
+                    layout, instructions = tables[case, state]
+                    row["dispatch_table"] = layout
+                    if layout["status"] == "verified":
+                        dispatch = records[routine], names_by_address, layout, instructions
                 directory = output / f"{case}-{state}-{profile.replace('/', '-')}-{routine}"
                 row.update(compare(directory, routine, kind, arity, directed, names[routine], source,
-                                   compiler, sdk, harness, references))
+                                   compiler, sdk, harness, references, dispatch=dispatch))
             captures.append(dict(provenance, analysis_id=snapshot["analysis_id"], routines=results))
         rows = [row for capture in captures for row in capture["routines"].values()]
         report["counts"] = dict(Counter(row["status"] for row in rows))

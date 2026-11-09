@@ -65,7 +65,7 @@ def eligible(record, arity, dependencies=()):
     return cursor == len(body) and depth == 0
 
 
-def truth_for(evaluator, input_dir, variant, routines=ROUTINES):
+def truth_for(evaluator, input_dir, variant, routines=ROUTINES, *, include_extents=False):
     binary = read_bytes(evaluator / variant / "Fixture")
     metadata = thin(binary)
     d_sym = evaluator / variant / "Fixture.dSYM/Contents/Resources/DWARF/Fixture"
@@ -80,8 +80,8 @@ def truth_for(evaluator, input_dir, variant, routines=ROUTINES):
                                {int(addr, 16) for addr in starts["addresses"]}, text)
     addresses = {}
     for routine in routines:
-        address, = [hex(entry) for entry, (_, names) in truth.items() if routine in names]
-        addresses[routine] = address
+        (entry, end), = [(entry, end) for entry, (end, names) in truth.items() if routine in names]
+        addresses[routine] = (entry, end) if include_extents else hex(entry)
     digests = {}
     for state in ("sym", "stripped"):
         payload = read_bytes(input_dir / variant / state)

@@ -57,6 +57,29 @@ class AggregateCompatibilityTests(unittest.TestCase):
         code = lowered("return ZEXT816(param_1);", header="undefined1 [12] FUN_100(long param_1)")
         self.assertIn("return gh_low_bytes(gh_known((ZEXT816(param_1))), 12);", code)
 
+    def test_twelve_byte_shift_and_field_copy_preserve_width(self):
+        code = lowered("""
+            undefined1 auVar1 [16];
+            undefined1 auVar2 [12];
+            auVar2 = ZEXT412(3) << 0x40;
+            auVar1._0_12_ = auVar2;
+            return auVar1;
+        """)
+        self.assertIn("gh_shift(gh_low_bytes(gh_known(ZEXT412(3)), 12), 8)", code)
+        self.assertIn("gh_copy_field(&auVar1, 0, 12, auVar2);", code)
+        with self.assertRaisesRegex(Unsupported, "unsupported_aggregate_shift"):
+            lowered("undefined1 auVar1 [12]; auVar1 = ZEXT412(3) << 128; return auVar1;")
+
+    def test_shifted_aggregate_assignment_keeps_the_comma_guard(self):
+        code = lowered("""
+            undefined1 auVar1 [16];
+            if (param_1 && (auVar1 = ZEXT816(3) << 0x40, param_1 == 4)) {
+                return auVar1;
+            }
+            return ZEXT816(0);
+        """)
+        self.assertIn("param_1 && (auVar1 = gh_shift(gh_known(ZEXT816(3)), 8), param_1 == 4)", code)
+
     def test_byte_vector_pointer_forms_preserve_the_source_address(self):
         code = lowered("""
             undefined1 (*pauVar2) [16];

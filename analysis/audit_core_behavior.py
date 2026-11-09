@@ -179,6 +179,10 @@ def core_extents(truth):
 
 def llvm_instructions(build, case, decoder, extents, *, kind="tool"):
     path, binary, _ = fixture_input(build, case, kind=kind)
+    return decode_instructions(path, binary, decoder, extents)
+
+
+def decode_instructions(path, binary, decoder, extents):
     metadata = thin(binary)
     (text_start, _), code = text_bytes(binary, metadata)
     section, = [s for s in metadata["sections"] if (s["segment"], s["name"]) == ("__TEXT", "__text")]
@@ -204,7 +208,7 @@ def llvm_instructions(build, case, decoder, extents, *, kind="tool"):
             if not match:
                 continue
             entry, raw, mnemonic = int(match[1], 16), bytes.fromhex(match[2]), match[3]
-            if case.endswith("-arm64"):
+            if metadata["arch"] == "arm64":
                 raw = raw[::-1]
             addresses = set(range(entry, entry + len(raw)))
             if addresses <= data_bytes:
