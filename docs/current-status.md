@@ -152,11 +152,15 @@ collections exceed documented bounds despite successful pseudocode output.
   in a separate full Ghidra build. The parameter-inference O2 tool
   captures exceeded both 90% thresholds in each symbol state and on
   both architectures.
+- [x] Verify [immutable dispatch tables](dispatch-tables.md) and score the
+  recovered C in all arm64 and x86_64 O0 calculator captures and the
+  arm64 O2 captures. The independent fixture verified the table entries
+  and exposed separate recovered-C blockers.
 - [ ] Meet the recovered-C behavior and testability gates across the full
-  core. The separate baseline O2 score remains at 88.5% of routines
-  and 84.3% of instruction bytes in each symbol state. The all-routine
-  O0 requirement, indirect dispatch and unresolved call signatures
-  remain open.
+  core. The separate baseline O2 score reached 47/52 routines and
+  3,689/4,269 instruction bytes in each symbol state. Parameter inference
+  reached 51/52 routines and 4,206/4,269 bytes. The all-routine O0
+  requirement and automatic x86_64 O2 return recovery remain open.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
