@@ -182,11 +182,16 @@ collections exceed documented bounds despite successful pseudocode output.
   52/52 routines and 8,644/8,644 instruction bytes in each symbol
   state with separate opt-in fresh queries. All eight independent
   observers passed and all eight controls declined.
-- [ ] Meet the O0 recovered-C behavior and testability gate under
-  baseline. The saved captures pass 41/52 routines and 5,360/8,644
-  bytes in each symbol state. The fresh scalar result raises that to
-  42/52 routines and 5,900/8,644 bytes. The remaining baseline
-  failures include direct-call arity and parameter type errors.
+- [x] Meet the O0 calculator behavior gate under baseline on the
+  separately selected experimental engine. [Callee parameter recovery](callee-parameters.md)
+  and the scalar formatter query bring the installed CLI to 52/52
+  routines and 8,644/8,644 bytes in each symbol state. The saved
+  captures pass 41/52 routines and 5,360/8,644 bytes.
+- [ ] Recover the independent fixture's observed one-register return
+  through its wrapper. The [callee parameter queries](callee-parameters.md#installed-cli-validation)
+  recover both call interfaces, but the wrapper still prints as `void`
+  on both architectures. An assisted diagnostic restored the result
+  and passed all four captures.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
@@ -200,9 +205,16 @@ collections exceed documented bounds despite successful pseudocode output.
   [patch evaluation](heldout-switch.md#upstream-patch-evaluation).
 - [ ] Validate a released patched engine before changing the default pin.
   The installed 12.2 engine continues to report the affected results as partial.
+  The latest published release still showed 12.2 on 10 November 2026,
+  with the switch regression assigned to 12.2.1.
+  [Ghidra release](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.2_build)
+  · [Switch regression](https://github.com/NationalSecurityAgency/ghidra/issues/9996)
 - [x] Exercise data-only parsers with 10,350 seeded Mach-O mutations and
   10,000 bundle plist mutations. Deep binary plist nesting, unexpected
   XML keys and unknown encodings now return typed `bundle_plist` errors.
+- [x] Exercise [dyld and Objective-C metadata payloads](cli.md#targeted-malformed-mach-o-payloads)
+  with 20,480 targeted mutations on owned calculator copies. Every
+  mutation returned a complete or partial result or a typed error.
 - [x] List and inspect worker jobs and request cancellation through their
   live owner. A second CLI process cancelled an owned calculator analysis
   while preserving its previously committed snapshot.

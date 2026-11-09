@@ -230,8 +230,9 @@ policy. The report SHA-256 is
 
 See [CLI instructions](cli.md#experimental-binary-derived-parameter-inference)
 for the matrix command and [the earlier research review](decompiler-review.md)
-for the callee-only experiment. The new production profile does not expose
-manual prototype injection or the targeted callee-only operation.
+for the callee-only experiment. The installed
+[query-scoped callee parameter option](callee-parameters.md) runs
+separately from the whole-program profile.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -v

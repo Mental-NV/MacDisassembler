@@ -438,6 +438,20 @@ Mach-O binding for the libSystem stack-check failure import.
 `origin.scalar_signature_recovery` records the applied call sites and
 ABI or the reason recovery was skipped. [Scalar signature validation](scalar-call-signatures.md)
 
+To infer parameters for verified direct callees of one selected function,
+use a separate fresh query.
+
+```sh
+macscope decompile --project workspaces/calculator --arch arm64 \
+  --name _calc_engine_input_op --fresh --recover-callee-parameters \
+  --experimental-trusted-input --json
+```
+
+The bridge uses Ghidra's native register-parameter inference along
+verified call paths. The result records the applied sites or skip
+reasons in `origin.callee_parameter_recovery`.
+[Scope and validation](callee-parameters.md)
+
 Cached and fresh results report partial coverage when a recorded computed
 jump lacks a destination or Ghidra emits an explicit jump-recovery warning.
 The original pseudocode, edges, and printer status remain available.
@@ -649,6 +663,26 @@ No source/dSYM discovery, dependency execution, arbitrary user scripts,
 network symbol fetches, input execution, remote model calls, or automatic
 installs are part of the CLI. Installed dependencies themselves remain a
 trusted part of the execution environment.
+
+### Targeted malformed Mach-O payloads
+
+The installed data-only parsers processed 20,480 seeded mutations in
+owned arm64 and x86_64 calculator copies. A bounded worker denied network
+access and user-home data reads. Each fixture and parser pair used 2,048
+mutations with one to four byte flips inside a fixup, export-trie, or
+Objective-C metadata extent. The random seed was `0x67686472612D6F30`.
+The worker checked that the staged inputs retained their original bytes.
+
+| Parser | Complete | Partial | Typed errors |
+| --- | ---: | ---: | ---: |
+| Dyld fixups | 3,362 | 856 | 3,974 |
+| Dyld exports | 2,289 | 383 | 5,520 |
+| Objective-C methods | 2,482 | 292 | 1,322 |
+
+The trial calls the installed parser entry points and measures this
+sample of payloads. The local report at
+`/private/tmp/macscope-baseline-callees.89xYWz/parser-audit/report.json`
+has SHA-256 `447a7877637d6ca538063aa84742774d302826137286f903de4f4f7706f0758f`.
 
 ## Envelopes, errors and explicit omissions
 

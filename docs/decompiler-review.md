@@ -85,7 +85,8 @@ experiment changed one saved signature and four caller pseudocode bodies.
 The narrower experiment is the demonstrated option for this diagnosed
 mismatch. Neither approach is enabled automatically. The later alternate CLI
 profile provides an explicit, versioned whole-program option with separate
-provenance; the targeted callee commit remains research-only.
+provenance. The installed CLI also has a separate
+[query-scoped callee parameter option](callee-parameters.md).
 
 ## Repeat the read-only instruction check
 
