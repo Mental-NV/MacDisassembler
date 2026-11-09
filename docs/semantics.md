@@ -458,3 +458,7 @@ from the CLI score. The saved Programs retained their hashes.
 The local report in
 `/private/tmp/macscope-byte-slices.LyvPPJ/prototype-probe.json` has
 SHA-256 `1c5954a7808dfbebb94dc7b2759c02195d92911a544cc9b78fed8ad4fc956ce6`.
+
+
+The [installed scalar recovery](scalar-call-signatures.md) subsequently
+verified both routines under parameter inference in both symbol states.

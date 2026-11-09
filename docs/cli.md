@@ -424,6 +424,20 @@ checking argument storage and agreement on the return ABI.
 skip reason. The option uses its own query, separate from dispatch
 recovery and accepted type hints. [Direct-call validation](direct-signatures.md)
 
+For a supported scalar call, request scalar signature recovery in its
+own fresh query.
+
+```sh
+macscope decompile --project workspaces/calculator --arch x86_64 \
+  --name _calc_engine_input_op --fresh --recover-scalar-call-signatures \
+  --experimental-trusted-input --json
+```
+
+The policy verifies an observed full-width x86_64 result or the arm64
+Mach-O binding for the libSystem stack-check failure import.
+`origin.scalar_signature_recovery` records the applied call sites and
+ABI or the reason recovery was skipped. [Scalar signature validation](scalar-call-signatures.md)
+
 Cached and fresh results report partial coverage when a recorded computed
 jump lacks a destination or Ghidra emits an explicit jump-recovery warning.
 The original pseudocode, edges, and printer status remain available.

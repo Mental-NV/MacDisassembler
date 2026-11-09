@@ -177,10 +177,16 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Validate [O0 byte-array compatibility](semantics.md#o0-byte-array-compatibility)
   on all 416 saved calculator instances. Eight previously untestable
   instances passed with zero mismatches.
-- [ ] Meet the O0 recovered-C behavior and testability gate across the
-  full core. The saved captures pass 41/52 routines and 5,360/8,644
-  bytes under baseline and 50/52 routines and 7,869/8,644 bytes under
-  parameter inference in each symbol state.
+- [x] Validate [scalar call signature recovery](scalar-call-signatures.md)
+  in the installed CLI. The O0 parameter-inference profile reaches
+  52/52 routines and 8,644/8,644 instruction bytes in each symbol
+  state with separate opt-in fresh queries. All eight independent
+  observers passed and all eight controls declined.
+- [ ] Meet the O0 recovered-C behavior and testability gate under
+  baseline. The saved captures pass 41/52 routines and 5,360/8,644
+  bytes in each symbol state. The fresh scalar result raises that to
+  42/52 routines and 5,900/8,644 bytes. The remaining baseline
+  failures include direct-call arity and parameter type errors.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
