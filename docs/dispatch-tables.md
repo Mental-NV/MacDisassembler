@@ -192,4 +192,6 @@ The installed wheel SHA-256 is
 `5779fd0c39876cda7205283ad409a241eda0e4479953d8bbea5adc113d2cf92b`.
 The local validation report SHA-256 is
 `666414ef6ca2c7353f2f0de823243f094d4acb2311b7443f45aee99f0c4e4566`.
+Both baseline dispatch queries subsequently passed on a separate full
+engine with the [wide signed division printer fix](wide-division.md).
 Broader return-shape coverage remains open.

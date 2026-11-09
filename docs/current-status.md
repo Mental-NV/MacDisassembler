@@ -165,11 +165,15 @@ collections exceed documented bounds despite successful pseudocode output.
   O2 parameter inference to 52/52 routines and 4,269/4,269 instruction bytes
   in each symbol state. The cached score is 51/52 routines and 4,206/4,269
   bytes. All twelve receipts replayed with identical cached exports.
+- [x] Verify [wide signed division and unsigned range guards](wide-division.md)
+  on a separate full Ghidra build. Both x86_64 O2 baseline divisions and
+  both opt-in baseline dispatch queries passed. The four independent
+  signed x86_64 O2 cases passed on the same frozen inputs.
 - [ ] Meet the recovered-C behavior and testability gates across the full
-  core. Baseline O2 remains at 47/52 routines and 3,689/4,269 instruction
-  bytes in each symbol state. The two recovered baseline dispatch
-  captures are blocked by the wide division printed in a callee. The
-  all-routine O0 requirement remains open.
+  core. Baseline O2 reaches 49/52 routines and 3,835/4,269 instruction
+  bytes in each symbol state with fresh dispatch recovery. It needs
+  eight more verified instruction bytes to reach the 90% gate. The
+  direct-call signature and all-routine O0 requirements remain open.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
