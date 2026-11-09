@@ -66,7 +66,7 @@ def reuse_fixture(origin, evaluator, inputs, files, source):
     """Stage the exact earlier owned inputs for a paired engine comparison."""
     previous = read_json(origin / "frozen-plan.json")
     contract_files = {name: sha(data) for name, data in files.items() if name != Path(__file__).name}
-    if (previous["policy"] != POLICY or previous["source"] != source
+    if (previous.get("input_plan_sha256") or previous["policy"] != POLICY or previous["source"] != source
             or any(previous["files_sha256"].get(name) != digest for name, digest in contract_files.items())):
         raise ValueError("Prior fixture was frozen with a different source or evaluator")
     for name in (source, HEADER):
@@ -89,14 +89,17 @@ def reuse_fixture(origin, evaluator, inputs, files, source):
     return previous["inputs"]
 
 
-def capture(output, evaluator, inputs, ghidra, java_home):
+def capture(output, evaluator, inputs, ghidra, java_home, origin=None):
     projects = output / "projects"
     projects.mkdir()
     profile = engine.profile
+    private_roots = [evaluator, inputs, ROOT / "analysis"]
+    if origin:
+        private_roots.append(origin)
 
     def isolated(project, dependencies):
         denials = "".join("(deny file-read-data (subpath " + json.dumps(str(path)) + "))\n"
-                          for path in (evaluator, inputs, ROOT / "analysis"))
+                          for path in private_roots)
         siblings = ("(deny file-read-data (require-all (subpath " + json.dumps(str(projects))
                     + ") (require-not (subpath " + json.dumps(str(project.path)) + "))))\n")
         return profile(project, dependencies) + denials + siblings
@@ -234,7 +237,7 @@ def main():
         "native_sha256": engine.digest(ghidra / "Ghidra/Features/Decompiler/os/mac_arm_64/decompile"),
         "inputs": digests, "input_plan_sha256": sha(read_bytes(origin / "frozen-plan.json")) if origin else None,
     })
-    write_new_json(output / "frozen-captures.json", capture(output, evaluator, inputs, ghidra, java_home))
+    write_new_json(output / "frozen-captures.json", capture(output, evaluator, inputs, ghidra, java_home, origin))
     report = score(output, evaluator, inputs, compiler, sdk, files, source)
     write_new_json(output / "report.json", report)
     print(json.dumps({key: report[key] for key in ("status", "counts")}))

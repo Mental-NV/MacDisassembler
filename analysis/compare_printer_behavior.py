@@ -36,7 +36,10 @@ def check_capture(control, candidate):
         raise ValueError("Native printer changed machine facets, signatures or analyzer options")
     originals = index_functions(before["functions"])
     for entry, row in index_functions(after["functions"]).items():
-        if any(row[key] != originals[entry][key] for key in ("xrefs_to_sample", "xrefs_from_sample")):
+        if any(row[key] != originals[entry][key] for key in (
+            "xrefs_to_entry", "xrefs_to_entry_count", "xrefs_to_entry_truncated",
+            "xrefs_from_sample", "xrefs_from_total", "xrefs_from_truncated",
+        )):
             raise ValueError("Native printer changed cross references")
     return {
         "key": list(capture_key(prior)), "input_sha256": prior["input_sha256"],
