@@ -65,7 +65,7 @@ def eligible(record, arity, dependencies=()):
     return cursor == len(body) and depth == 0
 
 
-def truth_for(evaluator, input_dir, variant):
+def truth_for(evaluator, input_dir, variant, routines=ROUTINES):
     binary = read_bytes(evaluator / variant / "Fixture")
     metadata = thin(binary)
     d_sym = evaluator / variant / "Fixture.dSYM/Contents/Resources/DWARF/Fixture"
@@ -79,7 +79,7 @@ def truth_for(evaluator, input_dir, variant):
     truth, _ = dwarf_functions(tool_output("--debug-info", d_sym),
                                {int(addr, 16) for addr in starts["addresses"]}, text)
     addresses = {}
-    for routine in ROUTINES:
+    for routine in routines:
         address, = [hex(entry) for entry, (_, names) in truth.items() if routine in names]
         addresses[routine] = address
     digests = {}

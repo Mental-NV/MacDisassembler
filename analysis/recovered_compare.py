@@ -70,7 +70,8 @@ def matrix_exports(root, *, symbols="sym", kind="tool"):
         yield case,cases[label],exports[label][:2]
 
 
-def run_candidate(directory, compiler, sdk, harness, references, candidate_flags, *, wide_counter=False):
+def run_candidate(directory, compiler, sdk, harness, references, candidate_flags, *,
+                  wide_counter=False, reference_source="calc_core.c"):
     (directory/"harness.c").write_bytes(harness)
     for name,data in references.items():
         (directory/Path(name).name).write_bytes(data)
@@ -85,7 +86,7 @@ def run_candidate(directory, compiler, sdk, harness, references, candidate_flags
              "-fno-sanitize-recover=undefined","-Werror=implicit-function-declaration",
              "-isysroot",sdk,*candidate_flags]
     try:
-        engine.run_process([*prefix,compiler,*flags,str(directory/"harness.c"),str(directory/"calc_core.c"),
+        engine.run_process([*prefix,compiler,*flags,str(directory/"harness.c"),str(directory/reference_source),
                             "-o",str(target)],
                            cwd=directory,env=env,timeout=30,log_path=directory/"compile.log",
                            manifest_path=directory/"compile-job.json",manifest={"phase":"compile"})
@@ -103,7 +104,8 @@ def run_candidate(directory, compiler, sdk, harness, references, candidate_flags
         except Error as error:
             lines = log.read_text(errors="replace").splitlines() if log.is_file() else ()
             for status, marker in (("undefined_behavior", "runtime error:"),
-                                   ("address_sanitizer", "ERROR: AddressSanitizer")):
+                                   ("address_sanitizer", "ERROR: AddressSanitizer"),
+                                   ("undefined_bits_read", "GHIDRA_UNDEFINED_INPUT")):
                 diagnostic = next((line for line in lines if marker in line), None)
                 if diagnostic:
                     return {"status":status,"reason":error.code,"diagnostic":diagnostic}

@@ -236,3 +236,69 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/audit_core_be
 Exit 6 records partial coverage. The measured report SHA-256 is
 `6592ed5ee95d80eb37ebdf76ce371874ce4c30ab9715187c5d22f27a42e81f94`.
 The full behavior and O2 testability gates remain open.
+
+### Aggregate returns
+
+Policy `macscope-ghidra-aggregate-compat/1` lowers the printed
+`undefined1 [16]` form to a 128-bit value with a byte-definedness mask.
+It supports fixed byte and subfield reads and writes, copies, byte-aligned
+constant shifts, and the declared `SCARRY8`, `SBORROW8`, `SEXT816`,
+`ZEXT816` and `SUB168` intrinsics. It supports wide multiplication when
+the recovered expression explicitly sign-extends an operand. Undefined
+stack bytes copied into an aggregate stay undefined. A computation that
+reads an undefined byte fails. The harness checks all 12 observable
+bytes of the Darwin value and status layout and records unspecified
+padding separately. The parse and history cases also check input memory
+for mutations.
+
+Direct calls use captured definitions with their printed arity and
+parameter types. Unresolved linkage and scalar forms with unverified
+aggregate ABI receive an untestable verdict. Clang diagnoses unsupported
+operations and inconsistent direct calls. UBSan and ASan run without
+signed wraparound flags. The reference implementation runs separately
+and supplies the expected result only.
+
+| Build | Cases | Full pass | Undefined behavior | Compile failed | Untestable | Instruction bytes | Full pass bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| arm64 O0 | 52 | 12 | 30 | 4 | 6 | 8,816 | 3,104 |
+| arm64 O2 | 52 | 32 | 16 | 0 | 4 | 3,696 | 2,096 |
+| x86_64 O0 | 52 | 12 | 30 | 2 | 8 | 7,128 | 2,508 |
+| x86_64 O2 | 52 | 32 | 12 | 2 | 6 | 3,216 | 2,170 |
+| Total | 208 | 88 | 88 | 8 | 24 | 22,856 | 9,878 |
+
+Each complete case ran 148 to 4,800 directed inputs and 10,000 seeded
+inputs. The 917,976 completed comparisons had zero mismatches and zero
+undefined observable results. The 88 UBSan failures were signed overflow
+in the printed arithmetic, including negation of `INT64_MIN`.
+Clang diagnosed four incorrect direct call arities, two 12-byte array
+assignments and two ambiguous whole-aggregate divisions. All 16 table
+dispatch captures remained untestable. The complete O2 domains across
+this and the preceding disjoint cohorts cover 124 of 208 routine
+instances and 6,122 of 17,076 instruction bytes. The corresponding
+full-pass totals are 116 instances and 5,666 bytes.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/compare_aggregates.py \
+  --fixture-build-root /path/to/owned-calculator-build \
+  --profile-matrix /private/tmp/owned-patched-profile-matrix \
+  --output-dir /private/tmp/new-aggregate-behavior \
+  --experimental-trusted-input
+```
+
+Exit 6 records partial coverage. The measured report SHA-256 is
+`e148486e3cd31d934a8de17acdf62a5aa3ade199d700e14c34b3e7c94f79cff3`.
+
+#### Frozen held-out contract
+
+The separate owned fixture returns a 64-bit word and 32-bit flags. One
+routine rotates and masks unsigned input, and the other checks signed
+addition overflow. The compatibility policy, both reference routines,
+and the harness are committed before capture. The harness runs 256
+directed pairs and 10,000 seeded pairs per routine. Four builds cover
+arm64 and x86_64 at O0 and O2. The baseline and parameter-inference
+profiles analyze symbol-bearing and stripped copies in separate projects.
+The worker cannot read the evaluator files, alternate binaries, or other
+projects. The fixture binaries are data-only. All exports are hashed
+before evaluator-side address mapping. A matching dSYM and linker
+function starts identify the routines. UUID, text, function starts and
+symbol states verify the pairing.
