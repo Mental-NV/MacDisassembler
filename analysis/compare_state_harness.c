@@ -10,6 +10,7 @@
 typedef uint32_t undefined4;
 typedef unsigned long undefined8;
 typedef unsigned int uint;
+typedef unsigned long ulong;
 
 static void ___memset_chk(long address, int value, size_t size, size_t capacity) {
     if (size > capacity) abort();
