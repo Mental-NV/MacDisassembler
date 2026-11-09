@@ -39,7 +39,9 @@ def main():
             f'INFOPLIST_FILE={copied_plist}', f'PRODUCT_BUNDLE_IDENTIFIER={info["CFBundleIdentifier"]}',
             'ARCHS=arm64', 'ONLY_ACTIVE_ARCH=NO', 'build']
     source = provenance(REPO)
-    result = baseline_process.bounded_command(argv, out / 'xcodebuild.log', 180)
+    # Xcode caches/build databases can exceed the analysis worker file cap.
+    # Retain owned-group timeout and bounded captured log, not that file cap.
+    result = baseline_process.bounded_command(argv, out / 'xcodebuild.log', 180, limit_child_files=False)
     app = products / 'CalculatorFixture.app'
     binary = app / 'Contents/MacOS/CalculatorFixture'
     metadata = {'schema': 'macscope-ui-review-build/1', 'source': source, 'command': result,

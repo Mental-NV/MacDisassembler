@@ -63,14 +63,15 @@ def child_file_limit():
 
 
 def bounded_command(argv, log, timeout, env=None, max_log_bytes=16 << 20,
-                    watch=None, max_output_bytes=64 << 20):
+                    watch=None, max_output_bytes=64 << 20, limit_child_files=True):
     """Bound whole subprocess group, captured log and watched result file."""
     started = time.monotonic()
     reason = None
     total = 0
     with Path(log).open('xb') as f:
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True, env=env, preexec_fn=child_file_limit)
+                                start_new_session=True, env=env,
+                                preexec_fn=child_file_limit if limit_child_files else None)
         sel = selectors.DefaultSelector()
         sel.register(proc.stdout, selectors.EVENT_READ)
         try:
