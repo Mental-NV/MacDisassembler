@@ -78,6 +78,18 @@ class Project:
         for d in ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp'):
             checked_path(self.path/d, directory=True)
         checked_path(self.path/'index.sqlite')
+        try:
+            with self.db() as db:
+                tables = db.execute("SELECT name FROM sqlite_schema WHERE type='table' "
+                                    "AND name IN ('images','analyses')").fetchall()
+                if len(tables) != 2:
+                    raise Error('workspace_index', 'Workspace index is missing a required table')
+                db.execute('SELECT id,arch,metadata,imported,active_analysis FROM images LIMIT 0')
+                db.execute('SELECT id,image_id,payload FROM analyses LIMIT 0')
+        except sqlite3.DatabaseError as error:
+            if error.sqlite_errorcode & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise Error('workspace_index_busy', 'Workspace index is locked', 8, retryable=True) from error
+            raise Error('workspace_index', 'Workspace index cannot open the supported schema') from error
 
     @classmethod
     def create(cls, path):
@@ -98,16 +110,19 @@ class Project:
     @contextlib.contextmanager
     def db(self, readonly=True):
         uri = (self.path/'index.sqlite').as_uri() + ('?mode=ro' if readonly else '?mode=rw')
-        db = sqlite3.connect(uri, uri=True, timeout=0.1)
         try:
-            yield db
-            if not readonly:
-                db.commit()
-        except BaseException:
-            db.rollback()
+            with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as db:
+                try:
+                    yield db
+                    if not readonly:
+                        db.commit()
+                except BaseException:
+                    db.rollback()
+                    raise
+        except sqlite3.DatabaseError as error:
+            if error.sqlite_errorcode & 0xff in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+                raise Error('workspace_index', 'Workspace index is corrupt') from error
             raise
-        finally:
-            db.close()
 
     @contextlib.contextmanager
     def writer(self):

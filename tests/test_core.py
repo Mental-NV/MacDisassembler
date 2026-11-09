@@ -200,6 +200,36 @@ class ProjectTests(TemporaryCase):
                 storage.atomic(manifest, invalid, force=True)
                 self.error('workspace_manifest', storage.Project, project.path)
 
+    def test_corrupt_workspace_index_returns_typed_error(self):
+        project = self.project()
+        index = project.path / 'index.sqlite'
+        invalid = b'owned malformed index'
+        index.write_bytes(invalid)
+        self.error('workspace_index', storage.Project, project.path)
+        self.error('workspace_index', project.images)
+        self.assertEqual(index.read_bytes(), invalid)
+
+    def test_workspace_index_requires_core_tables_and_columns(self):
+        project = self.project()
+        with project.db(False) as db:
+            db.execute('ALTER TABLE images RENAME TO archived_images')
+            db.execute('CREATE VIEW images AS SELECT * FROM archived_images')
+        self.error('workspace_index', storage.Project, project.path)
+        with project.db(False) as db:
+            db.execute('DROP VIEW images')
+            db.execute('CREATE TABLE images(id TEXT PRIMARY KEY)')
+        self.error('workspace_index', storage.Project, project.path)
+
+    def test_busy_workspace_index_can_be_retried(self):
+        project = self.project()
+        with project.db(False) as db:
+            db.execute('BEGIN EXCLUSIVE')
+            with self.assertRaises(Error) as caught:
+                storage.Project(project.path)
+            self.assertEqual(caught.exception.code, 'workspace_index_busy')
+            self.assertTrue(caught.exception.retryable)
+        self.assertEqual(storage.Project(project.path).project_id, project.project_id)
+
     def test_writer_conflict_is_retryable_and_lock_released(self):
         first = self.project()
         second = storage.Project(first.path)
