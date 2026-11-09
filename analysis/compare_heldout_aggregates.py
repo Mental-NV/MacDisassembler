@@ -62,6 +62,33 @@ def build(evaluator, inputs, files, source, compiler, sdk):
     return digests
 
 
+def reuse_fixture(origin, evaluator, inputs, files, source):
+    """Stage the exact earlier owned inputs for a paired engine comparison."""
+    previous = read_json(origin / "frozen-plan.json")
+    contract_files = {name: sha(data) for name, data in files.items() if name != Path(__file__).name}
+    if (previous["policy"] != POLICY or previous["source"] != source
+            or any(previous["files_sha256"].get(name) != digest for name, digest in contract_files.items())):
+        raise ValueError("Prior fixture was frozen with a different source or evaluator")
+    for name in (source, HEADER):
+        contents = read_bytes(origin / "evaluator" / name)
+        if contents != files[name]:
+            raise ValueError("Prior evaluator source differs from the committed fixture")
+        (evaluator / name).write_bytes(contents)
+    dwarf = Path("Fixture.dSYM/Contents/Resources/DWARF/Fixture")
+    for arch, opt in BUILDS:
+        variant = f"{arch}-{opt}"
+        (inputs / variant).mkdir()
+        (evaluator / variant / dwarf.parent).mkdir(parents=True)
+        for name in (Path("Fixture"), dwarf):
+            (evaluator / variant / name).write_bytes(read_bytes(origin / "evaluator" / variant / name))
+        for state in STATES:
+            data = read_bytes(origin / "inputs" / variant / state)
+            if sha(data) != previous["inputs"][variant][state]:
+                raise ValueError("Prior input bytes differ from their frozen digest")
+            (inputs / variant / state).write_bytes(data)
+    return previous["inputs"]
+
+
 def capture(output, evaluator, inputs, ghidra, java_home):
     projects = output / "projects"
     projects.mkdir()
@@ -178,6 +205,7 @@ def main():
     for field in ("output-dir", "ghidra", "java-home"):
         parser.add_argument("--" + field, type=Path, required=True)
     parser.add_argument("--fixture", choices=SOURCES, default="aggregate")
+    parser.add_argument("--reuse-fixture", type=Path, help="Prior frozen run of the same owned fixture under /tmp")
     parser.add_argument("--experimental-trusted-input", action="store_true")
     args = parser.parse_args()
     if not args.experimental_trusted_input:
@@ -186,6 +214,9 @@ def main():
     scratch = Path("/tmp").resolve()
     if output == scratch or not output.is_relative_to(scratch):
         parser.error("Choose a new output directory under canonical /tmp")
+    origin = args.reuse_fixture.resolve() if args.reuse_fixture else None
+    if origin and (origin == scratch or not origin.is_relative_to(scratch) or output.is_relative_to(origin)):
+        parser.error("Choose a separate prior frozen run under canonical /tmp")
     source = SOURCES[args.fixture]
     revision, files = freeze(source)
     compiler, sdk = xcrun("--find", "clang"), xcrun("--sdk", "macosx", "--show-sdk-path")
@@ -194,13 +225,14 @@ def main():
     evaluator, inputs = output / "evaluator", output / "inputs"
     evaluator.mkdir()
     inputs.mkdir()
-    digests = build(evaluator, inputs, files, source, compiler, sdk)
+    digests = (reuse_fixture(origin, evaluator, inputs, files, source) if origin
+               else build(evaluator, inputs, files, source, compiler, sdk))
     write_new_json(output / "frozen-plan.json", {
         "revision": revision, "policy": POLICY, "source": source,
         "files_sha256": {name: sha(data) for name, data in files.items()},
         "compiler_sha256": engine.digest(Path(compiler)), "sdk_version": xcrun("--sdk", "macosx", "--show-sdk-version"),
         "native_sha256": engine.digest(ghidra / "Ghidra/Features/Decompiler/os/mac_arm_64/decompile"),
-        "inputs": digests,
+        "inputs": digests, "input_plan_sha256": sha(read_bytes(origin / "frozen-plan.json")) if origin else None,
     })
     write_new_json(output / "frozen-captures.json", capture(output, evaluator, inputs, ghidra, java_home))
     report = score(output, evaluator, inputs, compiler, sdk, files, source)

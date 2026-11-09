@@ -1,0 +1,77 @@
+--- a/printc.cc
++++ b/printc.cc
+@@ -482,0 +483,32 @@
++}
++
++/// Preserve the expression type chosen by the C printer and the result width
++/// of the p-code op. Restrict this to ordinary int and long width expressions.
++Datatype *PrintC::moduloArithmeticType(const PcodeOp *op) const
++
++{
++  if (getName() != "c-language" || option_nocasts || isSet(negatetoken) || glb->types->getSizeOfInt() != 4)
++    return (Datatype *)0;
++  switch(op->code()) {
++  case CPUI_INT_ADD:
++  case CPUI_INT_SUB:
++  case CPUI_INT_MULT:
++  case CPUI_INT_2COMP:
++    break;
++  default:
++    return (Datatype *)0;
++  }
++  int4 size = op->getOut()->getSize();
++  if (size != 4 && size != 8)
++    return (Datatype *)0;
++  Datatype *result = op->getOpcode()->getOutputToken(op,castStrategy);
++  if (result->getMetatype() != TYPE_INT || result->isEnumType() || result->getSize() != size)
++    return (Datatype *)0;
++  for(int4 i=0;i<op->numInput();++i) {
++    const Varnode *input = op->getIn(i);
++    const Datatype *type = input->getHighTypeReadFacing(op);
++    if (input->getSize() != size || type->getSize() != size || type->isEnumType()
++        || (type->getMetatype() != TYPE_INT && type->getMetatype() != TYPE_UINT))
++      return (Datatype *)0;
++  }
++  return result;
+@@ -484,0 +517,22 @@
++/// Render signed-view p-code arithmetic through its same-width unsigned
++/// carrier. Each operand is emitted once. The outer cast restores the
++/// expression type used by its consumer.
++bool PrintC::opModuloArithmetic(const OpToken *tok,const PcodeOp *op)
++
++{
++  Datatype *result = moduloArithmeticType(op);
++  if (result == (Datatype *)0)
++    return false;
++  Datatype *carrier = glb->types->getBaseNoChar(result->getSize(),TYPE_UINT);
++  pushOp(&typecast,op);
++  pushType(result);
++  pushOp(tok,op);
++  for(int4 i=0;i<op->numInput();++i) {
++    pushOp(&typecast,op);
++    pushType(carrier);
++    pushVn(op->getIn(i),op,mods);
++    recurse();
++  }
++  return true;
++}
++
+@@ -2484,0 +2539,2 @@
++  if (moduloArithmeticType(op) != (Datatype *)0)
++    return false;
+--- a/printc.hh
++++ b/printc.hh
+@@ -200,0 +201,2 @@
++  Datatype *moduloArithmeticType(const PcodeOp *op) const;	///< Signed C result eligible for fixed-width rendering
++  bool opModuloArithmetic(const OpToken *tok,const PcodeOp *op);	///< Emit fixed-width arithmetic through the unsigned type
+@@ -294,2 +296,2 @@
+-  virtual void opIntAdd(const PcodeOp *op) { opBinary(&binary_plus,op); }
+-  virtual void opIntSub(const PcodeOp *op) { opBinary(&binary_minus,op); }
++  virtual void opIntAdd(const PcodeOp *op) { if (!opModuloArithmetic(&binary_plus,op)) opBinary(&binary_plus,op); }
++  virtual void opIntSub(const PcodeOp *op) { if (!opModuloArithmetic(&binary_minus,op)) opBinary(&binary_minus,op); }
+@@ -299 +301 @@
+-  virtual void opInt2Comp(const PcodeOp *op) { opUnary(&unary_minus,op); }
++  virtual void opInt2Comp(const PcodeOp *op) { if (!opModuloArithmetic(&unary_minus,op)) opUnary(&unary_minus,op); }
+@@ -307 +309 @@
+-  virtual void opIntMult(const PcodeOp *op) { opBinary(&multiply,op); }
++  virtual void opIntMult(const PcodeOp *op) { if (!opModuloArithmetic(&multiply,op)) opBinary(&multiply,op); }
