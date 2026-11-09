@@ -57,6 +57,8 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Audit the owned app-main core across both architectures and profiles.
   All 2,732 direct targets matched. A stripped arm64 O2 function boundary
   accounts for the 28 missing instruction records across two captures.
+- [x] Report that conflicting boundary in cached, fresh and replayed
+  queries. The owned live test preserved the archived Program and snapshot.
 - [ ] Recover the split stripped arm64 O2 app-main function body.
 - [ ] Measure controlled data-reference completeness.
 - [x] Match three normalized exports per case and profile on the owned

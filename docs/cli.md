@@ -362,6 +362,12 @@ and CFG queries with an observed gap exit 6. The check also applies when
 reading existing snapshots. It leaves analyzer settings and stored
 snapshots intact. [Held-out and calculator validation](heldout-switch.md#measured-results)
 
+The CLI also reports a function-boundary conflict when a linker-confirmed
+function falls through into a competing Ghidra function entry inside the
+same linker extent. Both entries carry the evidence, and cached, fresh and
+replayed pseudocode report partial coverage. The original function records
+and Program are preserved. [Owned app-main measurement](phase1-findings.md#controlled-core-instruction-audit)
+
 New analyses and fresh queries can include `address_spans` from Ghidra's C
 markup. `text_start` and `text_end` are zero-based UTF-16 offsets into the
 returned pseudocode, with the end excluded. Each `ranges` entry is an

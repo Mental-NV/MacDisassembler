@@ -1,6 +1,8 @@
 """CLI coverage review for observable gaps in Ghidra's control-flow evidence."""
 import re
 
+from . import flow_boundaries
+
 
 POLICY = "macscope-computed-jump-coverage/1"
 COMPUTED_JUMPS = {"COMPUTED_JUMP", "CONDITIONAL_COMPUTED_JUMP"}
@@ -10,7 +12,7 @@ WARNING = re.compile(
 )
 
 
-def review(function, *, blocks=None):
+def review(function, *, blocks=None, boundary_gaps=()):
     """Preserve original evidence and distinguish unresolved jumps from printer completion."""
     if function.get("is_thunk") or function.get("is_external"):
         return function
@@ -26,10 +28,12 @@ def review(function, *, blocks=None):
     for warning in dict.fromkeys(WARNING.findall(function.get("pseudocode") or "")):
         gaps.append({"reason": "decompiler_unresolved_jump", "source": "ghidra_pseudocode",
                      "warning": warning})
+    gaps.extend(boundary_gaps)
     if not gaps:
         return function
     status = function["decompile_status"]
-    result = dict(function, control_flow_gaps=gaps, control_flow_review=POLICY, engine_decompile_status=status)
+    policy = flow_boundaries.POLICY if boundary_gaps else POLICY
+    result = dict(function, control_flow_gaps=gaps, control_flow_review=policy, engine_decompile_status=status)
     if status == "complete":
         result["decompile_status"] = "partial"
         coverage = function.get("coverage", {})
@@ -39,9 +43,29 @@ def review(function, *, blocks=None):
 
 
 def snapshot_view(snapshot):
-    functions = [review(function) for function in snapshot["functions"]]
+    boundaries = flow_boundaries.gaps(snapshot)
+    functions = [review(function, boundary_gaps=boundaries.get(function.get("entry_va"), ()))
+                 for function in snapshot["functions"]]
     affected = sum("control_flow_gaps" in function for function in functions)
     if not affected:
         return snapshot
+    policy = flow_boundaries.POLICY if boundaries else POLICY
     return dict(snapshot, functions=functions, status="partial",
-                control_flow_review={"policy": POLICY, "affected_functions": affected})
+                control_flow_review={"policy": policy, "affected_functions": affected})
+
+
+def query_view(response, selected):
+    """Apply saved ownership evidence to a new or previously published query."""
+    boundary_gaps = [gap for gap in selected.get("control_flow_gaps", ())
+                     if gap["reason"] in flow_boundaries.REASONS]
+    if not boundary_gaps:
+        return response
+    data = response["data"]
+    engine_status = data.get("engine_decompile_status", data["decompile_status"])
+    displayed = dict(data, control_flow_review=flow_boundaries.POLICY,
+                     control_flow_gaps=[*data.get("control_flow_gaps", ()), *boundary_gaps],
+                     engine_decompile_status=engine_status)
+    if displayed["decompile_status"] == "complete":
+        displayed["decompile_status"] = "partial"
+    coverage = dict(response["coverage"], status="partial", truncation_reason="unresolved_control_flow")
+    return dict(response, data=displayed, status="partial", coverage=coverage)

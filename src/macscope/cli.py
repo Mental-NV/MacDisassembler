@@ -533,6 +533,7 @@ def resume_query(args, project, command, record, request):
             raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
         response = fresh_decompile(replay,project,image,function,source,revision,hints,
                                    deps=deps,resumed_from=args.job_id)
+    response = flow_evidence.query_view(response,function)
     data = response['data']
     reused = reused or data['origin']['job_id'] == args.job_id
     return dict(response,command=command,data=dict(data,resumed_from=args.job_id,reused_restart=reused))
@@ -880,7 +881,7 @@ def execute(a):
     f=select_function(functions,a)
     if fresh:
         hints=annotations.type_hints(annotations_rows,functions) if with_hints else None
-        return fresh_decompile(a,p,image,f,record,revision,hints)
+        return flow_evidence.query_view(fresh_decompile(a,p,image,f,record,revision,hints),f)
     if a.command=='calls':
         data,gaps=calls.graph(dict(snapshot,functions=functions),f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])
