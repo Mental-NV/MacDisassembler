@@ -187,11 +187,10 @@ collections exceed documented bounds despite successful pseudocode output.
   and the scalar formatter query bring the installed CLI to 52/52
   routines and 8,644/8,644 bytes in each symbol state. The saved
   captures pass 41/52 routines and 5,360/8,644 bytes.
-- [ ] Recover the independent fixture's observed one-register return
-  through its wrapper. The [callee parameter queries](callee-parameters.md#installed-cli-validation)
-  recover both call interfaces, but the wrapper still prints as `void`
-  on both architectures. An assisted diagnostic restored the result
-  and passed all four captures.
+- [x] Verify [one-register return recovery](forwarded-return.md) in
+  the installed CLI. All 16 behavior cases across two owned fixtures,
+  both architectures, both profiles, and both symbol states passed.
+  All 24 indirect, ignored, and byte-only controls declined recovery.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
@@ -236,6 +235,8 @@ collections exceed documented bounds despite successful pseudocode output.
   outlived its supervisor. The CLI refused replay until the group exited,
   then replayed successfully. Older disconnected jobs and unverified boot
   identities remain ineligible.
+- [x] Verify [workspace manifest error handling](cli.md#envelopes-errors-and-explicit-omissions)
+  and a byte-identical export from an earlier schema 1.0 workspace.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

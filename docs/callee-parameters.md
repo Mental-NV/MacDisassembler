@@ -88,6 +88,9 @@ of the four captures with zero return or state mismatches. The
 diagnostic is separate from the CLI score. Its report SHA-256 is
 `1ce7547b0480ba564fcb2a91935cd87256228d148c92e46245977ee14ea7795c`.
 
+The installed [forwarded-return option](forwarded-return.md) subsequently
+restored this wrapper's result across both profiles and both symbol states.
+
 The previous direct, dispatch, and scalar options reproduced their
 archived C and recovery decisions in installed-wheel regression
 checks.

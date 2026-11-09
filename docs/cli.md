@@ -452,6 +452,13 @@ verified call paths. The result records the applied sites or skip
 reasons in `origin.callee_parameter_recovery`.
 [Scope and validation](callee-parameters.md)
 
+For an observed integer result forwarded through a direct call, use
+`decompile --fresh --recover-forwarded-return` with one selector and
+the trusted-input flag. The query verifies the wrapper epilogue and
+an independent full-width caller store. The result records the
+evidence or a skip reason in `origin.forwarded_return_recovery`.
+[Forwarded return validation](forwarded-return.md)
+
 Cached and fresh results report partial coverage when a recorded computed
 jump lacks a destination or Ghidra emits an explicit jump-recovery warning.
 The original pseudocode, edges, and printer status remain available.
@@ -685,6 +692,17 @@ sample of payloads. The local report at
 has SHA-256 `447a7877637d6ca538063aa84742774d302826137286f903de4f4f7706f0758f`.
 
 ## Envelopes, errors and explicit omissions
+
+Workspace opens validate the manifest structure, schema version, and
+workspace identifier before using the index. Malformed manifests
+return `workspace_manifest` and exit 5. An unsupported version
+returns `workspace_schema` and exits 3. An installed-wheel check
+reopened an earlier schema 1.0 workspace and reproduced its export
+byte for byte before and after five manifest error cases. The saved
+index retained its digest. The local report in
+`/private/tmp/macscope-forwarded-return.gwE9OS/workspace-check/report.json`
+has SHA-256 `d6ebd323819fa8b5dc31f8372ad39978b776d75c6430459047c23bf4761d6211`.
+
 
 Bundled `envelope.schema.json` and `function.schema.json` use schema1.0.
 Every JSON response has command, status, analysis_id (nullable), data,

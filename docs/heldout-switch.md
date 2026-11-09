@@ -97,6 +97,13 @@ The private capture manifest and evaluation report SHA-256 digests are
 `625c9a98c64bfa965319aae1567f27a0dbef0b305e8db231083404e0725412ce`
 and `f408a3651b45ea8a72429a2655a55be52b85bc9177e8300da1d250d93428cff4`.
 
+The later installed-wheel check at `9aadc9f` reimported the owned
+stripped x86_64 O0 calculator under the exact default Ghidra 12.2
+tree. Both cached and fresh `calc_apply_op` queries returned exit 6
+and identical computed-jump gaps. The `calc_add` control completed.
+The fresh report SHA-256 is
+`549adf0697691c9c0cd375fcf7549e22d93e99091f50bea5f1dc8b1c202da28e`.
+
 ## Upstream patch evaluation
 
 The published Ghidra releases still showed 12.2 as the latest release
