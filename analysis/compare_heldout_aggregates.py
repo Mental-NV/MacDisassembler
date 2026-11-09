@@ -29,7 +29,8 @@ STORE_SOURCES = {"stores": "heldout_store.c", "store-alias": "heldout_store_alia
                  "readonly-shuffle": "heldout_readonly_shuffle.c",
                  "vector-slices": "heldout_vector_slices.c"}
 SOURCES = {"aggregate": "heldout_aggregate.c", "arithmetic": "heldout_arithmetic.c",
-           "return-width": "heldout_return_width.c", "dispatch": DISPATCH_SOURCE, **STORE_SOURCES}
+           "return-width": "heldout_return_width.c", "dispatch": DISPATCH_SOURCE,
+           "division": "heldout_division.c", **STORE_SOURCES}
 COMPAT = "aggregate_compat.h"
 FROZEN = (COMPAT, "aggregate_compat.py", "compare_heldout_aggregates.py",
           "compare_heldout_switch.py", "recovered_compare.py")

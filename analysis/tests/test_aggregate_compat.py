@@ -166,3 +166,11 @@ class AggregateCompatibilityTests(unittest.TestCase):
         """)
         self.assertIn("auVar1 / SEXT816(param_1)", code)
         self.assertNotIn("gh_signed(auVar1)", code)
+
+    def test_explicit_signed_division_is_lowered_as_a_wide_value(self):
+        code = lowered("""
+            undefined1 auVar1 [16];
+            auVar1 = SEXT816(param_1);
+            return SDIV16(auVar1,SEXT816(3));
+        """)
+        self.assertIn("return gh_known((SDIV16(auVar1,SEXT816(3))));", code)

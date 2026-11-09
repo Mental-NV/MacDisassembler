@@ -67,6 +67,13 @@ static __int128 gh_signed(gh_bits value) {
     return (__int128)gh_read(value, 0, 16);
 }
 
+static __int128 gh_signed_scalar(__int128 value) {
+    return value;
+}
+
+#define GH_SIGNED16(value) _Generic((value), gh_bits: gh_signed, default: gh_signed_scalar)(value)
+#define SDIV16(left, right) (GH_SIGNED16(left) / GH_SIGNED16(right))
+
 static gh_bits gh_shift(gh_bits value, unsigned bytes) {
     return (gh_bits){value.bits << (bytes*8), (uint16_t)((value.known << bytes) | ((1u<<bytes)-1))};
 }

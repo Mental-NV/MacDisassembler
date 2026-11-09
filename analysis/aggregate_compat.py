@@ -2,7 +2,7 @@
 import re
 
 
-POLICY = "macscope-ghidra-aggregate-compat/8"
+POLICY = "macscope-ghidra-aggregate-compat/9"
 MEMORY_STORES = frozenset(("STORE_LE16", "STORE_LE32", "STORE_LE64"))
 ARM_VECTORS = frozenset(("NEON_rev64", "NEON_ext"))
 BYTE_VECTORS = ARM_VECTORS | {"pshufb"}
@@ -24,7 +24,7 @@ WORD = re.compile(
 LOCAL = re.compile(r"(?:[a-z]{1,3}Var[0-9]+|[a-z]+Stack_[0-9a-f]+|local_[0-9a-f]+|param_[0-9]+|LAB_[0-9a-f]+)")
 WORDS = set("long ulong int uint bool char byte void undefined1 undefined2 undefined4 undefined8 "
             "if else while do for goto return break continue switch case default true false "
-            "SCARRY8 SBORROW8 SEXT816 ZEXT816 ZEXT412 SUB168 CONCAT88".split()) | MEMORY_STORES | BYTE_VECTORS
+            "SCARRY8 SBORROW8 SEXT816 ZEXT816 ZEXT412 SUB168 CONCAT88 SDIV16".split()) | MEMORY_STORES | BYTE_VECTORS
 CALL = re.compile(rf"\b({NAME})\s*\(")
 RAW_ARRAY = re.compile(r"\bundefined1\s+([a-z]{1,3}Var[0-9]+)\s*\[(12|16)\]\s*;")
 UNDEFINED_STACK = re.compile(r"\bundefined[1248]\s+([a-z]+Stack_[0-9a-f]+)\s*;")
@@ -208,7 +208,7 @@ def lower_function(text, name, functions, aggregate_required, *, initialized_sta
         call = CALL.match(expression)
         if call and (call[1] in functions or call[1] in BYTE_VECTORS or call[1] == "CONCAT88"):
             return expression
-        if re.match(r"(?:ZEXT816|SEXT816)\s*\(", expression):
+        if call and call[1] in ("ZEXT816", "SEXT816", "SDIV16"):
             return f"gh_known(({expression}))"
         raise Unsupported("unsupported_aggregate_expression")
 

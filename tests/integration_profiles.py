@@ -36,6 +36,8 @@ def main(argv=None):
     parser.add_argument("--fixture-build-root", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--kind", choices=("all", "tool", "app"), default="all")
+    parser.add_argument("--ghidra", type=Path)
+    parser.add_argument("--java-home", type=Path)
     parser.add_argument("--experimental-trusted-input", action="store_true")
     args = parser.parse_args(argv)
     if not args.experimental_trusted_input:
@@ -68,10 +70,14 @@ def main(argv=None):
     cases = []
     queries = []
     start = time.monotonic()
+    engine_args = tuple(value for flag, path in (("--ghidra", args.ghidra), ("--java-home", args.java_home))
+                        if path is not None for value in (flag, str(path.resolve())))
 
     def invoke(*arguments, expected=(0,)):
         if time.monotonic() - start > 1800:
             raise TimeoutError("Integration suite exceeded 30-minute aggregate budget")
+        if arguments[0] in ("import", "analyze", "decompile"):
+            arguments += engine_args
         proc = subprocess.run([sys.executable, "-m", "macscope", *map(str, arguments)],
                               cwd=ROOT, env=env, capture_output=True, timeout=420)
         index = len(commands) + 1
@@ -146,7 +152,7 @@ def main(argv=None):
                 query_args = cli_parser().parse_args(["analyze", "--project", str(project),
                                                      "--experimental-trusted-input"])
                 raw, job = engine.run(workspace, active_image, "query", query_args,
-                                      engine.dependencies(full=True))
+                                      engine.dependencies(args.ghidra, args.java_home, full=True))
                 if (job["analysis_profile"]["name"] != "parameter-inference"
                         or engine.tree_digest(program) != before
                         or raw["validation"]["headless_analysis_enabled"] is not False):
