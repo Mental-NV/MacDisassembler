@@ -27,7 +27,7 @@ from unittest import mock
 # Direct invocation and unittest discovery both work without installing a wheel.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from macscope import SCHEMA_VERSION
-from macscope import cli, engine, macho, schema, storage
+from macscope import cli, engine, jobs, macho, schema, storage
 from macscope.errors import Error
 
 
@@ -1094,12 +1094,46 @@ class CliTests(TemporaryCase):
         self.assertEqual(run.call_count, 2)
 
     def test_stale_job_pid_is_reported_without_signals(self):
-        job = self.workspace.path / 'jobs' / 'stale'
+        job_id = 'a' * 32
+        job = self.workspace.path / 'jobs' / job_id
         job.mkdir(mode=0o700)
-        storage.write_json(job / 'job.json', {'status': 'running', 'pid': os.getpid(), 'job_id': 'stale'})
+        storage.write_json(job / 'job.json', {'status': 'running', 'pid': os.getpid(), 'job_id': job_id,
+                                              'ownership_token': 'b' * 32})
         with mock.patch.object(engine.os, 'killpg', side_effect=AssertionError('must not signal cached PID')):
             result = cli.execute(self.args('status'))
+            self.error('job_not_active', cli.execute, self.args('jobs', 'cancel', job_id))
         self.assertEqual(result['data']['jobs'][0]['status'], 'unknown_after_disconnect')
+
+    def test_job_commands_only_request_cancellation_from_a_live_owner(self):
+        job_id = 'c' * 32
+        token = 'd' * 32
+        directory = self.workspace.path / 'jobs' / job_id
+        directory.mkdir(mode=0o700)
+        path = directory / 'job.json'
+        lease = jobs.claim(path)
+        try:
+            record = {'status': 'running', 'pid': os.getpid(), 'job_id': job_id,
+                      'ownership_token': token, 'limits': {'timeout_seconds': 300},
+                      'dependencies': {'ghidra_version': '12.2', 'ghidra_path': '/Users/owner/private'},
+                      'environment': {'HOME': 'private'}}
+            storage.write_json(path, record)
+            listing = cli.execute(self.args('jobs', 'list'))['data']
+            self.assertEqual([(r['job_id'], r['status']) for r in listing], [(job_id, 'running')])
+            shown = cli.execute(self.args('jobs', 'show', job_id))['data']
+            self.assertEqual(shown['engine'], {'ghidra_version': '12.2'})
+            self.assertNotIn('pid', shown)
+            self.assertNotIn('environment', shown)
+            with mock.patch.object(engine.os, 'killpg', side_effect=AssertionError('caller must not signal')):
+                for _ in range(2):
+                    data = cli.execute(self.args('jobs', 'cancel', job_id))['data']
+                    self.assertEqual(data['status'], 'cancellation_requested')
+            self.assertTrue(jobs.cancel_requested(path, token))
+            self.assertFalse(jobs.cancel_requested(path, 'e' * 32))
+            self.assertTrue(cli.execute(self.args('jobs', 'show', job_id))['data']['cancellation_requested'])
+        finally:
+            os.close(lease)
+        self.error('job_id', cli.execute, self.args('jobs', 'show', '../other'))
+        self.error('job_missing', cli.execute, self.args('jobs', 'show', 'f' * 32))
 
 
 @unittest.skipUnless(os.name == 'posix', 'Owned process groups require POSIX')
@@ -1182,6 +1216,25 @@ class WorkerTests(TemporaryCase):
         self.assertEqual(error.exit_code, 4)
         self.assertEqual(self.record()['status'], 'failed')
         self.assertEqual(self.record()['error']['code'], 'worker_startup')
+
+    def test_owner_actually_cancels_and_reaps_worker(self):
+        real_sleep = time.sleep
+        requested = False
+
+        def request_once(seconds):
+            nonlocal requested
+            if not requested:
+                requested = True
+                path = self.job / 'job.json'
+                jobs.request_cancel(path, self.record())
+            real_sleep(seconds)
+
+        with mock.patch.object(engine.time, 'sleep', side_effect=request_once):
+            error = self.error('worker_cancelled', self.run_worker, 'import time; time.sleep(10)')
+        self.assertEqual(error.exit_code, 130)
+        self.assertEqual(self.record()['status'], 'cancelled')
+        self.assertFalse(jobs.leased(self.job / 'job.json'))
+        self.assert_reaped()
 
     def test_log_budget_terminates_worker_and_records_limit(self):
         self.error('worker_output_limit', self.run_worker,

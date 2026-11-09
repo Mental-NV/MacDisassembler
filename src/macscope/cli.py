@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, flow_evidence, metadata, objc, search, swift_symbols
+from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, flow_evidence, jobs, metadata, objc, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -77,6 +77,13 @@ def parser():
                    help='Include an exact bundle-relative executable path in addition to the main image')
     s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','parameter-inference','deep'),default='baseline',help='baseline is unchanged; parameter-inference is an explicit experimental binary-only profile');common(s);budgets(s)
     s=sub.add_parser('status');project(s);common(s)
+    s=sub.add_parser('jobs');ss=s.add_subparsers(dest='action',required=True)
+    for action in ('list','show','cancel'):
+        s=ss.add_parser(action);s.add_argument('--project',required=True);common(s)
+        if action=='list':
+            pagination(s)
+        else:
+            s.add_argument('job_id')
     s=sub.add_parser('headers');project(s);common(s)
     s=sub.add_parser('fixups');project(s);common(s);pagination(s)
     s.add_argument('--kind',choices=('all','bind','rebase'),default='all')
@@ -347,6 +354,20 @@ def import_annotations(args, project):
                     snapshot['analysis_id'], cov=coverage('appended image annotation history', added, added))
 
 
+def job_command(args, project, command):
+    if args.action != 'list':
+        path, record = jobs.get(project,args.job_id)
+        data = jobs.request_cancel(path,record) if args.action == 'cancel' else jobs.view(path,record,detail=True)
+        return envelope(command,redact(data))
+    rows, gaps = jobs.recent(project)
+    rows, cov = page(rows,args,identity(rows),project.project_id,{},order='recent-worker-jobs/v1')
+    cov['scope'] = 'recent workspace worker jobs'
+    if gaps:
+        reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+        cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+    return envelope(command,redact(rows),status='partial' if gaps else 'complete',cov=cov)
+
+
 def import_slice(project, image, original, args, deps):
     artifact = project.path/'inputs'/(image['artifact_sha256']+'.artifact')
     if not artifact.exists():
@@ -536,6 +557,8 @@ def execute(a):
         p=Project.create(a.path)
         return envelope(command,{'project_id':p.project_id,'schema_version':'1.0'})
     p=Project(a.project)
+    if a.command == 'jobs':
+        return job_command(a,p,command)
     if a.command == 'rename' or (a.command in ('comment','type') and a.action != 'list'):
         return revise_annotation(a,p,command)
     if a.command == 'annotations' and a.action == 'import':
@@ -544,15 +567,10 @@ def execute(a):
         check_engine_access(a,p)
     if a.command=='status':
         images=p.images()
-        jobs=[]
-        for path in sorted((p.path/'jobs').glob('*/job.json'))[-100:]:
-            job=json.loads(read_regular(path,1024*1024))
-            state=job['status']
-            if state in ('running','starting'):
-                # No stale PID-based signal or process ownership claim.
-                state='unknown_after_disconnect'
-            jobs.append({k:v for k,v in job.items() if k in ('job_id','mode','image_id','elapsed_seconds','error','returncode')}|{'status':state})
-        return envelope(command,{'project_id':p.project_id,'images':images,'jobs':jobs,'job_history_limit':100},cov=coverage('project status',len(images),len(images)))
+        job_rows, gaps = jobs.recent(p)
+        return envelope(command,{'project_id':p.project_id,'images':images,'jobs':redact(job_rows),
+                                 'job_history_limit':jobs.RECENT,'job_history_gaps':gaps},
+                        cov=coverage('project status',len(images),len(images)))
     if a.command in ('import','analyze'):
         deps=engine.dependencies(a.ghidra,a.java_home,full=True)
         with p.writer():
@@ -762,7 +780,8 @@ def main(argv=None):
         code=6 if result['status']=='partial' else 0
     except Error as e:
         command=getattr(args,'command','unknown') if args else 'unknown'
-        result=envelope(command,None,status='failed',cov=coverage('requested command',0,None,True,reason=e.code),diagnostics=[str(e)])
+        status = 'cancelled' if e.exit_code == 130 else 'failed'
+        result=envelope(command,None,status=status,cov=coverage('requested command',0,None,True,reason=e.code),diagnostics=[str(e)])
         result['error']={'code':e.code,'message':str(e),'affected_object':getattr(args,'image',None) if args else None,'retryable':e.retryable,'partial_results':e.partial}
         code=e.exit_code
     except KeyboardInterrupt:

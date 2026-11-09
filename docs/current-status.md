@@ -100,6 +100,10 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Exercise data-only parsers with 10,350 seeded Mach-O mutations and
   10,000 bundle plist mutations. Deep binary plist nesting, unexpected
   XML keys and unknown encodings now return typed `bundle_plist` errors.
+- [x] List and inspect worker jobs and request cancellation through their
+  live owner. A second CLI process cancelled an owned calculator analysis
+  while preserving its previously committed snapshot.
+- [ ] Restart eligible unfinished jobs with their recorded analysis request.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

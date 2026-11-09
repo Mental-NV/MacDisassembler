@@ -15,6 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
+from . import jobs
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -181,24 +182,34 @@ def check_worker_budgets(cwd, log_path, max_log):
                 raise Error('worker_storage_limit', 'Sampled job storage exceeds 512 MiB (not a hard filesystem quota)', 7)
 
 
+def check_worker_cancellation(manifest_path, manifest):
+    if jobs.cancel_requested(manifest_path, manifest['ownership_token']):
+        raise Error('worker_cancelled', 'Worker cancellation requested by the workspace owner', 130, retryable=True)
+
+
 def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, max_log=8*1024*1024):
     start = time.monotonic()
     proc = None
-    manifest.update(status='starting', argv=argv, timeout_seconds=timeout, started_unix=time.time(), ownership_token=uuid.uuid4().hex)
-    write_json(manifest_path, manifest, force=True)
+    manifest_path = Path(manifest_path)
+    owner = jobs.claim(manifest_path)
     try:
+        manifest.update(status='starting', argv=argv, timeout_seconds=timeout, started_unix=time.time(), ownership_token=uuid.uuid4().hex)
+        write_json(manifest_path, manifest, force=True)
+        check_worker_cancellation(manifest_path, manifest)
         with open(log_path, 'xb', buffering=0) as log:
             proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             try:
                 manifest.update(status='running', pid=proc.pid, process_group=proc.pid)
                 write_json(manifest_path, manifest, force=True)
                 while not worker_exited(proc):
+                    check_worker_cancellation(manifest_path, manifest)
                     if time.monotonic()-start > timeout:
                         raise Error('worker_timeout', 'Worker wall-clock timeout', 7, retryable=True)
                     check_worker_budgets(Path(cwd), Path(log_path), max_log)
                     time.sleep(0.1)
             finally:
                 terminate_owned(proc)
+            check_worker_cancellation(manifest_path, manifest)
             check_worker_budgets(Path(cwd), Path(log_path), max_log)
         if proc.returncode:
             raise Error('worker_failed', 'Headless worker exited '+str(proc.returncode)+'; see private job log', 10)
@@ -207,18 +218,22 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
         manifest['status'] = 'cancelled'
         raise Error('interrupted', 'Interrupted; prior committed snapshots remain available', 130) from None
     except Error as e:
-        manifest.update(status='timeout' if e.exit_code == 7 else 'failed', error={'code':e.code,'message':str(e)})
+        status = {7: 'timeout', 130: 'cancelled'}.get(e.exit_code, 'failed')
+        manifest.update(status=status, error={'code':e.code,'message':str(e)})
         raise
     except OSError as e:
         manifest.update(status='failed', error={'code':'worker_startup','message':str(e)})
         raise Error('worker_startup', str(e), 4) from e
     finally:
-        if proc is not None:
-            if proc.returncode is None:
-                terminate_owned(proc)
-            manifest['returncode'] = proc.returncode
-        manifest['elapsed_seconds'] = round(time.monotonic()-start, 6)
-        write_json(manifest_path, manifest, force=True)
+        try:
+            if proc is not None:
+                if proc.returncode is None:
+                    terminate_owned(proc)
+                manifest['returncode'] = proc.returncode
+            manifest['elapsed_seconds'] = round(time.monotonic()-start, 6)
+            write_json(manifest_path, manifest, force=True)
+        finally:
+            os.close(owner)
 
 
 def run(project, image, mode, args, deps, *, entry=None, hints=None):

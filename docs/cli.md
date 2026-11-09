@@ -69,6 +69,7 @@ macscope cfg --project workspaces/calculator --name _calc_add --format dot
 macscope search calc_add --in all --project workspaces/calculator --json
 macscope calls --name _calc_add --direction callers --depth 2 --project workspaces/calculator --json
 macscope status --project workspaces/calculator --json
+macscope jobs list --project workspaces/calculator --json
 macscope headers --project workspaces/calculator --json
 macscope sections --project workspaces/calculator --name-contains text --json
 macscope imports --project workspaces/calculator --json
@@ -375,9 +376,22 @@ across 144 completed function records. All linked addresses matched exported
 instruction starts and the pseudocode matched the preceding bridge version.
 Fresh and cached links matched for `_calc_add` on both architectures.
 
-`status` shows at most 100 job
-records; interrupted/disconnected running markers become
-`unknown_after_disconnect`, with no attempt to signal stale PIDs.
+`status` and `jobs list` show up to 100 recent worker records.
+`jobs show JOB_ID` reads a particular job and includes its limits and
+engine digests. Live status requires an ownership lock held by the
+supervisor. Without that lock, an earlier running record is reported as
+`unknown_after_disconnect`.
+
+```sh
+macscope jobs show JOB_ID --project workspaces/calculator --json
+macscope jobs cancel JOB_ID --project workspaces/calculator --json
+```
+
+Cancellation records a request for that exact live owner. The supervisor
+handles the request and signals its own worker group. Poll `jobs show` for
+the final state, since a worker can finish while a request is being written.
+A confirmed cancellation exits 130 in the original command and preserves
+the prior committed snapshot.
 
 Raw bridge JSON and job manifests/logs remain private in the workspace.
 Normalized exports sort function and unordered cross-reference records (retaining
