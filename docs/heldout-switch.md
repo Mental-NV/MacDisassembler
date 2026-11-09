@@ -96,3 +96,92 @@ pinned 12.2 engine throughout. [Ghidra regression](https://github.com/NationalSe
 The private capture manifest and evaluation report SHA-256 digests are
 `625c9a98c64bfa965319aae1567f27a0dbef0b305e8db231083404e0725412ce`
 and `f408a3651b45ea8a72429a2655a55be52b85bc9177e8300da1d250d93428cff4`.
+
+## Upstream patch evaluation
+
+The published Ghidra releases still showed 12.2 as the latest release
+on 9 November 2026. We rebuilt the installed 12.2 native decompiler
+twice with Apple Clang 21 on arm64, with the same C++14, O2 and macOS
+14.0 deployment settings. The patched build replaced only the upstream
+`RuleRangeMeld` source hunk. Each native binary went into a separate
+complete copy of the installed distribution. We compared all other file
+digests and symlink targets against the installed tree. Both copies
+passed the headless bridge contract under their own engine digests.
+[Ghidra releases](https://github.com/NationalSecurityAgency/ghidra/releases) · [Upstream patch](https://github.com/NationalSecurityAgency/ghidra/commit/c93917a622211349998f641de54cfdbe0e0e5bee)
+
+| Engine component | SHA-256 |
+| --- | --- |
+| Installed 12.2 native decompiler | `bbbe0c16cb5446ab6c338faa28f777a3d923e30cfd5546fab661ccf51c95f6cb` |
+| Rebuilt unpatched native decompiler | `7431d1c2bcbee96ebc87438fe341d365aaafe86039bc58116cae743a6af13433` |
+| Rebuilt patched native decompiler | `ca2b9cca5de09246dd545627cceeda80d2314101c0ad1212e40323cb8ce72bae` |
+| Rebuilt unpatched full tree | `cb6bede0c713fe5f0efff9451d0d46ac0d858f08f0883d3f90d84d3d07171442` |
+| Rebuilt patched full tree | `f185534bf8b3cef92df7f369370f1487b44d321e69516c49ce0d4c592fd28cae` |
+
+- The rebuilt unpatched control reproduced all six missing x86_64 O0
+  case paths in four held-out captures. All 16 patched held-out
+  captures retained the six cases and default. Both x86_64 builds
+  matched the full independently decoded jump-table destination set.
+- The patched calculator matrix passed 151 CLI checks across 16 owned
+  tool and AppKit images. Both profiles and symbol states recovered
+  four omitted case blocks per x86_64 O0 image, with all five distinct
+  table targets in the CFG. The other 24 profile captures served as
+  controls. The DWARF tool comparison matched 536 entries and 532
+  exact byte extents. The four remaining differences were the same
+  eight bytes of x86_64 O2 alignment padding.
+- Eight fresh calculator dispatcher queries matched their cached
+  pseudocode and preserved the saved Programs and snapshots. A fresh
+  query from the unpatched tree against a patched snapshot received
+  the typed `query_engine_mismatch` error.
+- Comparing the installed and patched calculator runs preserved the
+  complete entry inventory and effective options. All body range,
+  instruction, and CFG differences were in the eight recovered
+  dispatcher records. The patch also changed eight signatures and
+  22 pseudocode records outside those dispatchers. This experiment
+  measures reachability and printed output. Behavioral equivalence
+  remains a separate gate.
+
+Private report digests, in the order held-out A/B, calculator matrix,
+paired calculator comparison, and calculator discovery, are
+`45c597ac9911814f662a0f993d662f22409fcca2668f16736fad3a1ed34f396e`,
+`600da3d34a4f547ea0609683f7cb5398ed88d93d54ff5eec89b4bfd332207779`,
+`0a4ecfc82d77d14d8b85432f6a6dccd3330a9dbbefb11df624c9f32e72fec6c4`,
+and `00a1302d3cbd486d9f9d094f0158629274e5663c752806578da72ef04a3189a7`.
+
+### Reproduce the private build
+
+Use a new directory under canonical `/private/tmp`. The recipe keeps the
+upstream source and rebuilt binaries in scratch space. The expected
+download SHA-256 is checked before copying it into the build.
+
+```sh
+experiment=$(mktemp -d /private/tmp/macscope-switch-patch.XXXXXX)
+(
+  set -eu
+  installed=/opt/homebrew/opt/ghidra/libexec
+  source_dir=Ghidra/Features/Decompiler/src/decompile/cpp
+  native=Ghidra/Features/Decompiler/os/mac_arm_64/decompile
+  upstream=c93917a622211349998f641de54cfdbe0e0e5bee
+  curl --fail --silent --show-error --location \
+    "https://raw.githubusercontent.com/NationalSecurityAgency/ghidra/$upstream/$source_dir/ruleaction.cc" \
+    -o "$experiment/ruleaction.upstream.cc"
+  printf '%s  %s\n' \
+    ad428d347b0f955366392d4e3c361b7ec3caab0cc9d9cc991913865644cb3efe "$experiment/ruleaction.upstream.cc" \
+    e9ea936f305309f888fbbe72649e3a6f45cfbe76a06187484a3fba6efa899dac "$installed/$source_dir/ruleaction.cc" \
+    | shasum -a 256 -c -
+  cp -pR "$installed/$source_dir" "$experiment/cpp"
+  cd "$experiment/cpp"
+  for variant in original patched; do
+    if [ "$variant" = patched ]; then cp "$experiment/ruleaction.upstream.cc" ruleaction.cc; fi
+    MACOSX_DEPLOYMENT_TARGET=14.0 make -j4 ghidra_opt \
+      ARCH_TYPE='-arch arm64' ADDITIONAL_FLAGS='-w' CXX='/usr/bin/clang++ -std=c++14'
+    cp -cpR "$installed" "$experiment/engine-$variant"
+    install -m 755 ghidra_opt "$experiment/engine-$variant/$native"
+    codesign --verify "$experiment/engine-$variant/$native"
+  done
+)
+```
+
+Run `doctor --full-digest --ghidra "$experiment/engine-patched"`. Select
+that same full tree with `--ghidra` for import, analyze and fresh queries
+in a new private workspace. Cached queries use the committed snapshot.
+The default engine and existing projects keep their original identity.

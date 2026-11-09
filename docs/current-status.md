@@ -94,9 +94,12 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Freeze a [held-out switch variation](heldout-switch.md) before tuning.
 - [x] Report unresolved computed jumps as partial in cached and fresh CLI
   views. Verified both owned switch fixtures and their resolved controls.
-- [ ] Recover the missing x86_64 O0 case blocks. Ghidra 12.2 remains pinned.
-  The related upstream change and local limits are recorded in the
-  [switch validation](heldout-switch.md#measured-results).
+- [x] Recover the missing x86_64 O0 case blocks with a separately selected
+  full Ghidra 12.2 tree containing the upstream native patch. Verified all
+  calculator and held-out cases. See the
+  [patch evaluation](heldout-switch.md#upstream-patch-evaluation).
+- [ ] Validate a released patched engine before changing the default pin.
+  The installed 12.2 engine continues to report the affected results as partial.
 - [x] Exercise data-only parsers with 10,350 seeded Mach-O mutations and
   10,000 bundle plist mutations. Deep binary plist nesting, unexpected
   XML keys and unknown encodings now return typed `bundle_plist` errors.

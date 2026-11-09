@@ -20,12 +20,14 @@ during Phase 1; Homebrew paths are recorded for identity only.
   at `/opt/homebrew/opt/ghidra/libexec`
   (`/opt/homebrew/Cellar/ghidra/12.2/libexec`)
 - `Ghidra/application.properties` sha256:
-  `7bf69ade52e5530d6534a1202cc4ded88ca1940747456fe3d38ea03b2e399be`
+  `7bf69ade52e5530d6534a1202cc4ded88ca1940747456fe3d38ea03b2e3d99be`
   (version 12.2, layout 3, build date 20261023)
 - Native arm64 decompiler
   `Ghidra/Features/Decompiler/os/mac_arm_64/decompile`:
   Mach-O 64-bit executable arm64, sha256
-  `bbbe0c16cb5456ab6c8faa28f777a3d923e30cfd5546fab661ccf51c95f6cb`
+  `bbbe0c16cb5446ab6c338faa28f777a3d923e30cfd5546fab661ccf51c95f6cb`
+- Installed tree digest from `macscope doctor --full-digest`:
+  `72b7d1c417bf822927ba839647d1cc85268a165e9680e06781fa5f54ba1e9dbc`
 - No x86_64 decompiler directory present (only `mac_arm_64` under
   `Decompiler/os/`); x86_64 targets are analyzed by the same arm64 worker —
   target arch never implies a separate worker.
@@ -87,3 +89,7 @@ Do not compare these fields as if their definitions were the same.
   effective command arrays and budgets. New freeze schema: version 2.
 - No source/dSYM filesystem confinement is claimed. Network denial remains
   required; this is restricted to our own calculator/corpus inputs.
+
+The separate [switch patch experiment](heldout-switch.md#upstream-patch-evaluation)
+records its own native binaries and full engine-tree digests. The installed
+distribution above is the CLI default.
