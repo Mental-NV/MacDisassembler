@@ -158,3 +158,26 @@ Worked examples (normative):
 - A static function-pointer table maps `+ - * /` to the corresponding
   checked routine. Characters outside the table → `INVALID` without
   calling any routine.
+
+## Reference core coverage
+
+The instrumented calculator reference tests reached 168 of 184 branch
+directions before the added edge cases. They now reach all 184 directions
+in `calc_core.c` and pass 59,211 assertions. The additional cases exercise
+null state and history inputs, both sides of the unsigned ordering,
+oversized strings, overflow while accumulating an unsigned magnitude,
+a negative digit, and overflow on a repeated equals after a successful
+first result. The original directed and seeded stateful sequences still run.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 analysis/reference_coverage.py \
+  --output-dir /private/tmp/new-reference-coverage \
+  --experimental-trusted-input
+```
+
+The test executable is built and run in a private, network-denied directory.
+Apple Clang instruments the native arm64 reference and LLVM counts source
+branch directions. The report records the tool and source fingerprints and
+checks the 95% reference coverage requirement. Recovered-code coverage and
+behavior are measured separately. The measured report SHA-256 is
+`75ed6bf9766a6bf9aeba16d7db98496cffc430196490fc259f9c9f9467f87293`.

@@ -87,6 +87,10 @@ collections exceed documented bounds despite successful pseudocode output.
   with tool provenance. Broader Swift metadata decoding remains open.
 - [x] Run source-aware recovered-C calibration for the two scalar comparison
   functions. [Measured scope and results](parameter-inference.md#recovered-scalar-behavior-calibration).
+- [x] Measure 100% branch-direction coverage for the owned reference core
+  with directed and seeded stateful tests. See
+  [reference coverage](semantics.md#reference-core-coverage).
+- [ ] Measure recovered-C behavior and testability across the broader core.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
