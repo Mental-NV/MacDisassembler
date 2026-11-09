@@ -18,7 +18,8 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "analysis"))
 from macscope import engine
 from validate_decompiler_evidence import (read_bytes, read_json, sha, write_new_json,
-    compare_results, calculator_call_regression, require_complete_measured_facets)
+    compare_results, calculator_call_regression, require_complete_function_inventory,
+    require_complete_measured_facets)
 
 PROFILE = "macscope-prototype-experiment/1/"
 CASES = ("DebugAnalysis-arm64", "ReleaseAnalysis-arm64",
@@ -78,12 +79,7 @@ def validate_result(result, input_sha, mode):
             or result.get("ghidra_version") != "12.2"
             or result.get("executable_sha256") != input_sha):
         raise ValueError("Engine result identity or schema mismatch")
-    if (result.get("analysis_timed_out") is not False
-            or result.get("functions_truncated") is not False
-            or result.get("output_budget_reached") is not False
-            or result.get("status") not in ("complete", "partial")
-            or result.get("errors")):
-        raise ValueError("Incomplete or failed engine result")
+    require_complete_function_inventory(result)
     profile = result.get("analysis_profile", {})
     if profile.get("name") != PROFILE + mode or profile.get("applied") is not True:
         raise ValueError("Experiment profile did not complete")
@@ -103,16 +99,8 @@ def validate_result(result, input_sha, mode):
             if re.search(r"dwarf|pdb|source|demangl|external|library|debug", name, re.I):
                 if value.lower() == "true":
                     raise ValueError("Source/external analyzer unexpectedly enabled: " + name)
-    functions = result["functions"]
-    if not functions or len(functions) != result["function_count_enumerated"]:
-        raise ValueError("Bad function population")
-    for f in functions:
-        require_complete_measured_facets(f)
-        status = f["decompile_status"]
-        if status not in ("complete", "not_requested"):
-            raise ValueError("Native decompiler failed, timed out or was cancelled")
-        if status == "complete" and not f.get("pseudocode"):
-            raise ValueError("Completed decompile without pseudocode")
+    for function in result["functions"]:
+        require_complete_measured_facets(function)
 
 
 def run_case(output, label, mode, source, data, dependencies, timeout, copied_from=None):

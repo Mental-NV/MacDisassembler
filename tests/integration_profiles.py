@@ -27,6 +27,10 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def comparison_view(snapshot):
+    return dict(snapshot["engine"], functions=snapshot["functions"])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture-build-root", required=True, type=Path)
@@ -83,11 +87,6 @@ def main(argv=None):
     def exported(project):
         return invoke("export", "--project", project, "--json", expected=(0, 6))["data"]
 
-    def raw_view(snapshot):
-        return {"executable_sha256": snapshot["image"]["sha256"],
-                "effective_analysis_options": snapshot["engine"]["effective_analysis_options"],
-                "functions": snapshot["functions"]}
-
     result = {"status": "failed"}
     try:
         invoke("version", "--json")
@@ -113,7 +112,7 @@ def main(argv=None):
                     or inferred["analysis_id"] == baseline["analysis_id"]
                     or inferred["analysis_profile"] != engine.analysis_profile("parameter-inference")):
                 raise AssertionError("Profile identity/provenance not distinct")
-            comparison = compare_results(raw_view(baseline), raw_view(inferred))
+            comparison = compare_results(comparison_view(baseline), comparison_view(inferred))
             if not comparison["unchanged_machine_facets"]:
                 raise AssertionError("Fixture machine evidence changed")
             if comparison["option_deltas"] != {"Decompiler Parameter ID": ["false", "true"]}:

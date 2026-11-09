@@ -105,6 +105,31 @@ covers reversed order, equality and non-mutation of the input arrays.
 The failed private trial remains intact; the complete matrix used a fresh
 output directory. No analyzer change was needed for this fix.
 
+## Independent validation follow-up
+
+The original matrix comparison accepted identical truncated function subsets
+because it received the function rows and options without the bridge's
+inventory metadata. A truncated copy of a saved export reproduced the false
+pass. The profile matrix and prototype comparison now require complete
+function enumeration with consistent counts, no global analysis timeout or
+output cap, and no bridge errors. Unrelated partial facets such as capped
+references remain allowed.
+
+An offline replay passed for all 50 saved CLI exports and reproduced the
+comparisons for all 16 profile pairs. The saved ten-run prototype experiment
+and four-run smoke test also reproduced their summaries. This replay used
+existing Ghidra outputs.
+
+A fresh LLVM comparison checked the eight v1.1 command-line tool baselines.
+Whole-section LLVM disassembly crossed zero padding into two stripped
+x86_64 functions, misaligning their first instructions. The addresses
+`0x100001a90` (O0, also the Mach-O entry point) and `0x100000e20` (O2)
+both appear in the Mach-O function-start table. Re-decoding the affected
+ranges with LLVM's `--start-address` and `--stop-address` resolved both
+discrepancies. Across the eight exports, 268 Ghidra-selected function records,
+12,336 instructions and 2,582 direct targets agreed. The default
+whole-section validation still requires manual adjudication in these cases.
+
 ## Reproduce and inspect
 
 See [CLI instructions](cli.md#experimental-binary-derived-parameter-inference)

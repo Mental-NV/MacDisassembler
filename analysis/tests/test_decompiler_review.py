@@ -34,7 +34,9 @@ def result(mode="default"):
             "executable_sha256": "0" * 64, "analysis_timed_out": False,
             "functions_truncated": False, "output_budget_reached": False,
             "status": "complete", "errors": [], "functions": [function()],
-            "function_count_enumerated": 1,
+            "function_count_enumerated": 1, "function_count_total_reported_by_engine": 1,
+            "coverage": {"functions": {"status": "complete", "truncated": False,
+                                       "error": None, "emitted": 1, "total": 1}},
             "analysis_profile": {"name": experiment.PROFILE + mode, "applied": True},
             "effective_analysis_options": {"DWARF": "false", "Decompiler Parameter ID":
                                           "true" if mode == "paramid" else "false"}}
@@ -82,6 +84,36 @@ class EvidenceTests(unittest.TestCase):
         compared = evidence.compare_results(a, b)
         self.assertTrue(compared["unchanged_machine_facets"])
         self.assertEqual(len(compared["changes"]["pseudocode"]), 1)
+
+    def test_equal_incomplete_inventories_never_pass_comparison(self):
+        for field, value in (
+            ("functions_truncated", True), ("output_budget_reached", True),
+            ("analysis_timed_out", True), ("errors", ["Analysis failed"]),
+            ("function_count_enumerated", 2), ("function_count_total_reported_by_engine", 2),
+            ("coverage", {}),
+        ):
+            incomplete = result()
+            incomplete.update(status="partial")
+            incomplete[field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                evidence.compare_results(incomplete, copy.deepcopy(incomplete))
+        for field, value in (
+            ("status", "failed"), ("truncated", True), ("error", "Iteration failed"),
+            ("emitted", 0), ("total", 2),
+        ):
+            incomplete = result()
+            incomplete["coverage"]["functions"][field] = value
+            with self.subTest(facet_field=field), self.assertRaises(ValueError):
+                evidence.compare_results(incomplete, copy.deepcopy(incomplete))
+
+    def test_unmeasured_partial_facets_do_not_block_comparison(self):
+        partial = result()
+        partial["status"] = "partial"
+        partial["functions"][0]["coverage"]["xrefs_from_sample"] = {
+            "status": "partial", "truncated": True, "emitted": 200,
+        }
+        compared = evidence.compare_results(result(), partial)
+        self.assertTrue(compared["unchanged_machine_facets"])
 
     def test_compare_detects_machine_or_status_changes(self):
         for field, value in [("body_ranges", []), ("instructions", [{"addr": "0x100"}]),

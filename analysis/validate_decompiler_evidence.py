@@ -55,6 +55,25 @@ def index_functions(functions):
     return indexed
 
 
+def require_complete_function_inventory(result):
+    """Check the bridge inventory while allowing partial unrelated facets."""
+    if (result.get("status") not in ("complete", "partial")
+            or result.get("errors") != []
+            or result.get("analysis_timed_out") is not False
+            or result.get("functions_truncated") is not False
+            or result.get("output_budget_reached") is not False):
+        raise ValueError("Incomplete or failed engine result")
+    count = len(result["functions"])
+    facet = result.get("coverage", {}).get("functions", {})
+    if (not count or facet.get("status") != "complete"
+            or facet.get("truncated") is not False or facet.get("error")
+            or any(total != count for total in (
+                result.get("function_count_enumerated"),
+                result.get("function_count_total_reported_by_engine"),
+                facet.get("emitted"), facet.get("total")))):
+        raise ValueError("Incomplete function inventory")
+
+
 def require_complete_measured_facets(function):
     """Refuse equal-but-incomplete evidence; xref caps are outside this comparison."""
     status = function.get("decompile_status")
@@ -93,6 +112,8 @@ def require_complete_measured_facets(function):
 def compare_results(baseline, candidate):
     if baseline["executable_sha256"] != candidate["executable_sha256"]:
         raise ValueError("Cannot compare different input identities")
+    require_complete_function_inventory(baseline)
+    require_complete_function_inventory(candidate)
     for function in baseline["functions"] + candidate["functions"]:
         require_complete_measured_facets(function)
     before = index_functions(baseline["functions"])
