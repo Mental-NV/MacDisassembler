@@ -54,3 +54,10 @@ collections exceed documented bounds despite successful pseudocode output.
 - Owner decisions: project license, publication/remote pushes and optional
   integrations. No license selection, remote push, paid engine, or Taskovsky
   edit is part of this milestone.
+
+## Independent decompiler research
+
+An opt-in research harness and [documented regression](decompiler-review.md)
+compare instruction evidence and binary-derived prototype inference on the
+owned calculator. They do not change production defaults or establish
+pseudocode behavioral equivalence.

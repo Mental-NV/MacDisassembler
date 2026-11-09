@@ -16,6 +16,7 @@ The broad specification is a roadmap, not a completion claim.
 - [Detailed specification](docs/specification.md)
 - [Phase-1 findings](docs/phase1-findings.md)
 - [Pinned development environment](docs/lock-manifest.md)
+- [Independent decompiler review and opt-in experiments](docs/decompiler-review.md)
 
 ```sh
 PYTHONPATH=src python3 -m macscope --help
