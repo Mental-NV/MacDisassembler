@@ -79,8 +79,10 @@ collections exceed documented bounds despite successful pseudocode output.
   static provenance. The owned app matrix matched 216 method addresses.
 - [x] Expose Swift symbol-table names and optional sandboxed demangling
   with tool provenance. Broader Swift metadata decoding remains open.
-- [ ] Measure blind discovery and false positives on the owned corpus. For
-  behavior, freeze a mechanical recovered-C harness before held-out scoring.
+- [x] Run source-aware recovered-C calibration for the two scalar comparison
+  functions. [Measured scope and results](parameter-inference.md#recovered-scalar-behavior-calibration).
+- [ ] Measure discovery precision and false positives with evaluator-side
+  evidence, then freeze a held-out behavior variation before further tuning.
 - [ ] Exercise isolation, malformed-input fuzzing, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

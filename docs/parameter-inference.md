@@ -132,6 +132,38 @@ live validator now reproduces the two bounded re-decodes automatically.
 The eight-input check passed through its CLI, with exactly those two retries
 and zero unmeasured direct targets.
 
+## Recovered scalar behavior calibration
+
+The fixed harness covers `calc_compare_s64` and `calc_compare_u64`. It used
+16 unmodified recovered functions from the owned symbol-bearing tool exports,
+covering both profiles, arm64/x86_64 and O0/O2. Each was compiled as native
+arm64 C on macOS with Apple Clang 21 and undefined-behavior checks. The
+compiler and test executable ran in bounded, network-denied workspaces.
+
+All 16 candidates compiled and ran. Each matched the manifest-verified
+reference on 121 directed pairs and 10,000 seeded pairs, with zero mismatches
+across 161,936 comparisons. Comparison uses the 32-bit return representation
+and covers less-than, equality and greater-than. A fixed shim supplies the
+printer's scalar typedefs. The harness preserves the candidate text and
+requires the declared argument signedness and width.
+
+This is a source-aware calibration of two functions. It does not score
+aggregate returns, pointer operations, state transitions, stripped inputs,
+or execution under the x86_64 ABI. The broader behavior and blind gates
+remain open.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 analysis/recovered_compare.py \
+  --fixture-build-root /path/to/owned/build/review-v2 \
+  --profile-matrix /private/tmp/completed-profile-matrix \
+  --output-dir /private/tmp/new-recovered-scalar-check \
+  --experimental-trusted-input
+```
+
+The private report records all candidates and compiler and input provenance.
+The measured report SHA-256 is
+`e02a8b1de70ffada60dddae9293d4998d746030c0c019b4e45ab37ae49ac7cc3`.
+
 ## Reproduce and inspect
 
 See [CLI instructions](cli.md#experimental-binary-derived-parameter-inference)
