@@ -160,10 +160,11 @@ collections exceed documented bounds despite successful pseudocode output.
   in disposable full-Ghidra queries. Both calculator parameter-inference
   captures and all four independent fixture captures passed. Four
   no-observer controls declined recovery.
-- [ ] Integrate verified return recovery into the local CLI. The alternate
-  queries bring O2 parameter inference to 52/52 routines and 4,269/4,269
-  instruction bytes in each symbol state. The original CLI captures
-  score 51/52 routines and 4,206/4,269 bytes.
+- [x] Integrate [verified return recovery](dispatch-tables.md#installed-cli-validation)
+  into opt-in fresh queries in the installed CLI. The opt-in output brings
+  O2 parameter inference to 52/52 routines and 4,269/4,269 instruction bytes
+  in each symbol state. The cached score is 51/52 routines and 4,206/4,269
+  bytes. All twelve receipts replayed with identical cached exports.
 - [ ] Meet the recovered-C behavior and testability gates across the full
   core. Baseline O2 remains at 47/52 routines and 3,689/4,269 instruction
   bytes in each symbol state. The two recovered baseline dispatch

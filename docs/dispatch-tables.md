@@ -155,4 +155,41 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/recover_dispa
   --experimental-trusted-input
 ```
 
-CLI integration and broader return-shape coverage remain open.
+## Installed CLI validation
+
+Commit `c3d325f` adds `decompile --fresh --recover-dispatch-return`.
+The CLI checks the saved instructions against the imported slice and
+decodes the supported x86_64 guard and caller from their bytes. The
+request binds the selected function, saved Program, slice and recovery
+policy. The packaged worker applies the verified type in its read-only
+copy and reports the decision under `origin.dispatch_return_recovery`.
+The command accepts the same explicit trust flag as other engine queries.
+The [CLI reference](cli.md#persistence-identity-and-freshness) gives the
+command and restart behavior.
+
+The local wheel was installed without network access. It ran imports,
+both analysis profiles and fresh queries in six private projects. Each
+fixture used symbol-bearing and stripped inputs from the owned builds.
+
+| Fixture | Fresh recovery | Recovered C |
+| --- | --- | --- |
+| Calculator O2, parameter inference | Applied in both symbol states | 4,800 directed and 10,000 seeded cases each passed |
+| Calculator O2, baseline | Applied in both symbol states | Both blocked by the signed division printed in a callee |
+| Independent O2 fixture | Applied in both profiles and symbol states | 4,096 directed and 10,000 seeded cases each passed |
+| No-observer control | Skipped in both profiles and symbol states | Matched the ordinary fresh output |
+
+All twelve receipts replayed. One baseline receipt replayed after a
+different analysis was active. The cached exports were byte-identical
+before and after the queries. A mutated slice in a disposable project
+was rejected before starting a worker. The unassisted calculator
+exports also matched the previous matrix's instructions, ranges,
+CFGs, references and pseudocode. Replacing the selected dispatch result
+with its opt-in CLI output gives 52/52 routines and 4,269/4,269
+instruction bytes under O2 parameter inference in each symbol state.
+The cached score remains 51/52.
+
+The installed wheel SHA-256 is
+`5779fd0c39876cda7205283ad409a241eda0e4479953d8bbea5adc113d2cf92b`.
+The local validation report SHA-256 is
+`666414ef6ca2c7353f2f0de823243f094d4acb2311b7443f45aee99f0c4e4566`.
+Broader return-shape coverage remains open.

@@ -389,6 +389,24 @@ On the owned arm64 and x86_64 tools, fresh queries matched the cached
 pseudocode under both profiles. The integration checks verified one
 decompile attempt and preserved the saved Program and snapshot.
 
+For a supported x86_64 dispatch function, request return recovery in the
+fresh query copy with the same full Ghidra distribution used for analysis.
+
+```sh
+macscope decompile --project workspaces/calculator --arch x86_64 \
+  --name _calc_dispatch_table --fresh --recover-dispatch-return \
+  --experimental-trusted-input --json
+```
+
+The option requires one selected function and is mutually exclusive with
+`--with-type-hints`. The worker uses an immutable table, both return paths,
+a caller that observes both registers, and agreement among the table's
+callees. `origin.dispatch_return_recovery` records `applied` or `skipped`,
+the policy and request digest, and the register storage or skip reason.
+A skip returns the ordinary fresh pseudocode. The cached pseudocode,
+function signature, CFG, and unresolved indirect references remain the
+saved evidence. [Owned fixture validation](dispatch-tables.md#installed-cli-validation)
+
 Cached and fresh results report partial coverage when a recorded computed
 jump lacks a destination or Ghidra emits an explicit jump-recovery warning.
 The original pseudocode, edges, and printer status remain available.
@@ -477,9 +495,11 @@ verify the saved Program and finish publishing it without running Ghidra again.
 
 For a fresh decompile, the restart opens the original saved Program and
 uses the recorded function, label and accepted return hints, even if
-a later analysis or annotation revision is current. It returns the stored
-result if the original or restarted query already published one. This
-replay leaves the active analysis and annotation revisions intact.
+a later analysis or annotation revision is current. Dispatch recovery
+rechecks the original slice and snapshot against the recorded request digest.
+The restart returns the stored result if the original or restarted query
+already published one. Replay preserves the active analysis and annotation
+revisions.
 
 The result and its publication receipt commit together. Repeating a
 successful restart returns the recorded result. Analysis restart also
