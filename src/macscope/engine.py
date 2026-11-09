@@ -134,7 +134,7 @@ def dependencies(ghidra=None, java=None, full=False):
     version = (v.stderr+v.stdout).decode(errors='replace').strip()
     if v.returncode or '25.0.5.0.3' not in version:
         raise Error('incompatible_jdk', 'Requires tested JDK 25.0.5.0.3', 4)
-    result = {'ghidra_version':'12.2', 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), 'native_decompiler_sha256':digest(native), 'java_sha256':digest(j/'bin/java'), 'jvm_sha256':digest(j/'lib/server/libjvm.dylib'), 'bridge_sha256':identity({p.name:digest(p) for p in sorted(BRIDGE.glob('*.java'))}), 'application_properties_sha256':digest(g/'Ghidra/application.properties'), 'isolation':'experimental-trusted-owned-input-only; deny-network and user-home filesystem restrictions; not a hostile-input sandbox', 'hard_process_memory_limit':False}
+    result = {'ghidra_version':'12.2', 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), 'native_decompiler_sha256':digest(native), 'java_sha256':digest(j/'bin/java'), 'jvm_sha256':digest(j/'lib/server/libjvm.dylib'), 'bridge_sha256':identity({p.name:digest(p) for p in sorted(BRIDGE.glob('*.java'))}), 'application_properties_sha256':digest(g/'Ghidra/application.properties'), 'isolation':'experimental-trusted-owned-input-only; deny-network, restrict user-home reads and confine filesystem writes; not a hostile-input sandbox', 'hard_process_memory_limit':False}
     if full:
         result['ghidra_tree_sha256'] = tree_digest(g)
     return result
@@ -146,7 +146,11 @@ def profile(project, dependencies):
     ancestors = sorted({str(p) for p in project.path.parents} | {str(p) for p in BRIDGE.resolve().parents})
     literal = lambda p: json.dumps(p,ensure_ascii=False)
     exclusions = ' '.join('(require-not (subpath '+literal(p)+'))' for p in reads) + ' ' + ' '.join('(require-not (literal '+literal(p)+'))' for p in ancestors)
-    return '(version 1)\n(allow default)\n(deny network*)\n(deny file-read-data (require-all (subpath "/Users") '+exclusions+'))\n(deny file-write* (require-all (subpath "/Users") (require-not (subpath '+literal(str(project.path))+'))))\n'
+    workspace = literal(str(project.path))
+    return ('(version 1)\n(allow default)\n(deny network*)\n'
+            '(deny file-read-data (require-all (subpath "/Users") '+exclusions+'))\n'
+            '(deny file-write* (require-all (require-not (subpath '+workspace+')) '
+            '(require-not (literal "/dev/null"))))\n')
 
 
 
