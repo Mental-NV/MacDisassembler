@@ -89,8 +89,9 @@ collections exceed documented bounds despite successful pseudocode output.
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the
   [discovery measurement](parameter-inference.md#evaluator-side-discovery-measurement).
-- [ ] Freeze and evaluate a held-out behavior variation before tuning the
-  x86_64 O0 switch recovery.
+- [x] Freeze a [held-out switch variation](heldout-switch.md) before tuning.
+- [ ] Evaluate both switch fixtures and report unresolved computed jumps
+  as incomplete where the decompiler cannot recover their destinations.
 - [ ] Exercise isolation, malformed-input fuzzing, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.
