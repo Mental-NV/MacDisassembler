@@ -18,7 +18,7 @@ RECENT = 100
 SCAN_LIMIT = 4096
 SUMMARY = ("job_id", "mode", "image_id", "elapsed_seconds", "started_unix", "returncode", "error")
 DETAILS = ("analysis_profile", "limits", "sandbox_sha256", "selected_entry", "source_analysis_id",
-           "resumed_from")
+           "resumed_from", "boundary_recovery")
 ANALYSIS_REQUEST = "macscope-analysis-request/1"
 IMPORT_REQUEST = "macscope-import-request/1"
 QUERY_REQUEST = "macscope-query-request/1"
@@ -188,8 +188,8 @@ def request_cancel(path, record):
     return {"job_id": record["job_id"], "status": "cancellation_requested"}
 
 
-def analysis_request(project, image):
-    return {
+def analysis_request(project, image, recovery=None):
+    request = {
         "schema": ANALYSIS_REQUEST,
         "project_id": project.project_id,
         "image_id": image["image_id"],
@@ -198,6 +198,9 @@ def analysis_request(project, image):
         "import_baseline_sha256": image["engine_baseline_sha256"],
         "previous_analysis_id": image["active_analysis"],
     }
+    if recovery is not None:
+        request["boundary_recovery"] = recovery
+    return request
 
 
 def query_request(project, image, function, source, revision, hints):

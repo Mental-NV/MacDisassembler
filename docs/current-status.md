@@ -66,7 +66,10 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Validate split-body recovery on a [held-out arm64 fixture](heldout-fallthrough.md).
   Both profiles recovered the eligible 11-instruction body and refused a
   second join because of an outside branch into the competing body.
-- [ ] Expose and validate guarded split-body recovery in the production CLI.
+- [x] Expose guarded split-body recovery as an explicit analysis option.
+  The 32-capture calculator comparison found the expected two joins and
+  preserved the other functions. The held-out integration and live
+  cancellation verified saved Programs and exact replay.
 - [ ] Measure controlled data-reference completeness.
 - [x] Match three normalized exports per case and profile on the owned
   patched app and tool matrix. The [determinism run](parameter-inference.md#three-run-determinism)

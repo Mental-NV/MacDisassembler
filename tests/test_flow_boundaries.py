@@ -3,6 +3,7 @@ import copy
 import unittest
 
 from macscope import flow_boundaries, flow_evidence
+from macscope.errors import Error
 
 
 class FlowBoundaryTests(unittest.TestCase):
@@ -63,3 +64,30 @@ class FlowBoundaryTests(unittest.TestCase):
         self.assertEqual(fresh["data"]["control_flow_gaps"], selected["control_flow_gaps"])
         self.assertEqual(result["status"], "complete")
         self.assertTrue(all(row["decompile_status"] == "complete" for row in snapshot["functions"]))
+
+    def test_recovery_requires_exact_provenance_and_consistent_coverage(self):
+        request = {
+            "policy": flow_boundaries.RECOVERY_POLICY, "linker_starts": ["0x100", "0x120", "0x140"],
+            "image_base": "0x0", "input_sha256": "0" * 64,
+        }
+        report = {
+            **flow_boundaries.recovery_identity(request), "status": "partial", "reason": None,
+            "candidates": [
+                {"owner": "0x100", "competing": "0x104", "outcome": "joined"},
+                {"owner": "0x120", "competing": "0x124", "outcome": "outside_reference"},
+            ],
+        }
+        result = {"status": "partial", "boundary_recovery": report, "functions": [{"entry_va": "0x124"}]}
+        flow_boundaries.verify_recovery(result, request)
+        cases = [
+            dict(result, status="complete"),
+            dict(result, boundary_recovery=dict(report, request_sha256="wrong")),
+            dict(result, boundary_recovery=dict(report, candidates=list(reversed(report["candidates"])))),
+            dict(result, functions=[{"entry_va": "0x104"}]),
+        ]
+        for candidate in cases:
+            with self.subTest(candidate=candidate), self.assertRaises(Error) as caught:
+                flow_boundaries.verify_recovery(candidate, request)
+            self.assertEqual(caught.exception.code, "boundary_recovery_result")
+        with self.assertRaises(Error):
+            flow_boundaries.verify_recovery(result, None)

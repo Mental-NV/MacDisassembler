@@ -1,5 +1,5 @@
 // Narrow, bounded exporter of a real Ghidra Program. Ghidra 12.2 public APIs.
-// analyzeHeadless ... -postScript MacscopeBridge.java OUTPUT MODE MAXFUNCS TIMEOUT [QUERY_ENTRY [TYPE_HINTS]]
+// analyzeHeadless ... -postScript MacscopeBridge.java OUTPUT MODE MAXFUNCS TIMEOUT [MODE_ARGUMENTS]
 // MODE: import (no function work), analyze (post-analysis), query (read-only).
 // The runner owns import/process/readOnly/noanalysis flags and project locking.
 import java.io.IOException;
@@ -11,11 +11,15 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeSet;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -43,6 +47,7 @@ import ghidra.program.model.address.AddressFormatException;
 import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressRangeIterator;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.block.BasicBlockModel;
 import ghidra.program.model.block.CodeBlock;
 import ghidra.program.model.block.CodeBlockIterator;
@@ -56,6 +61,7 @@ import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.DataIterator;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
+import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Program;
@@ -81,6 +87,9 @@ public class MacscopeBridge extends HeadlessScript {
     static final int MAX_SYMBOLS = 10000, MAX_STRINGS = 5000, MAX_SCAN = 100000;
     static final int MAX_OPTIONS = 4096, MAX_TEXT = 4096, MAX_PSEUDOCODE = 1048576;
     static final int MAX_SPANS_PER_FUNCTION = 1024, MAX_SPANS_PER_JOB = 40000;
+    static final String BOUNDARY_POLICY = "macscope-linker-fallthrough-join/1";
+    static final int MAX_LINKER_STARTS = 10000, MAX_BOUNDARY_CANDIDATES = 128;
+    static final int MAX_BOUNDARY_BYTES = 65536, MAX_BOUNDARY_REFERENCES = 10000;
     static final long MAX_OUTPUT = 64L * 1024 * 1024;
     static final long PAYLOAD_BUDGET = 56L * 1024 * 1024;
     static final long METADATA_BUDGET = 16L * 1024 * 1024;
@@ -100,7 +109,7 @@ public class MacscopeBridge extends HeadlessScript {
     public void run() throws Exception {
         String[] args = getScriptArgs();
         if (args.length < 4 || args.length > 6) {
-            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [QUERY_ENTRY [TYPE_HINTS]]");
+            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [BOUNDARY_REQUEST | QUERY_ENTRY [TYPE_HINTS]]");
         }
         mode = args[1];
         if (!mode.equals("import") && !mode.equals("analyze") && !mode.equals("query")) {
@@ -108,7 +117,8 @@ public class MacscopeBridge extends HeadlessScript {
         }
         int maxFunctions = boundedInt(args[2], 1, 10000, "MAXFUNCS");
         int timeout = boundedInt(args[3], 1, 300, "FUNCTION_TIMEOUT");
-        String entry = args.length >= 5 ? args[4] : null;
+        Path boundaries = mode.equals("analyze") && args.length == 5 ? Path.of(args[4]) : null;
+        String entry = args.length >= 5 && boundaries == null ? args[4] : null;
         Path typeHints = args.length == 6 ? Path.of(args[5]) : null;
         if (entry != null && (!mode.equals("query") || maxFunctions != 1 || !entry.matches("0x[0-9a-f]{1,16}"))) {
             throw new IllegalArgumentException("Selected decompilation requires query mode and one RAM entry");
@@ -156,6 +166,7 @@ public class MacscopeBridge extends HeadlessScript {
             describeProgram();
             describeOptions();
             verifyMode();
+            if (!fatal && boundaries != null) recoverBoundaries(boundaries);
             if (entry == null) {
                 sections();
                 symbols();
@@ -276,6 +287,150 @@ public class MacscopeBridge extends HeadlessScript {
             }
         }
         if (analysisTimeoutOccurred()) { partial = true; warnings.add("Ghidra autoanalysis reached its deadline; exported evidence is partial"); }
+    }
+
+    record BoundaryCandidate(Function owner, Function competing, Address nextStart) {}
+
+    void recoverBoundaries(Path path) throws Exception {
+        if (!isHeadlessAnalysisEnabled()) {
+            throw new IllegalStateException("Boundary recovery requires completed headless autoanalysis");
+        }
+        byte[] content;
+        try (InputStream input = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
+            content = input.readNBytes(262145);
+        }
+        if (content.length > 262144) throw new IllegalArgumentException("Boundary request exceeds its byte limit");
+        JsonObject request = JsonParser.parseString(new String(content, StandardCharsets.UTF_8)).getAsJsonObject();
+        if (!BOUNDARY_POLICY.equals(request.get("policy").getAsString()) ||
+            !currentProgram.getExecutableSHA256().equals(request.get("input_sha256").getAsString()) ||
+            !address(currentProgram.getImageBase()).equals(request.get("image_base").getAsString())) {
+            throw new IllegalArgumentException("Boundary request differs from the loaded image");
+        }
+        JsonArray addresses = request.getAsJsonArray("linker_starts");
+        if (addresses.size() < 2 || addresses.size() > MAX_LINKER_STARTS) {
+            throw new IllegalArgumentException("Boundary request has an invalid linker start count");
+        }
+        TreeSet<Address> starts = new TreeSet<>();
+        for (JsonElement item : addresses) {
+            monitor.checkCancelled();
+            String value = item.getAsString();
+            if (!value.matches("0x(?:0|[1-9a-f][0-9a-f]{0,15})") ||
+                !starts.add(currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(value.substring(2)))) {
+                throw new IllegalArgumentException("Invalid or duplicate linker start");
+            }
+        }
+
+        JsonObject report = new JsonObject();
+        JsonArray rows = new JsonArray();
+        put(report, "policy", BOUNDARY_POLICY);
+        put(report, "request_sha256", HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)));
+        report.add("candidates", rows);
+        root.add("boundary_recovery", report);
+        FunctionManager manager = currentProgram.getFunctionManager();
+        String reason = null;
+        if (analysisTimeoutOccurred()) reason = "analysis_timeout";
+        else if (manager.getFunctionCount() > MAX_LINKER_STARTS) reason = "function_limit";
+        List<BoundaryCandidate> candidates = new ArrayList<>();
+        Map<Address, Integer> owners = new HashMap<>();
+        if (reason == null) {
+            FunctionIterator functions = manager.getFunctions(true);
+            while (functions.hasNext()) {
+                monitor.checkCancelled();
+                Function candidate = functions.next();
+                Address entry = candidate.getEntryPoint();
+                if (candidate.isExternal() || candidate.isThunk() ||
+                    !entry.getAddressSpace().equals(starts.first().getAddressSpace()) ||
+                    starts.contains(entry)) continue;
+                Address start = starts.lower(entry);
+                if (start == null) continue;
+                Instruction previous = currentProgram.getListing().getInstructionBefore(entry);
+                if (previous == null || !entry.equals(previous.getFallThrough()) ||
+                    !entry.equals(previous.getMaxAddress().next())) continue;
+                Function owner = manager.getFunctionContaining(previous.getAddress());
+                if (owner == null || owner.isExternal() || owner.isThunk() || !start.equals(owner.getEntryPoint()) ||
+                    owner.getBody().contains(entry)) continue;
+                if (candidates.size() == MAX_BOUNDARY_CANDIDATES) {
+                    reason = "candidate_limit";
+                    break;
+                }
+                candidates.add(new BoundaryCandidate(owner, candidate, starts.higher(entry)));
+                owners.merge(start, 1, Integer::sum);
+            }
+        }
+        boolean incomplete = reason != null, joined = false;
+        if (reason == null) {
+            for (BoundaryCandidate candidate : candidates) {
+                monitor.checkCancelled();
+                Address owner = candidate.owner().getEntryPoint();
+                Address competing = candidate.competing().getEntryPoint();
+                String outcome = owners.get(owner) == 1 ? joinBoundary(manager, candidate) : "multiple_competing_entries";
+                JsonObject row = new JsonObject();
+                put(row, "owner", address(owner));
+                put(row, "competing", address(competing));
+                put(row, "outcome", outcome);
+                rows.add(row);
+                if (outcome.equals("joined")) joined = true;
+                else incomplete = true;
+            }
+        }
+        put(report, "reason", reason);
+        put(report, "status", incomplete ? "partial" : "complete");
+        partial |= incomplete;
+        if (joined) {
+            // Do not let Ghidra's automatic post-script pass recreate the removed function.
+            enableHeadlessAnalysis(false);
+            root.addProperty("function_count_total_reported_by_engine", manager.getFunctionCount());
+        }
+    }
+
+    String joinBoundary(FunctionManager manager, BoundaryCandidate candidate) throws Exception {
+        Function owner = candidate.owner(), competing = candidate.competing();
+        if (candidate.nextStart() == null) return "unbounded_linker_extent";
+        if (competing.getSymbol().getSource() != SourceType.DEFAULT) return "named_competing_entry";
+        AddressSet body = new AddressSet(owner.getBody());
+        body.add(competing.getBody());
+        if (body.getNumAddressRanges() != 1 || !body.getMinAddress().equals(owner.getEntryPoint()) ||
+            body.getMaxAddress().compareTo(candidate.nextStart()) >= 0 || body.getNumAddresses() > MAX_BOUNDARY_BYTES) {
+            return "noncontiguous_or_oversized_body";
+        }
+        MemoryBlock block = currentProgram.getMemory().getBlock(body.getMinAddress());
+        if (block == null || !block.isExecute() || !block.contains(body.getMaxAddress())) {
+            return "unconfirmed_instruction_extent";
+        }
+        InstructionIterator instructions = currentProgram.getListing().getInstructions(body, true);
+        Address next = body.getMinAddress(), last = null;
+        while (instructions.hasNext()) {
+            monitor.checkCancelled();
+            Instruction instruction = instructions.next();
+            if (!instruction.getAddress().equals(next)) return "unconfirmed_instruction_extent";
+            last = instruction.getMaxAddress();
+            next = last.next();
+        }
+        if (!body.getMaxAddress().equals(last)) return "unconfirmed_instruction_extent";
+        var references = currentProgram.getReferenceManager();
+        AddressIterator targets = references.getReferenceDestinationIterator(competing.getBody(), true);
+        int visited = 0;
+        while (targets.hasNext()) {
+            ReferenceIterator refs = references.getReferencesTo(targets.next());
+            while (refs.hasNext()) {
+                monitor.checkCancelled();
+                if (++visited > MAX_BOUNDARY_REFERENCES) return "reference_limit";
+                if (!body.contains(refs.next().getFromAddress())) return "outside_reference";
+            }
+        }
+        int transaction = currentProgram.startTransaction("Macscope linker-confirmed fallthrough join");
+        boolean joined = false;
+        try {
+            if (!manager.removeFunction(competing.getEntryPoint())) {
+                throw new IllegalStateException("Could not remove the competing function");
+            }
+            owner.setBody(body);
+            joined = true;
+            return "joined";
+        }
+        finally {
+            currentProgram.endTransaction(transaction, joined);
+        }
     }
 
     void sections() {

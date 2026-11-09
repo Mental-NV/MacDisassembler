@@ -368,6 +368,26 @@ same linker extent. Both entries carry the evidence, and cached, fresh and
 replayed pseudocode report partial coverage. The original function records
 and Program are preserved. [Owned app-main measurement](phase1-findings.md#controlled-core-instruction-audit)
 
+To apply guarded boundary recovery to a new analysis copy, use:
+
+```sh
+macscope analyze --project workspaces/calculator --repair-split-boundaries \
+  --experimental-trusted-input --json
+```
+
+The opt-in works with either analysis profile. It uses the complete
+function-start table from the verified Mach-O slice. A join requires
+adjacent fallthrough into a default-named competing entry, continuous
+decoded instructions within the same executable linker extent, and no
+recorded outside reference anywhere in the competing body. Analysis
+reports each join or refusal under `boundary_recovery`. A refusal or a
+reached scan bound yields partial coverage.
+
+The policy and request digest form part of the new analysis identity.
+Fresh queries use the saved repaired Program, and job replay restores the
+recorded policy. The pristine import and preceding analysis remain
+available. [Held-out validation](heldout-fallthrough.md#production-validation)
+
 New analyses and fresh queries can include `address_spans` from Ghidra's C
 markup. `text_start` and `text_end` are zero-based UTF-16 offsets into the
 returned pseudocode, with the end excluded. Each `ranges` entry is an

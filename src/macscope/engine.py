@@ -15,7 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
-from . import jobs, worker_lifecycle
+from . import flow_boundaries, jobs, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -253,7 +253,7 @@ def worker_limits(args, max_functions):
 
 
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
-        import_request=None, query_request=None, resumed_from=None):
+        import_request=None, query_request=None, resumed_from=None, boundary_request=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -268,6 +268,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         raise Error('query_entry', 'Selected query requires an exact saved RAM function entry', 2)
     if hints is not None and (entry is None or not 1<=len(hints)<=MAX_TYPE_HINTS):
         raise Error('type_hint_scope', 'Accepted hints require a bounded selected-function query', 2)
+    if boundary_request is not None and mode != 'analyze':
+        raise Error('boundary_recovery_scope', 'Boundary recovery requires analysis of an imported image', 2)
     requested_profile = analysis_profile(getattr(args, 'profile', 'baseline')) if mode == 'analyze' else None
     if mode == 'query':
         saved_snapshot, active = project.snapshot(image)
@@ -311,6 +313,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     max_functions = 1 if entry is not None else args.max_functions
     argv += ['-scriptPath', str(BRIDGE.resolve()), '-postScript', 'MacscopeBridge.java',
              str(outfile), mode, str(max_functions), str(args.function_timeout)]
+    if boundary_request is not None:
+        boundaries = job/'boundary-request.json'
+        write_json(boundaries,boundary_request,mode=0o400)
+        argv.append(str(boundaries))
     if entry is not None:
         argv.append(entry)
     if hints is not None:
@@ -328,6 +334,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':worker_limits(args,max_functions), 'environment':env, 'sandbox_sha256':digest(sandbox)}
     if analysis_request is not None:
         manifest['analysis_request'] = analysis_request
+    if boundary_request is not None:
+        manifest['boundary_recovery'] = flow_boundaries.recovery_identity(boundary_request)
+    if mode == 'query' and 'boundary_recovery' in saved_snapshot['identity']:
+        manifest['boundary_recovery'] = saved_snapshot['identity']['boundary_recovery']
     if import_request is not None:
         manifest['import_request'] = import_request
     if query_request is not None:
@@ -373,6 +383,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             raise Error('bridge_failed', 'Bridge failed: '+str(result.get('errors')), 10)
         if mode != 'import':
             validate_analysis_profile(result, requested_profile, mode)
+        flow_boundaries.verify_recovery(result,boundary_request)
         if entry is not None:
             rows = result.get('functions', [])
             if (result.get('selected_entry') != entry or len(rows) != 1

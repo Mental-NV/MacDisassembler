@@ -14,7 +14,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, flow_evidence, import_state, jobs, metadata, objc, search, swift_symbols
+from . import annotation_transfer, annotations, bundle, calls, dyld, engine, export_trie, flow_boundaries, flow_evidence, import_state, jobs, metadata, objc, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -77,6 +77,7 @@ def parser():
     s.add_argument('--include-images',action='append',metavar='PATH|all',
                    help='Include an exact bundle-relative executable path in addition to the main image')
     s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','parameter-inference','deep'),default='baseline',help='baseline is unchanged; parameter-inference is an explicit experimental binary-only profile');common(s);budgets(s)
+    s.add_argument('--repair-split-boundaries',action='store_true',help='Apply guarded linker-derived function joins to this analysis copy')
     s=sub.add_parser('status');project(s);common(s)
     s=sub.add_parser('jobs');ss=s.add_subparsers(dest='action',required=True)
     for action in ('list','show','cancel','resume'):
@@ -184,6 +185,8 @@ def normalize(raw, image, deps, manifest):
     selected_profile = manifest['analysis_profile']
     engine.validate_analysis_profile(raw, selected_profile, 'analyze')
     analysis_key={'image':image['image_id'],'slice_sha256':image['sha256'],'profile':selected_profile['identity'],'profile_configuration':selected_profile,'engine':{k:v for k,v in deps.items() if k not in ('ghidra_path','java_home','host_os')},'language_id':raw['language_id'],'compiler_spec_id':raw['compiler_spec_id'],'options':raw.get('effective_analysis_options',{}),'limits':manifest['limits'],'auxiliary_inputs':[],'import_baseline_sha256':image.get('engine_baseline_sha256')}
+    if 'boundary_recovery' in manifest:
+        analysis_key['boundary_recovery'] = manifest['boundary_recovery']
     aid=identity(analysis_key)
     def location(value):
         loc={'image_id':image['image_id'],'arch':image['arch'],'address_space':value.partition(':')[0] if not value.startswith('0x') else 'ram','va':None,'rva':None,'slice_file_offset':None,'container_file_offset':None}
@@ -299,6 +302,8 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
     if hints is not None:
         data['origin'].update(type_hint_view_id=job['type_hint_view_id'],
                               applied_type_hints=result['applied_type_hints'])
+    if 'boundary_recovery' in job:
+        data['origin']['boundary_recovery'] = job['boundary_recovery']
     for field in ('control_flow_review', 'control_flow_gaps', 'engine_decompile_status'):
         if field in fresh:
             data[field] = fresh[field]
@@ -398,6 +403,11 @@ def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=Fa
     if resumed_from is not None:
         data.update(resumed_from=resumed_from,reused_restart=reused)
     reasons = ['engine_or_facet_partial'] if snapshot['status'] != 'complete' else []
+    recovery = snapshot['engine'].get('boundary_recovery')
+    if recovery is not None:
+        data['boundary_recovery'] = recovery
+        if recovery['status'] == 'partial':
+            reasons.append('boundary_recovery_incomplete')
     if 'control_flow_review' in view:
         data['control_flow_review'] = view['control_flow_review']
         reasons.append('unresolved_control_flow')
@@ -409,12 +419,16 @@ def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=Fa
 
 def analyze_image(project, image, args, deps, command, *, resumed_from=None):
     """Run analysis and publish its snapshot and receipt under the project writer lock."""
-    metadata.verified_slice(project,image)
+    data = metadata.verified_slice(project,image)
+    boundary_request = recovery = None
+    if getattr(args,'repair_split_boundaries',False):
+        boundary_request = flow_boundaries.recovery_request(data,image)
+        recovery = flow_boundaries.recovery_identity(boundary_request)
     baseline = project.path/'engine'/image['image_id']
     if not baseline.is_dir() or engine.tree_digest(baseline)!=image['engine_baseline_sha256']:
         raise Error('baseline_integrity','Saved import Program DB changed; create a fresh project')
-    raw,job=engine.run(project,image,'analyze',args,deps,
-                       analysis_request=jobs.analysis_request(project,image),resumed_from=resumed_from)
+    raw,job=engine.run(project,image,'analyze',args,deps,boundary_request=boundary_request,
+                       analysis_request=jobs.analysis_request(project,image,recovery),resumed_from=resumed_from)
     normalized=normalize(raw,image,deps,job)
     aid=normalized['analysis_id']
     out=project.path/'snapshots'/(aid+'.json')
@@ -546,9 +560,15 @@ def resume_analysis(args, project, command, record, request):
     if request.get('project_id') != project.project_id or record.get('image_id') != image_id:
         raise Error('job_resume_inputs','The recorded request belongs to a different project or image',8)
     image = project.select(image_id)
-    current = jobs.analysis_request(project,image)
+    recovery = None
+    if 'boundary_recovery' in request:
+        boundary = flow_boundaries.recovery_request(metadata.verified_slice(project,image),image)
+        recovery = flow_boundaries.recovery_identity(boundary)
+    current = jobs.analysis_request(project,image,recovery)
     if dict(request,previous_analysis_id=image['active_analysis']) != current:
         raise Error('job_resume_inputs','The recorded immutable inputs differ from the workspace',8)
+    if record.get('boundary_recovery') != recovery:
+        raise Error('job_resume_policy','The recorded boundary recovery policy differs from the request',3)
     receipt = jobs.publication(project,args.job_id)
     if receipt:
         if receipt['job_id'] == args.job_id:
@@ -558,6 +578,7 @@ def resume_analysis(args, project, command, record, request):
     if request != current:
         raise Error('job_resume_conflict','The active analysis changed since the recorded request',8)
     replay,deps = replay_worker_request(args,project,record)
+    replay.repair_split_boundaries = recovery is not None
     artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
     if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
         raise Error('input_integrity','Immutable artifact digest differs from the recorded request')

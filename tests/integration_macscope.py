@@ -142,7 +142,59 @@ try:
             return [(f['engine_entry'],f['name'],f['pseudocode'],f['address_spans'],
                      [(i['addr'],i['bytes'],i['text']) for i in f['instructions']]) for f in s['functions']]
         assert content(left)==content(right),arch+' thin/fat64 analysis mismatch'
-    result={'status':'passed','checks':len(records),'commands':records,'slice_parity':['arm64','x86_64'],'workspaces':[str(p.relative_to(ROOT)) for p in WORK.iterdir() if p.is_dir()]}
+    # Exercise the production repair against both a real split and an
+    # interior outside reference in the frozen owned assembly variation.
+    symbols = WORK / 'FallthroughSymbolBearing'
+    stripped = WORK / 'FallthroughStripped'
+    subprocess.run(['/usr/bin/xcrun','clang','-arch','arm64',
+                    str(ROOT/'analysis'/'heldout_fallthrough.s'),'-o',str(symbols)],check=True,timeout=30)
+    stripped.write_bytes(symbols.read_bytes())
+    subprocess.run(['/usr/bin/xcrun','strip',str(stripped)],check=True,timeout=30)
+    p = WORK / 'boundary-recovery'
+    opts = ('--project',p,'--experimental-trusted-input','--json')
+    cli('project','create',p,'--json')
+    cli('import',stripped,*opts,'--arch','arm64')
+    ordinary = cli('analyze',*opts,expected=(6,))
+    workspace = Project(p)
+    image = workspace.select()
+    baseline = workspace.path/'engine'/image['image_id']
+    before = engine.tree_digest(baseline)
+    original = workspace.snapshot(image)
+    assert 'boundary_recovery' not in ordinary['data']
+    repaired = {}
+    for profile in ('baseline','parameter-inference'):
+        result = cli('analyze',*opts,'--profile',profile,'--repair-split-boundaries',expected=(6,))
+        repaired[profile] = (result,cli('export','--project',p,'--json',expected=(6,)))
+    nm = subprocess.check_output(['/usr/bin/xcrun','nm','-n',str(symbols)],text=True,timeout=15)
+    names = {name:hex(int(address,16)) for row in nm.splitlines() for address, _, name in [row.split()]}
+    owner, outside = names['_heldout_guarded_call'], names['_heldout_shared_body']
+    for profile, (result, exported) in repaired.items():
+        recovery = result['data']['boundary_recovery']
+        assert recovery['status'] == 'partial'
+        outcomes = {row['owner']:row for row in recovery['candidates']}
+        assert set(outcomes) == {owner,outside}
+        assert outcomes[owner]['outcome'] == 'joined'
+        assert outcomes[outside]['outcome'] == 'outside_reference'
+        data = exported['data']
+        assert result['analysis_id'] == exported['analysis_id'] != ordinary['analysis_id']
+        assert data['identity']['boundary_recovery']['request_sha256'] == recovery['request_sha256']
+        functions = {row['entry_va']:row for row in data['functions']}
+        assert len(functions[owner]['instructions']) == 11
+        assert outcomes[owner]['competing'] not in functions
+        assert functions[outside]['decompile_status'] == 'partial'
+        assert outcomes[outside]['competing'] in functions
+        assert names['_heldout_confirmed_callee'] in functions
+    saved = repaired['parameter-inference'][1]['data']
+    selected = next(row for row in saved['functions'] if row['entry_va']==owner)
+    fresh = cli('decompile',*opts,'--fresh','--address',owner)
+    assert fresh['analysis_id']==saved['analysis_id'] and fresh['data']['pseudocode']==selected['pseudocode']
+    assert fresh['data']['origin']['boundary_recovery']==saved['identity']['boundary_recovery']
+    again = cli('analyze',*opts,'--profile','parameter-inference','--repair-split-boundaries',expected=(6,))
+    assert again['analysis_id']==saved['analysis_id']
+    assert cli('export','--project',p,'--json',expected=(6,))==repaired['parameter-inference'][1]
+    assert workspace.snapshot(image)==original and engine.tree_digest(baseline)==before
+    result={'status':'passed','checks':len(records),'commands':records,'slice_parity':['arm64','x86_64'],
+            'boundary_recovery_profiles':list(repaired),'workspaces':[str(p.relative_to(ROOT)) for p in WORK.iterdir() if p.is_dir()]}
     print(json.dumps({'status':'passed','command_checks':len(records),'artifacts':str(WORK)}))
 except BaseException as e:
     result={'status':'failed','error':repr(e),'commands':records}
