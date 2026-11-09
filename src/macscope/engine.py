@@ -15,7 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
-from . import direct_signatures, dispatch_returns, flow_boundaries, jobs, worker_lifecycle
+from . import direct_signatures, dispatch_returns, flow_boundaries, jobs, scalar_signatures, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -27,6 +27,7 @@ BRIDGE = Path(__file__).parent/'bridge'
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
     'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
+    'scalar_signature_recovery': (scalar_signatures, 'scalar-signatures'),
 }
 
 

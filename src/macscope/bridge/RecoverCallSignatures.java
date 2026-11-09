@@ -24,9 +24,11 @@ import ghidra.app.util.headless.HeadlessScript;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.FunctionDefinitionDataType;
+import ghidra.program.model.data.IntegerDataType;
 import ghidra.program.model.data.ParameterDefinition;
 import ghidra.program.model.data.ParameterDefinitionImpl;
 import ghidra.program.model.data.Undefined8DataType;
+import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.VariableStorage;
@@ -40,6 +42,8 @@ import ghidra.program.model.symbol.SourceType;
 public class RecoverCallSignatures extends HeadlessScript {
     static final String DISPATCH = "macscope-dispatch-return-recovery/1";
     static final String DIRECT = "macscope-direct-call-signatures/1";
+    static final String SCALAR = "macscope-scalar-call-signatures/1";
+    static final String X86 = "x86:LE:64:default", ARM = "AARCH64:LE:64:AppleSilicon";
     int timeout;
 
     record Recovery(Function root, Address call, FunctionPrototype prior, DataType resultType,
@@ -59,16 +63,24 @@ public class RecoverCallSignatures extends HeadlessScript {
         if (Files.size(request) > 256 * 1024) throw new IllegalArgumentException("Oversized ABI request");
         JsonObject plan = JsonParser.parseString(Files.readString(request)).getAsJsonObject();
         String policy = text(plan, "policy");
-        if (!(DISPATCH.equals(policy) || DIRECT.equals(policy)) ||
-            !text(plan, "image_sha256").equalsIgnoreCase(currentProgram.getExecutableSHA256()) ||
-            !"x86:LE:64:default".equals(currentProgram.getLanguageID().getIdAsString()))
+        String language = currentProgram.getLanguageID().getIdAsString();
+        boolean supported = switch (policy) {
+            case DISPATCH, DIRECT -> X86.equals(language);
+            case SCALAR -> X86.equals(language) || ARM.equals(language);
+            default -> false;
+        };
+        if (!supported || !text(plan, "image_sha256").equalsIgnoreCase(currentProgram.getExecutableSHA256()))
             throw new IllegalStateException("ABI request differs from the saved Program");
 
         JsonArray rows = plan.getAsJsonArray("requests");
         if (rows.isEmpty() || rows.size() > 32) throw new IllegalArgumentException("Unbounded ABI request");
         JsonObject report = new JsonObject();
         report.addProperty("policy", policy);
-        if (DIRECT.equals(policy)) {
+        if (SCALAR.equals(policy)) {
+            String selected = text(plan, "entry_va");
+            report.addProperty("entry_va", selected);
+            report.add("results", recoverScalar(internal(selected), rows, language));
+        } else if (DIRECT.equals(policy)) {
             String selected = text(plan, "entry_va");
             report.addProperty("entry_va", selected);
             report.add("results", recoverDirect(internal(selected), rows));
@@ -77,6 +89,142 @@ public class RecoverCallSignatures extends HeadlessScript {
         }
         Files.writeString(Path.of(args[1]), new Gson().toJson(report),
             StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+    }
+
+    JsonArray recoverScalar(Function selected, JsonArray rows, String language) throws Exception {
+        if (rows.size() > 16) throw new IllegalArgumentException("Unbounded scalar call sites");
+        JsonArray results = new JsonArray();
+        Map<Address, String> changed = new LinkedHashMap<>();
+        for (JsonElement element : rows) {
+            monitor.checkCancelled();
+            JsonObject row = element.getAsJsonObject();
+            Function caller = internal(text(row, "caller_va"));
+            Address site = address(text(row, "call_va"));
+            Address target = address(text(row, "target_va"));
+            JsonObject decision = new JsonObject();
+            for (String key : List.of("kind", "caller_va", "call_va", "target_va")) {
+                decision.add(key, row.get(key));
+            }
+            results.add(decision);
+            JsonArray witness = row.getAsJsonArray("caller");
+            if (!address(text(witness.get(0).getAsJsonObject(), "va")).equals(site))
+                throw new IllegalStateException("Scalar witness does not start at the call");
+            checkBytes(witness, caller, 2);
+            if (X86.equals(language) && "zero_extended_eax".equals(text(row, "kind"))) {
+                Function callee = internal(text(row, "target_va"));
+                if (!selected.equals(caller) && !selected.equals(callee))
+                    throw new IllegalStateException("Scalar witness does not involve the selected function");
+                checkDirect(caller, site, callee);
+                if (witness.size() != 2 || !Set.of("83f800", "85c0")
+                    .contains(text(witness.get(1).getAsJsonObject(), "bytes")))
+                    throw new IllegalStateException("Scalar caller does not test the whole return register");
+                verifyZeroExtendedLeaf(callee, row.getAsJsonArray("leaf"));
+                String reason = widenResult(callee);
+                if (reason != null) {
+                    skipped(decision, reason);
+                    continue;
+                }
+                decision.addProperty("return_storage", "EAX:4");
+            } else if (ARM.equals(language) && "darwin_stack_failure".equals(text(row, "kind"))) {
+                Function thunk = getFunctionAt(target);
+                if (!selected.equals(caller) || witness.size() != 1 || thunk == null || !thunk.isThunk())
+                    throw new IllegalStateException("Invalid Darwin stack failure thunk");
+                checkDirect(caller, site, thunk);
+                checkBytes(row.getAsJsonArray("stub"), thunk, 3);
+                Function imported = thunk.getThunkedFunction(true);
+                if (imported == null || !imported.isExternal() || !imported.getName().equals("___stack_chk_fail") ||
+                    !imported.hasNoReturn() || imported.hasVarArgs() || imported.getParameterCount() != 0) {
+                    skipped(decision, "unsupported_callee_signature");
+                    continue;
+                }
+                if (imported.getSignatureSource() == SourceType.USER_DEFINED) {
+                    skipped(decision, "protected_callee_signature");
+                    continue;
+                }
+                String bind = text(row, "bind_va");
+                String priorBind = changed.putIfAbsent(target, bind);
+                if (priorBind != null && !priorBind.equals(bind))
+                    throw new IllegalStateException("Conflicting bindings for the same stack failure thunk");
+                if (priorBind == null) {
+                    imported.setReturnType(VoidDataType.dataType, SourceType.IMPORTED);
+                    imported.setSignatureSource(SourceType.IMPORTED);
+                }
+                if (!imported.getReturnType().isEquivalent(VoidDataType.dataType) ||
+                    imported.getParameterCount() != 0 || !imported.hasNoReturn())
+                    throw new IllegalStateException("Stack failure import ABI differs after applying the prototype");
+                decision.addProperty("bind_va", bind);
+                decision.addProperty("prototype", "void (void)");
+                decision.addProperty("noreturn", true);
+            } else {
+                throw new IllegalStateException("Scalar witness does not match the Program architecture");
+            }
+            decision.addProperty("status", "applied");
+        }
+        return results;
+    }
+
+    void verifyZeroExtendedLeaf(Function callee, JsonArray leaf) throws Exception {
+        checkBytes(leaf, callee, 1024);
+        int count = leaf.size();
+        JsonObject end = leaf.get(count - 1).getAsJsonObject();
+        Address exit = address(text(end, "va"));
+        int extend = count - 2;
+        if (extend > 0 && "5d".equals(text(leaf.get(extend).getAsJsonObject(), "bytes"))) extend--;
+        if (extend < 0 || !"c3".equals(text(end, "bytes")) ||
+            !"0fb6c0".equals(text(leaf.get(extend).getAsJsonObject(), "bytes")) ||
+            !callee.getEntryPoint().equals(address(text(leaf.get(0).getAsJsonObject(), "va"))) ||
+            callee.getBody().getNumAddresses() != exit.subtract(callee.getEntryPoint()) + 1)
+            throw new IllegalStateException("Scalar proof does not cover the complete leaf and its return");
+        Address lastDefinition = address(text(leaf.get(extend).getAsJsonObject(), "va"));
+        var instructions = currentProgram.getListing().getInstructions(callee.getBody(), true);
+        while (instructions.hasNext()) {
+            Instruction instruction = instructions.next();
+            var flow = instruction.getFlowType();
+            Address location = instruction.getAddress();
+            if (location.equals(exit) ? !flow.isTerminal() :
+                flow.isCall() || flow.isComputed() || flow.isTerminal() ||
+                !flow.isJump() && instruction.getFallThrough() == null)
+                throw new IllegalStateException("Unexpected scalar leaf transfer");
+            for (Address branch : instruction.getFlows()) {
+                if (!callee.getBody().contains(branch) || branch.compareTo(lastDefinition) > 0)
+                    throw new IllegalStateException("A branch bypasses the full return definition");
+            }
+        }
+    }
+
+    String widenResult(Function callee) throws Exception {
+        SourceType source = callee.getSignatureSource();
+        if (source == SourceType.USER_DEFINED || source == SourceType.IMPORTED)
+            return "protected_callee_signature";
+        if (callee.hasCustomVariableStorage() || callee.hasNoReturn())
+            return "unsupported_callee_signature";
+        HighFunction high = highFunction(callee);
+        FunctionPrototype prior = high.getFunctionPrototype();
+        if (prior.isVarArg() || prior.getReturnType().getLength() != 1 ||
+            !registerStorage(prior.getReturnStorage(), "AL", 1))
+            return "unsupported_callee_signature";
+        if (source == SourceType.DEFAULT) {
+            HighFunctionDBUtil.commitParamsToDatabase(high, true,
+                HighFunctionDBUtil.ReturnCommitOption.NO_COMMIT, SourceType.ANALYSIS);
+        }
+        var inputs = callee.getParameters();
+        callee.setReturnType(IntegerDataType.dataType, SourceType.ANALYSIS);
+        callee.setSignatureSource(SourceType.ANALYSIS);
+        var after = callee.getParameters();
+        if (!registerStorage(callee.getReturn().getVariableStorage(), "EAX", 4) || inputs.length != after.length)
+            throw new IllegalStateException("Scalar signature did not widen the saved return register");
+        for (int i = 0; i < after.length; i++) {
+            if (!inputs[i].getDataType().isEquivalent(after[i].getDataType()) ||
+                !inputs[i].getVariableStorage().equals(after[i].getVariableStorage()))
+                throw new IllegalStateException("Scalar signature changed an input");
+        }
+        return null;
+    }
+
+    boolean registerStorage(VariableStorage storage, String register, int size) {
+        Varnode[] nodes = storage.getVarnodes();
+        return nodes.length == 1 && nodes[0].getSize() == size &&
+            nodes[0].getAddress().equals(currentProgram.getRegister(register).getAddress());
     }
 
     JsonArray recoverDispatch(JsonArray rows) throws Exception {

@@ -22,7 +22,7 @@ DETAILS = ("analysis_profile", "limits", "sandbox_sha256", "selected_entry", "so
 ANALYSIS_REQUEST = "macscope-analysis-request/1"
 IMPORT_REQUEST = "macscope-import-request/1"
 QUERY_REQUEST = "macscope-query-request/1"
-SIGNATURE_RECOVERY_FIELDS = ("dispatch_return_recovery", "direct_signature_recovery")
+SIGNATURE_RECOVERY_FIELDS = ("dispatch_return_recovery", "direct_signature_recovery", "scalar_signature_recovery")
 QUERY_RECEIPT = "macscope-query-receipt/1"
 PUBLISH = """
 CREATE TABLE IF NOT EXISTS analysis_publications (
