@@ -174,9 +174,12 @@ collections exceed documented bounds despite successful pseudocode output.
   and indirect dispatch, O2 reaches 52/52 routines and 4,269/4,269
   instruction bytes in each profile and symbol state. The independent
   observer passed in all four captures and all four controls declined.
+- [x] Validate [O0 byte-array compatibility](semantics.md#o0-byte-array-compatibility)
+  on all 416 saved calculator instances. Eight previously untestable
+  instances passed with zero mismatches.
 - [ ] Meet the O0 recovered-C behavior and testability gate across the
   full core. The saved captures pass 41/52 routines and 5,360/8,644
-  bytes under baseline and 46/52 routines and 6,944/8,644 bytes under
+  bytes under baseline and 50/52 routines and 7,869/8,644 bytes under
   parameter inference in each symbol state.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch

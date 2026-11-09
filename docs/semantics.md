@@ -396,3 +396,65 @@ All complete domains had zero mismatches. The O2 testability gate
 remains open with 126 of 208 routine instances (60.6%) and 6,452 of
 17,076 instruction bytes (37.8%) completing their primary domains.
 Both measures require at least 90%.
+
+### O0 byte-array compatibility
+
+Policy `macscope-ghidra-aggregate-compat/10` accepts explicitly declared
+12- and 16-byte stack temporaries with Ghidra's `local_` names. It also
+copies equal-width non-scalar subfields of declared byte arrays, with
+both ranges checked against their declarations. Copies snapshot the
+source bytes and their definedness, including for overlapping copies.
+A sanitizer control checked a nonzero-offset overlapping copy with
+partially undefined bytes and verified that neighboring bytes and
+the byte-definedness mask were preserved.
+
+The calculator rerun reused the frozen [wide-division captures](wide-division.md).
+Across all 416 routine instances, eight moved from untestable to passing
+and the other 408 retained their verdicts and completed domains. The
+new passes all use the O0 parameter-inference profile. Each row passed
+in both symbol states with 10,000 seeded inputs per case and zero
+mismatches.
+
+| Architecture | Routine | Directed per case | Instruction bytes per case |
+| --- | --- | ---: | ---: |
+| arm64 | `calc_apply_op` | 4,800 | 232 |
+| arm64 | `calc_engine_input_op` | 6,252 | 284 |
+| arm64 | `calc_engine_equals` | 521 | 368 |
+| x86_64 | `calc_sign_toggle` | 148 | 41 |
+
+In each symbol state, the saved O0 parameter-inference captures now pass
+50/52 routines and 7,869/8,644 instruction bytes. The two outstanding
+routines are arm64 formatting and x86_64 operator entry. The saved O0 baseline
+and O2 scores are unchanged.
+
+The local paired report in
+`/private/tmp/macscope-byte-slices.LyvPPJ/paired-shim.json` has SHA-256
+`26aeddaacd11620b98e22059d74d5fb3190bbba0c5d2347f81cc5cb0e3d4e6c6`.
+
+#### Remaining parameter-inference diagnostics
+
+In both arm64 O0 inputs, the formatter's `BL` at `0x100000db8` targets
+the stub at `0x10000251c`. Its `ADRP`, `LDR`, and `BR` resolve to
+the strong libSystem `___stack_chk_fail` binding at `0x100004048`.
+Ghidra's saved import has no parameters and is marked non-returning,
+but the caller prints an argument. Giving the import an explicit
+`void (void)` prototype in a disposable read-only Program query
+produced a zero-argument call. Both fresh outputs passed 1,005
+directed and 10,000 seeded cases.
+
+In both x86_64 O0 inputs, the operator-entry caller compares `EAX`
+with zero immediately after its direct call. The callee ends with
+`movzbl %al, %eax` before restoring the frame and returning. The
+saved inference models a one-byte boolean result and the caller C
+contains an undefined upper piece. Giving the helper a four-byte
+integer return in the query copy removed the undefined piece.
+The evaluator compiled the separately captured fresh helper and
+caller together with their saved dependencies. Both outputs passed
+6,252 directed and 10,000 seeded cases.
+
+These four assisted comparisons had zero mismatches. They use
+explicitly selected prototypes in a diagnostic and are excluded
+from the CLI score. The saved Programs retained their hashes.
+The local report in
+`/private/tmp/macscope-byte-slices.LyvPPJ/prototype-probe.json` has
+SHA-256 `1c5954a7808dfbebb94dc7b2759c02195d92911a544cc9b78fed8ad4fc956ce6`.

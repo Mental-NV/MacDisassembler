@@ -2,7 +2,7 @@
 import re
 
 
-POLICY = "macscope-ghidra-aggregate-compat/9"
+POLICY = "macscope-ghidra-aggregate-compat/10"
 MEMORY_STORES = frozenset(("STORE_LE16", "STORE_LE32", "STORE_LE64"))
 ARM_VECTORS = frozenset(("NEON_rev64", "NEON_ext"))
 BYTE_VECTORS = ARM_VECTORS | {"pshufb"}
@@ -26,7 +26,7 @@ WORDS = set("long ulong int uint bool char byte void undefined1 undefined2 undef
             "if else while do for goto return break continue switch case default true false "
             "SCARRY8 SBORROW8 SEXT816 ZEXT816 ZEXT412 SUB168 CONCAT88 SDIV16".split()) | MEMORY_STORES | BYTE_VECTORS
 CALL = re.compile(rf"\b({NAME})\s*\(")
-RAW_ARRAY = re.compile(r"\bundefined1\s+([a-z]{1,3}Var[0-9]+)\s*\[(12|16)\]\s*;")
+RAW_ARRAY = re.compile(r"\bundefined1\s+([a-z]{1,3}Var[0-9]+|local_[0-9a-f]+)\s*\[(12|16)\]\s*;")
 UNDEFINED_STACK = re.compile(r"\bundefined[1248]\s+([a-z]+Stack_[0-9a-f]+)\s*;")
 VECTOR_CAST = r"\*\s*\(\s*undefined1\s*\(\s*\*\s*\)\s*\[16\]\s*\)\s*"
 VECTOR_CALL = re.compile(r"\b(NEON_rev64|NEON_ext|pshufb)\s*\(")
@@ -164,6 +164,14 @@ def lower_function(text, name, functions, aggregate_required, *, initialized_sta
                 return f"gh_undef(&{match[1]}, {offset}, {width});"
             if arrays.get(expression) == width:
                 return f"gh_copy_field(&{match[1]}, {offset}, {width}, {expression});"
+            source = re.fullmatch(slot, expression)
+            if source is not None:
+                source_offset, source_width = coordinates(source)
+                if source_width not in (1, 2, 4, 8):
+                    if source_width != width:
+                        raise Unsupported("aggregate_subfield_width_mismatch")
+                    piece = f"gh_subpiece({source[1]}, {source_offset}, {width})"
+                    return f"gh_copy_field(&{match[1]}, {offset}, {width}, {piece});"
             return f"gh_set(&{match[1]}, {offset}, {width}, ({expression}));"
 
         body = re.sub(slot + r"\s*=(?!=)\s*([^;{}]+);", store, body)

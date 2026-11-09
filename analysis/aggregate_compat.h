@@ -34,8 +34,15 @@ static unsigned gh_byte_mask(unsigned offset, unsigned width) {
     return ((1u << width)-1) << offset;
 }
 
+static gh_bits gh_subpiece(gh_bits value, unsigned offset, unsigned width) {
+    return (gh_bits){
+        (value.bits >> (offset*8)) & gh_mask(width),
+        (value.known >> offset) & gh_byte_mask(0, width)
+    };
+}
+
 static gh_bits gh_low_bytes(gh_bits value, unsigned width) {
-    return (gh_bits){value.bits & gh_mask(width), value.known & gh_byte_mask(0, width)};
+    return gh_subpiece(value, 0, width);
 }
 
 static void gh_undef(gh_bits *value, unsigned offset, unsigned width) {

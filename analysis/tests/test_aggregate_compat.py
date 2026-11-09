@@ -70,6 +70,25 @@ class AggregateCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(Unsupported, "unsupported_aggregate_shift"):
             lowered("undefined1 auVar1 [12]; auVar1 = ZEXT412(3) << 128; return auVar1;")
 
+    def test_declared_stack_aggregate_uses_the_same_width_rules(self):
+        code = lowered("""
+            undefined1 local_20 [16];
+            local_20 = ZEXT816(param_1);
+            local_20 = local_20 << 0x40;
+            return local_20;
+        """)
+        self.assertIn("gh_bits local_20 = {0};", code)
+        self.assertIn("local_20 = gh_shift(local_20, 8);", code)
+
+    def test_wide_subfield_copy_keeps_both_declared_offsets_and_width(self):
+        declarations = "undefined1 auVar1 [16]; undefined1 auVar2 [16]; "
+        code = lowered(declarations + "auVar2._4_12_ = auVar1._1_12_; return auVar2;")
+        self.assertIn("gh_copy_field(&auVar2, 4, 12, gh_subpiece(auVar1, 1, 12));", code)
+        with self.assertRaisesRegex(Unsupported, "aggregate_subfield_width_mismatch"):
+            lowered(declarations + "auVar2._0_12_ = auVar1._0_13_; return auVar2;")
+        with self.assertRaisesRegex(Unsupported, "invalid_aggregate_subfield"):
+            lowered(declarations + "auVar2._0_12_ = auVar1._5_12_; return auVar2;")
+
     def test_shifted_aggregate_assignment_keeps_the_comma_guard(self):
         code = lowered("""
             undefined1 auVar1 [16];
