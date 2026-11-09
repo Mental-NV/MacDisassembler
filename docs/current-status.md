@@ -66,7 +66,10 @@ collections exceed documented bounds despite successful pseudocode output.
   links. The owned arm64 main and x86_64 helper passed real Ghidra import.
 - [x] Query imported headers, segments, sections and file-backed bytes,
   plus saved symbol, string, import and export collections.
-- [ ] Extend load-command evidence and decode supported dyld records.
+- [x] Record entry offsets, dylib dependencies, rpaths and linkedit extents,
+  and decode bounded function-start and data-in-code tables. The owned
+  16-binary comparison checked 708 function starts and 56 dylib paths.
+- [ ] Decode supported dyld bind/rebase and chained fixup payloads.
 - [ ] Add Objective-C/Swift views with source and coverage distinctions.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.

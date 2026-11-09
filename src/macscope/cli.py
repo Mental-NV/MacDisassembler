@@ -393,7 +393,10 @@ def execute(a):
         return envelope(command,deps)
     if a.command=='inspect':
         data,_=inspect_path(a.input)
-        return envelope(command,data)
+        gaps=metadata.loader_gaps(data['slices'])
+        return envelope(command,data,status='partial' if gaps else 'complete',
+                        cov=coverage('Mach-O preflight',len(data['slices']),len(data['slices']),bool(gaps),
+                                     reason='loader_metadata_incomplete' if gaps else None),diagnostics=gaps)
     if a.command=='bundle':
         inventory,gaps=bundle.inventory(a.path,a.kind)
         inventory_id=identity({'inventory':inventory,'gaps':gaps})
@@ -449,7 +452,11 @@ def execute(a):
             return envelope(command,{'image_id':image['image_id'],'function_count':len(normalized['functions']),'job_id':job['job_id'],'decompile_summary':raw.get('decompile_summary'),'analysis_profile':job['analysis_profile'],'limitations':normalized['limitations']},aid,raw['status'],coverage('selected image analysis',len(normalized['functions']),raw.get('function_count_total_reported_by_engine'),raw['status']!='complete',reason='engine_or_facet_partial' if raw['status']!='complete' else None))
     image=p.select(a.image,a.arch)
     if a.command=='headers':
-        return envelope(command,metadata.headers(p,image))
+        data=metadata.headers(p,image)
+        gaps=metadata.loader_gaps([data])
+        return envelope(command,data,status='partial' if gaps else 'complete',
+                        cov=coverage('selected image headers',partial=bool(gaps),
+                                     reason='loader_metadata_incomplete' if gaps else None),diagnostics=gaps)
     if a.command=='bytes':
         return envelope(command,metadata.read_bytes_at(p,image,a.address,a.byte_length),
                         cov=coverage('selected image bytes',a.byte_length,a.byte_length))

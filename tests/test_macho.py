@@ -189,6 +189,52 @@ class ThinMachOTests(ErrorAssertions):
         self.assertEqual([{"name": "__text", "segment": "__TEXT", "va": "0x100000100",
                            "size": "0x4", "file_offset": "0xb8", "protections": 5}], result["sections"])
 
+    def test_loader_metadata_decodes_entry_function_starts_and_data_in_code(self):
+        starts = b"\x20\x14\0\0"
+        table = struct.pack("<IHH", 144, 4, 1)
+        segment = command(0x19, struct.pack("<16s4Q4I", b"__TEXT", 0x100000000, 4096,
+                                             0, 160+len(starts)+len(table), 7, 5, 0, 0))
+        main = command(0x80000028, struct.pack("<2Q", 150, 0))
+        fs = command(0x26, struct.pack("<2I", 160, len(starts)))
+        dice = command(0x29, struct.pack("<2I", 160+len(starts), len(table)))
+        data = image(commands=[segment,main,fs,dice],payload=starts+table)
+        loader = macho.thin(data)["loader"]
+        self.assertEqual(loader["entry_point"]["va"], "0x100000096")
+        self.assertEqual(loader["function_starts"]["addresses"], ["0x100000020","0x100000034"])
+        self.assertEqual(loader["data_in_code"]["records"],
+                         [{"slice_file_offset":"0x90","length":4,"kind":"0x1"}])
+        malformed = data[:160]+b"\x80"*4+data[164:]
+        self.assertEqual(macho.thin(malformed)["loader"]["function_starts"]["status"], "malformed")
+        self.assert_error("entry_command",macho.thin,image(commands=[main,main],payload=bytes(100)))
+
+    def test_library_and_rpath_strings_are_bounded_and_keep_new_dylib_flags(self):
+        def string_command(kind, fixed, value):
+            payload = fixed+value+b"\0"
+            return command(kind,payload+bytes((-len(payload))%8))
+
+        old = string_command(0xC,struct.pack("<4I",24,2,0x10203,0x10000),b"/usr/lib/libSystem.B.dylib")
+        new = string_command(0xC,struct.pack("<5I",28,0x1A741800,0x10000,0,0x9),b"@rpath/libExample.dylib")
+        rpath = string_command(0x8000001C,struct.pack("<I",12),b"@loader_path/Frameworks")
+        loader = macho.thin(image(commands=[old,new,rpath]))["loader"]
+        self.assertEqual(loader["dylibs"][0]["current_version"],"1.2.3")
+        self.assertEqual(loader["dylibs"][1]["use_flags"],"0x9")
+        self.assertIsNone(loader["dylibs"][1]["timestamp"])
+        self.assertEqual(loader["rpaths"],["@loader_path/Frameworks"])
+        for value in (command(0x8000001C,struct.pack("<I",4)+b"path"),
+                      command(0x8000001C,struct.pack("<I",12)+b"path")):
+            self.assert_error("command_string",macho.thin,image(commands=[value]))
+
+    def test_dyld_extent_and_indirect_symbol_ranges_are_verified(self):
+        dyld = command(0x80000022,struct.pack("<10I",160,3,0,0,0,0,0,0,0,0))
+        fields = [0]*18
+        fields[12:14] = [164,1]
+        dysymtab = command(0xB,struct.pack("<18I",*fields))
+        data = image(commands=[dyld,dysymtab],payload=b"\0"*8)
+        loader = macho.thin(data)["loader"]
+        self.assertEqual(loader["dyld_streams"][0]["slice_file_offset"],"0xa0")
+        self.assertEqual(loader["indirect_symbol_table"]["count"],1)
+        self.assert_error("macho_bounds",macho.thin,data[:-1])
+
     def test_zero_fill_sections_have_no_file_offset(self):
         for flags in (1, 0xC, 0x12):
             with self.subTest(flags=flags):

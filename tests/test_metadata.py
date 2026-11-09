@@ -19,6 +19,7 @@ class MetadataQueryTests(unittest.TestCase):
         image = dict(metadata["slices"][0], artifact_sha256=metadata["artifact_sha256"], offset="0x1000")
         image.pop("segments")
         image.pop("flags")  # Workspace created before these fields were recorded.
+        image.pop("loader")
         self.input = self.project.path / "inputs" / (image["image_id"] + ".macho")
         atomic(self.input,data,mode=0o400)
         with self.project.db(False) as db:
@@ -32,6 +33,7 @@ class MetadataQueryTests(unittest.TestCase):
         headers = self.query("headers")
         self.assertIsNone(headers["analysis_id"])
         self.assertEqual(headers["data"]["flags"], "0x0")
+        self.assertEqual(headers["data"]["loader"]["preferred_image_base"], "0x100000000")
         row, = self.query("segments","--name-contains","TEXT")["data"]
         self.assertEqual(row["name"], "__TEXT")
         self.assertEqual(row["file_offset"], "0x0")

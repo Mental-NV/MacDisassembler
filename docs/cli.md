@@ -178,7 +178,14 @@ preflight is **not** a complete Mach-O/dyld parser or a security proof.
 
 `headers`, `segments`, and `sections` query imported Mach-O metadata and
 work before analysis. Older imports can recover the added header and segment
-fields from their digest-verified slice. `bytes --address 0xVA --length N`
+fields from their digest-verified slice. The `loader` record includes
+`LC_MAIN`, the preferred image base, dylib paths and versions, rpaths,
+symbol table ranges, linkedit payload ranges, function starts, and
+data-in-code entries. An incomplete decoded table makes the header result
+partial. Dyld stream, export trie, chained fixup and signature ranges are
+recorded as extents, with their payload interpretation tracked separately.
+
+`bytes --address 0xVA --length N`
 reads 1–4096 bytes within a single file-backed section of that same slice
 and returns both slice and container offsets.
 

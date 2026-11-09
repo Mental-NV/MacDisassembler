@@ -11,7 +11,7 @@ ENGINE_LISTS = ("imports", "exports", "symbols", "strings")
 HEADER_FIELDS = (
     "image_id", "arch", "cpu_type", "cpu_subtype", "file_type", "flags", "uuid",
     "offset", "size", "sha256", "artifact_sha256", "input_name", "load_commands",
-    "warnings", "loader_evidence", "bundle_image",
+    "warnings", "loader_evidence", "bundle_image", "loader",
 )
 VA = re.compile(r"0x[0-9a-fA-F]{1,16}")
 
@@ -24,9 +24,20 @@ def verified_slice(project, image):
 
 
 def headers(project, image):
-    if "flags" not in image:
+    if "loader" not in image or "flags" not in image:
         image = dict(image, **thin(verified_slice(project,image)))
     return {key: image[key] for key in HEADER_FIELDS if key in image}
+
+
+def loader_gaps(images):
+    gaps = []
+    for image in images:
+        loader = image.get("loader", {})
+        for name in ("function_starts","data_in_code"):
+            record = loader.get(name)
+            if record and record["status"] != "complete":
+                gaps.append(f"{image['arch']} {name}: {record['status']}")
+    return gaps
 
 
 def address_fields(row, image, origin):

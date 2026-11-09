@@ -11,6 +11,7 @@ import struct
 from xml.parsers.expat import ExpatError
 from pathlib import Path
 from .errors import Error
+from .macho_load import bounded, details
 
 MAX_INPUT = 256 * 1024 * 1024
 MAX_COMMANDS = 8192
@@ -100,11 +101,6 @@ def resolve_input(path):
     return binary, warnings
 
 
-def bounded(off, size, total, label):
-    if off < 0 or size < 0 or off > total or size > total - off:
-        raise Error('macho_bounds', label + ' exceeds file bounds')
-
-
 def thin(data):
     if len(data) < 32 or data[:4] != b'\xcf\xfa\xed\xfe':
         raise Error('unsupported_format', 'Only little-endian 64-bit Mach-O images are supported', 3)
@@ -118,7 +114,8 @@ def thin(data):
         raise Error('command_limit', 'Invalid or excessive load-command table')
     bounded(32, cmdbytes, len(data), 'Load commands')
     cursor, end = 32, 32 + cmdbytes
-    segments, sections, commands, warnings, uuid = [], [], [], [], None
+    segments, sections, commands, command_records = [], [], [], []
+    warnings, uuid = [], None
     for _ in range(ncmds):
         bounded(cursor, 8, end, 'Load command header')
         cmd, size = struct.unpack_from('<2I', data, cursor)
@@ -126,6 +123,7 @@ def thin(data):
             raise Error('command_size', 'Load command size must be aligned and at least 8')
         bounded(cursor, size, end, 'Load command')
         commands.append(hex(cmd))
+        command_records.append((cmd,cursor,size))
         if cmd in (0x21, 0x2c):
             if size < (24 if cmd == 0x2c else 20):
                 raise Error('encryption_bounds', 'Truncated encryption command')
@@ -161,23 +159,13 @@ def thin(data):
                     raise Error('section_bounds', 'Invalid section virtual range')
                 bounded(reloff, nreloc * 8, len(data), 'Relocations')
                 sections.append({'name': sn.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'segment': sg.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'va': hex(addr), 'size': hex(sz), 'file_offset': None if zero else hex(fo), 'protections': prot})
-        if cmd == 2:
-            if size < 24:
-                raise Error('symtab_bounds', 'Truncated symbol table command')
-            so, ns, stro, strs = struct.unpack_from('<4I', data, cursor+8)
-            bounded(so, ns * 16, len(data), 'Symbol table')
-            bounded(stro, strs, len(data), 'String table')
-        if cmd in (0x1d, 0x26, 0x29, 0x80000033, 0x80000034):
-            if size < 16:
-                raise Error('linkedit_bounds', 'Truncated linkedit command')
-            lo, ls = struct.unpack_from('<2I', data, cursor+8)
-            bounded(lo, ls, len(data), 'Linkedit payload')
         cursor += size
     if cursor != end:
         raise Error('command_size', 'Load-command count and byte size disagree')
     return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,
             'flags': hex(flags), 'uuid': uuid, 'segments': segments, 'sections': sections,
-            'load_commands': commands, 'warnings': warnings}
+            'load_commands': commands, 'warnings': warnings,
+            'loader': details(data,command_records,segments)}
 
 
 def inspect_bytes(data):
