@@ -24,6 +24,7 @@ _heldout_shared_body:
     tbz w0, #1, Lshared_default
 Lshared_frame:
     stp x29, x30, [sp, #-16]!
+Lshared_setup:
     mov x29, sp
     blr x1
     add x0, x0, #31
@@ -35,7 +36,7 @@ Lshared_default:
 
 .globl _heldout_external_entry
 _heldout_external_entry:
-    b Lshared_frame
+    b Lshared_setup
 
 .globl _heldout_confirmed_wrapper
 _heldout_confirmed_wrapper:

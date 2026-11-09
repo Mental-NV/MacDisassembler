@@ -10,7 +10,7 @@ throughout the experiment.
 | Case | Expected recovery decision |
 | --- | --- |
 | Guarded call with a frame setup after two branches | A false split at the frame setup is eligible for a join. The real linker entry owns all 11 instructions. |
-| A similar body with an outside branch into its frame setup | A split can be reported as ambiguous. The outside reference prevents automatic joining. |
+| A similar body with an outside branch into the second frame instruction | A split can be reported as ambiguous. The outside reference prevents automatic joining. |
 | A wrapper that branches to a separately linked callee | Preserve both linker-confirmed entries. |
 
 Build one native arm64 Mach-O with Apple Clang and retain a linker map,
