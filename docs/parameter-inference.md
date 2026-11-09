@@ -203,6 +203,31 @@ The measured report SHA-256 is
 
 ## Reproduce and inspect
 
+### Three-run determinism
+
+Each of the 16 owned thin app-main and tool cases produced three identical
+normalized exports under both analysis profiles on the development Mac.
+The evaluator verified 50 completed workers in the frozen patched Ghidra
+matrix and ran the 46 missing repetitions in private workspace copies.
+Each repeated analysis started from the pristine import Program and used
+the same engine, bridge, JDK and worker limits. Every case retained its
+original import Program digest.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 tests/integration_determinism.py \
+  --fixture-build-root /path/to/owned-calculator-build \
+  --profile-matrix /private/tmp/owned-patched-profile-matrix \
+  --ghidra /path/to/recorded/patched/full-ghidra \
+  --output-dir /private/tmp/new-profile-determinism \
+  --experimental-trusted-input
+```
+
+The result applies to the measured patch, analyzer profiles and export
+policy. The report SHA-256 is
+`39febe35ec3a1cdc7f21142a2667a22107439b45354bf6cfefa3ba05c8f87d2d`.
+
+### Profile evidence
+
 See [CLI instructions](cli.md#experimental-binary-derived-parameter-inference)
 for the matrix command and [the earlier research review](decompiler-review.md)
 for the callee-only experiment. The new production profile does not expose

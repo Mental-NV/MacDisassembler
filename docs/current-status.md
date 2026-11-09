@@ -55,6 +55,9 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Match all 256 outgoing direct call references in the controlled tool
   core and verify that the 16 encoded indirect calls have no reported target.
 - [ ] Measure controlled data-reference completeness.
+- [x] Match three normalized exports per case and profile on the owned
+  patched app and tool matrix. The [determinism run](parameter-inference.md#three-run-determinism)
+  verified 96 distinct headless workers.
 - [x] Expose uncached selected-function decompilation from the saved Program.
 - [x] Link available Ghidra pseudocode tokens to machine addresses. The
   arm64/x86_64 thin and universal integration checked cached and fresh links.
