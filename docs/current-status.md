@@ -49,6 +49,9 @@ collections exceed documented bounds despite successful pseudocode output.
 
 - [x] Reproduce owned stripped x86_64 instruction checks using independent
   function-start metadata. See [profile validation](parameter-inference.md).
+- [x] Match 13,900 instruction starts and byte records and 2,732 direct
+  targets across the full owned tool core in the patched captures. See
+  [the instruction audit](phase1-findings.md#controlled-core-instruction-audit).
 - [x] Expose uncached selected-function decompilation from the saved Program.
 - [x] Link available Ghidra pseudocode tokens to machine addresses. The
   arm64/x86_64 thin and universal integration checked cached and fresh links.

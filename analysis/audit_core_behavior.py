@@ -35,7 +35,7 @@ TYPES = frozenset("void long int ulong uint undefined1 undefined8".split())
 ZERO_ROUTINES = frozenset(("_bzero", "___bzero", "___memset_chk"))
 TOKEN = re.compile(r"\s+|(?:0[xX][0-9a-fA-F]+|[0-9]+)[UL]*|[A-Za-z_]\w*|[{}\[\]();=<>!+,:&|^~*/%\-]",
                    re.ASCII)
-DECODER_LINE = re.compile(r"^\s*([0-9a-f]+): ([0-9a-f]{8}|[0-9a-f]{2}(?: [0-9a-f]{2})*)\s+([^\s]+)")
+DECODER_LINE = re.compile(r"^\s*([0-9a-f]+): ([0-9a-f]{8}|[0-9a-f]{2}(?: [0-9a-f]{2})*)\s+(\S+)(.*)$")
 
 
 def recovered_name(record, routine):
@@ -145,7 +145,7 @@ def llvm_instructions(build, case, decoder, extents):
         raise ValueError("Incomplete linker data-in-code table")
     data_ranges = [(text_start + int(row["slice_file_offset"], 16) - text_offset, row["length"])
                    for row in data["records"]]
-    counts = {}
+    routines = {}
     for routine, (lo, hi) in extents.items():
         output = subprocess.check_output(
             [decoder, "--disassemble", "--section=__text",
@@ -155,6 +155,7 @@ def llvm_instructions(build, case, decoder, extents):
             raise ValueError("Oversized LLVM instruction evidence")
         data_bytes = {va for start, size in data_ranges for va in range(max(lo, start), min(hi, start + size))}
         decoded = set()
+        instructions = {}
         for line in output.decode(errors="replace").splitlines():
             match = DECODER_LINE.match(line)
             if not match:
@@ -170,10 +171,11 @@ def llvm_instructions(build, case, decoder, extents):
                     or addresses.intersection(decoded | data_bytes) or mnemonic.startswith((".", "<"))):
                 raise ValueError("LLVM could not independently decode the exact extent for " + routine)
             decoded.update(addresses)
+            instructions[entry] = (raw, mnemonic, match[4].strip())
         if lo not in decoded or len(decoded) + len(data_bytes) != hi - lo:
             raise ValueError("Incomplete independent decode for " + routine)
-        counts[routine] = len(decoded)
-    return counts
+        routines[routine] = instructions
+    return routines
 
 
 def inventory(snapshot, extents, decoded):
@@ -196,7 +198,7 @@ def inventory(snapshot, extents, decoded):
         records[routine] = record
         row = rows[routine] = {
             "entry_va": hex(entry), "dwarf_end_exclusive": hex(end),
-            "llvm_instruction_bytes": decoded[routine],
+            "llvm_instruction_bytes": sum(len(raw) for raw, _, _ in decoded[routine].values()),
         }
         if record is None:
             row["status"] = "missing_recovered_entry"

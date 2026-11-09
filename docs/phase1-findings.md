@@ -77,6 +77,36 @@ It is inspectable C-like output, **not compilable C**. Arithmetic spot-reading
 (e.g. `SCARRY8`) is not semantic equivalence. A generic mechanical lowering
 would need its own frozen validation before behavior can be scored.
 
+## Controlled core instruction audit
+
+The separately selected patched Ghidra 12.2 captures match LLVM across
+all 26 public calculator core routines in the owned command-line tool.
+The audit covers arm64 and x86_64 at O0 and O2, both symbol states, and
+both analysis profiles. The 416 routine instances matched all 13,900
+instruction starts and byte sequences, totaling 51,652 instruction bytes.
+All 2,732 encoded direct jump and call targets matched.
+
+Eight apparent flow differences are optimized tail calls. LLVM prints the
+machine branch and Ghidra classifies it as a terminating call with no
+fallthrough. The address matches in every case. LLVM's indirect-symbol
+table independently identifies the destination as the `_bzero` stub on
+arm64 or `___bzero` stub on x86_64.
+
+The evaluator maps the frozen captures by confirmed DWARF and linker
+entries, decodes their exact byte extents, and excludes linker-marked data.
+The count covers the tool's controlled core. Indirect destinations,
+data-reference completeness and other Mach-O images are separate gates.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/audit_core_instructions.py \
+  --fixture-build-root /path/to/owned-calculator-build \
+  --profile-matrix /private/tmp/owned-patched-profile-matrix \
+  --output /private/tmp/new-core-instructions.json
+```
+
+The measured report SHA-256 is
+`2d2242d9db12ba2a9faa32eb674aecd44d09e9c08945d4eb8b483b186ca18b33`.
+
 ## Post-review semantics and harness
 
 Semantics **v1.1**, committed separately, fixes controller chain-history

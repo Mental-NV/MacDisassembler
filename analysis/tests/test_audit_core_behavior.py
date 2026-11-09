@@ -2,6 +2,7 @@
 import unittest
 
 from audit_core_behavior import core_extents, history_declaration, summarize
+from audit_core_instructions import compare
 
 
 class CoreBehaviorTests(unittest.TestCase):
@@ -33,3 +34,20 @@ class CoreBehaviorTests(unittest.TestCase):
         self.assertEqual(summary["routine_domains_passed"], 1)
         self.assertEqual(summary["llvm_bytes_for_completed_domains"], 150)
         self.assertEqual(summary["llvm_bytes_for_passed_domains"], 50)
+
+    def test_tail_call_adjudication_requires_matching_target_and_linker_stub(self):
+        instruction = {"addr": "0x100", "bytes": "eb7e", "text": "JMP 0x180",
+                       "flow": "CALL_TERMINATOR", "fallthrough": None}
+        body = {"instructions": [instruction], "coverage": {"instructions": {
+            "status": "complete", "truncated": False, "error": None, "emitted": 1,
+        }}}
+        decoded = {0x100: (b"\xeb\x7e", "jmp", "0x180 <other>")}
+        measured = compare(body, decoded, "x86_64", 0x102, {0x180: "_linker_stub"})
+        self.assertEqual(measured["status"], "matched")
+        self.assertEqual(measured["stub_tail_calls"], [
+            {"entry": "0x100", "target": "0x180", "stub": "_linker_stub"},
+        ])
+        self.assertEqual(compare(body, decoded, "x86_64", 0x102, {})["status"], "disagreement")
+        instruction["fallthrough"] = "0x102"
+        self.assertEqual(compare(body, decoded, "x86_64", 0x102, {0x180: "_linker_stub"})["status"],
+                         "disagreement")
