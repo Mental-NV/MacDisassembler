@@ -11,6 +11,8 @@ import uuid
 from .errors import Error
 from .macho import checked_path, read_regular
 
+MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
@@ -128,7 +130,7 @@ class Project:
         if row is None:
             raise Error('snapshot_missing', 'Committed snapshot is missing')
         record = json.loads(row[0])
-        data = read_regular(self.path/'snapshots'/(aid+'.json'), 64*1024*1024)
+        data = read_regular(self.path/'snapshots'/(aid+'.json'), MAX_SNAPSHOT_BYTES)
         if hashlib.sha256(data).hexdigest() != record['snapshot_sha256']:
             raise Error('snapshot_integrity', 'Snapshot digest mismatch')
         return json.loads(data), record

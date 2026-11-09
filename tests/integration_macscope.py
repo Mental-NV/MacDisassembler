@@ -68,6 +68,14 @@ try:
         shown=cli('functions','show',*opts,'--json');validate_function(shown['data'])
         cli('disasm',*opts,'--json',expected=(0,6))
         dec=cli('decompile',*opts,'--json',expected=(0,6));assert dec['data']['pseudocode']
+        spans = dec['data']['address_spans']
+        assert spans and dec['data']['facets']['address_spans']['text_offsets'] == 'utf16'
+        code = dec['data']['pseudocode'].encode('utf-16-le')
+        body = [(int(start, 16), int(end, 16)) for start, end in dec['data']['body_ranges']]
+        for span in spans:
+            assert code[span['text_start'] * 2:span['text_end'] * 2].decode('utf-16-le')
+            assert all(any(lo <= int(start, 16) <= int(end, 16) <= hi for lo, hi in body)
+                       for start, end in span['ranges'])
         if source != fat:
             project = Project(p)
             image = project.select()
@@ -79,6 +87,7 @@ try:
             assert fresh['analysis_id'] == saved['analysis_id']
             assert fresh['data']['function_id'] == fid
             assert fresh['data']['pseudocode'] == dec['data']['pseudocode']
+            assert fresh['data']['address_spans'] == spans
             job_path = p / 'jobs' / fresh['data']['origin']['job_id']
             job = json.loads((job_path / 'job.json').read_bytes())
             raw = json.loads((job_path / 'bridge.json').read_bytes())
@@ -119,7 +128,8 @@ try:
         left,right=snapshots[arch+' thin'],snapshots[arch+' fat64']
         assert left['image']['sha256']==right['image']['sha256']
         def content(s):
-            return [(f['engine_entry'],f['name'],f['pseudocode'],[(i['addr'],i['bytes'],i['text']) for i in f['instructions']]) for f in s['functions']]
+            return [(f['engine_entry'],f['name'],f['pseudocode'],f['address_spans'],
+                     [(i['addr'],i['bytes'],i['text']) for i in f['instructions']]) for f in s['functions']]
         assert content(left)==content(right),arch+' thin/fat64 analysis mismatch'
     result={'status':'passed','checks':len(records),'commands':records,'slice_parity':['arm64','x86_64'],'workspaces':[str(p.relative_to(ROOT)) for p in WORK.iterdir() if p.is_dir()]}
     print(json.dumps({'status':'passed','command_checks':len(records),'artifacts':str(WORK)}))

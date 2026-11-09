@@ -448,6 +448,35 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(function['instructions'][0]['location'], location)
         self.assertEqual(function['instruction_bytes_sha256'], hashlib.sha256(bytes.fromhex('c0035fd6')).hexdigest())
 
+    def test_address_spans_use_utf16_and_stay_bound_to_displayed_text(self):
+        function = self.raw['functions'][1]
+        function['pseudocode'] = '😀return;'
+        span = {'text_start': 2, 'text_end': 9, 'ranges': [['0x100000010', '0x100000010']]}
+        function['address_spans'] = [span]
+        function['coverage'] = {'address_spans': {'status': 'complete', 'emitted': 1}}
+        result = self.normalized()['functions'][0]
+        self.assertEqual(result['address_spans'], [span])
+        self.assertEqual(result['facets']['address_spans']['text_offsets'], 'utf16')
+        span['text_start'] = 1
+        with self.assertRaisesRegex(ValueError, 'surrogate pair'):
+            self.normalized()
+        span['text_start'] = 2
+        function['pseudocode'] += ' "/Users/private/app"'
+        result = self.normalized()['functions'][0]
+        self.assertEqual(result['address_spans'], [])
+        self.assertFalse(result['facets']['address_spans']['available'])
+        self.assertEqual(result['coverage']['address_spans']['emitted'], 0)
+        self.assertEqual(function['coverage']['address_spans']['emitted'], 1)
+        self.assertIn('$HOME/app', result['pseudocode'])
+
+    def test_invalid_address_span_never_enters_a_snapshot(self):
+        function = self.raw['functions'][1]
+        function['address_spans'] = [{'text_start': 0, 'text_end': 10000,
+                                      'ranges': [['0x100000010', '0x100000010']]}]
+        function['coverage'] = {'address_spans': {'status': 'complete', 'emitted': 1}}
+        with self.assertRaisesRegex(ValueError, 'text offsets'):
+            self.normalized()
+
     def test_external_entry_is_not_misrepresented_as_a_virtual_address(self):
         function = self.normalized()['functions'][1]
         self.assertIsNone(function['entry_va'])

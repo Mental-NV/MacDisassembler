@@ -157,6 +157,21 @@ Fresh queries preserve the committed snapshot and the original Program.
 On the owned arm64 and x86_64 tools, fresh queries matched the cached
 pseudocode under both profiles. The integration checks verified one
 decompile attempt and preserved the saved Program and snapshot.
+
+New analyses and fresh queries can include `address_spans` from Ghidra's C
+markup. `text_start` and `text_end` are zero-based UTF-16 offsets into the
+returned pseudocode, with the end excluded. Each `ranges` entry is an
+inclusive pair of unslid addresses in the selected function body. Ghidra
+supplies links only for tokens with machine-address evidence. The bridge
+checks that token text aligns with the printed pseudocode and caps links at
+1,024 per function and 40,000 per job. If display redaction changes the code,
+its raw offsets are unavailable in the normalized result.
+
+The four owned thin/fat64 integration exports contained 9,742 token links
+across 144 completed function records. All linked addresses matched exported
+instruction starts and the pseudocode matched the preceding bridge version.
+Fresh and cached links matched for `_calc_add` on both architectures.
+
 `status` shows at most 100 job
 records; interrupted/disconnected running markers become
 `unknown_after_disconnect`, with no attempt to signal stale PIDs.
@@ -300,4 +315,5 @@ fat64 container, exercises both thin and explicit universal selections,
 checks every phase-2 command/schema and atomic exports, and compares
 pseudocode/instruction content by slice digest. It creates fresh
 `build/cli-integration-*` evidence on every run. Performance here is a local
-measurement, not a release target or cross-machine benchmark.
+measurement, not a release target or cross-machine benchmark. See the
+[20-round CLI benchmark](benchmark.md) for the measured development host.

@@ -38,9 +38,8 @@ Hard process-memory/disk quotas are not available. No automatic unsafe
 fallback exists.
 
 Public queries default to completed snapshots. Explicit `decompile --fresh`
-uses the saved Program and the read-only/noanalysis worker. Token/address
-spans, polished terminal output,
-all Mach-O load-command/dyld decoding and broad host/version support remain
+uses the saved Program and the read-only/noanalysis worker. Polished terminal
+output, full Mach-O load-command and dyld decoding, and broader host support remain
 incomplete. Some calculator batches correctly exit6 because their reference
 collections exceed documented bounds despite successful pseudocode output.
 
@@ -49,8 +48,10 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Reproduce owned stripped x86_64 instruction checks using independent
   function-start metadata. See [profile validation](parameter-inference.md).
 - [x] Expose uncached selected-function decompilation from the saved Program.
-- [ ] Complete the narrow CLI evidence path with token/address spans and
-  reproducible timing measurements.
+- [x] Link available Ghidra pseudocode tokens to machine addresses. The
+  arm64/x86_64 thin and universal integration checked cached and fresh links.
+- [x] Measure 20 rounds of CLI latency on the development Mac. See the
+  [benchmark](benchmark.md) for scope and outstanding reference-host measurements.
 - [x] Search committed function names, symbols, strings and pseudocode
   with resumable pages and scoped coverage.
 - [x] Traverse saved call references with depth/edge bounds and explicit

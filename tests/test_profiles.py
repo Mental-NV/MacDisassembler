@@ -254,7 +254,7 @@ class ProfileRunnerTests(unittest.TestCase):
         self.assertEqual(engine.tree_digest(source), before)
 
 
-    def test_cli_rejected_profile_keeps_existing_active_snapshot(self):
+    def test_cli_rejected_analysis_keeps_existing_active_snapshot(self):
         content = b"owned synthetic input"
         image = dict(self.image, sha256=hashlib.sha256(content).hexdigest(),
                      offset="0x0", sections=[],
@@ -278,6 +278,13 @@ class ProfileRunnerTests(unittest.TestCase):
             with self.assertRaises(Error) as caught:
                 cli.execute(self.args("parameter-inference"))
         self.assertEqual(caught.exception.code, "profile_mismatch")
+        with mock.patch.object(engine, "dependencies", return_value=self.deps), \
+             mock.patch.object(engine, "run", return_value=(wrong, job)), \
+             mock.patch.object(cli, "normalize", return_value={"analysis_id": "too-large"}), \
+             mock.patch.object(cli, "MAX_SNAPSHOT_BYTES", 1):
+            with self.assertRaises(Error) as caught:
+                cli.execute(self.args("parameter-inference"))
+        self.assertEqual(caught.exception.code, "snapshot_limit")
         self.assertEqual(self.project.select()["active_analysis"], "previous")
         self.assertEqual(old.read_bytes(), payload)
         self.assertEqual(len(list((self.project.path / "snapshots").iterdir())), 1)

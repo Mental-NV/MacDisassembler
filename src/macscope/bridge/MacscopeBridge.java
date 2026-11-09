@@ -21,9 +21,18 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import ghidra.app.decompiler.ClangFieldToken;
+import ghidra.app.decompiler.ClangFuncNameToken;
+import ghidra.app.decompiler.ClangLabelToken;
+import ghidra.app.decompiler.ClangLine;
+import ghidra.app.decompiler.ClangToken;
+import ghidra.app.decompiler.ClangTypeToken;
+import ghidra.app.decompiler.ClangVariableToken;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
+import ghidra.app.decompiler.DecompiledFunction;
+import ghidra.app.decompiler.PrettyPrinter;
 import ghidra.app.util.headless.HeadlessScript;
 import ghidra.framework.options.Options;
 import ghidra.program.model.address.Address;
@@ -45,21 +54,24 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.mem.MemoryBlockSourceInfo;
 import ghidra.program.model.symbol.ExternalLocation;
+import ghidra.program.model.symbol.IllegalCharCppTransformer;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceIterator;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolIterator;
 import ghidra.program.model.symbol.SymbolTable;
+import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.2.0";
+    static final String VERSION = "1.3.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final int MAX_INSTRUCTIONS = 2000, MAX_BLOCKS = 500, MAX_EDGES = 500;
     static final int MAX_XREFS = 200, MAX_RANGES = 512, MAX_SECTIONS = 2048;
     static final int MAX_SYMBOLS = 10000, MAX_STRINGS = 5000, MAX_SCAN = 100000;
     static final int MAX_OPTIONS = 4096, MAX_TEXT = 4096, MAX_PSEUDOCODE = 1048576;
+    static final int MAX_SPANS_PER_FUNCTION = 1024, MAX_SPANS_PER_JOB = 40000;
     static final long MAX_OUTPUT = 64L * 1024 * 1024;
     static final long PAYLOAD_BUDGET = 56L * 1024 * 1024;
     static final long METADATA_BUDGET = 16L * 1024 * 1024;
@@ -72,6 +84,7 @@ public class MacscopeBridge extends HeadlessScript {
     long retainedBytes = 0;
     boolean partial = false, fatal = false, textTruncated = false;
     int attempted = 0, completed = 0, timedOut = 0, failed = 0, cancelled = 0, notRequested = 0;
+    int retainedSpans = 0;
     String mode, decompilerError;
 
     @Override
@@ -122,6 +135,8 @@ public class MacscopeBridge extends HeadlessScript {
         limits.addProperty("option_names_per_category", MAX_OPTIONS);
         limits.addProperty("text_characters", MAX_TEXT);
         limits.addProperty("pseudocode_characters_per_function", MAX_PSEUDOCODE);
+        limits.addProperty("address_spans_per_function", MAX_SPANS_PER_FUNCTION);
+        limits.addProperty("address_spans_per_job", MAX_SPANS_PER_JOB);
         root.add("limits", limits);
         try {
             if (!"12.2".equals(getGhidraVersion())) {
@@ -380,7 +395,9 @@ public class MacscopeBridge extends HeadlessScript {
             DecompileOptions opts = new DecompileOptions();
             opts.setDefaultTimeout(timeout); opts.setMaxInstructions(100000);
             opts.setMaxJumpTableEntries(4096); opts.setMaxPayloadMBytes(8);
-            decomp.setOptions(opts); decomp.toggleCCode(true); decomp.toggleSyntaxTree(false);
+            decomp.setOptions(opts); decomp.toggleCCode(true);
+            // Markup tokens resolve their machine addresses through syntax-tree p-code ops.
+            decomp.toggleSyntaxTree(true);
             boolean opened = decomp.openProgram(currentProgram);
             if (!opened) { decompilerError = clipped(decomp.getLastMessage(), MAX_TEXT); partial = true; }
             if (entry == null) {
@@ -530,6 +547,7 @@ public class MacscopeBridge extends HeadlessScript {
 
     void decompile(Function f, DecompInterface decomp, int timeout, JsonObject item, JsonObject cov) {
         String status, err = null, code = null; boolean trunc = false;
+        DecompileResults decoded = null;
         if (f.isExternal() || f.isThunk()) {
             status = "not_requested"; notRequested++;
             err = f.isExternal() ? "External function has no body in this image" : "Thunk forwards to another function";
@@ -546,12 +564,16 @@ public class MacscopeBridge extends HeadlessScript {
                         if (result.isTimedOut()) { status = "timeout"; timedOut++; }
                         else if (result.isCancelled()) { status = "cancelled"; cancelled++; }
                         else if (result.failedToStart()) { status = "failed"; failed++; }
-                        else if (result.decompileCompleted() && result.getDecompiledFunction() != null &&
-                                 result.getDecompiledFunction().getC() != null) {
-                            status = "complete"; completed++; code = result.getDecompiledFunction().getC();
-                            trunc = code.length() > MAX_PSEUDOCODE;
-                            if (trunc) code = clipped(code, MAX_PSEUDOCODE);
-                        } else { status = "failed"; failed++; }
+                        else {
+                            DecompiledFunction printed = result.decompileCompleted() ? result.getDecompiledFunction() : null;
+                            if (printed == null || printed.getC() == null) {
+                                status = "failed"; failed++;
+                            } else {
+                                status = "complete"; completed++; code = printed.getC(); decoded = result;
+                                trunc = code.length() > MAX_PSEUDOCODE;
+                                if (trunc) code = clipped(code, MAX_PSEUDOCODE);
+                            }
+                        }
                     }
                 } catch (Exception e) {
                     status = monitor.isCancelled() ? "cancelled" : "failed";
@@ -565,6 +587,69 @@ public class MacscopeBridge extends HeadlessScript {
         item.addProperty("pseudocode_truncated", trunc);
         cov.add("pseudocode", facet(code == null ? 0 : 1, -1, trunc,
             status.equals("not_requested") ? null : err, status));
+        if (decoded != null && !trunc) {
+            try {
+                if (addressSpans(f, decoded, code, item, cov)) return;
+                unavailableSpans(item, cov, "Markup does not align with printed pseudocode");
+            } catch (Exception e) {
+                unavailableSpans(item, cov, error(e));
+            }
+        } else {
+            unavailableSpans(item, cov, trunc ? "Printed pseudocode is truncated" : "Pseudocode is unavailable");
+        }
+    }
+
+    void unavailableSpans(JsonObject item, JsonObject cov, String reason) {
+        item.add("address_spans", new JsonArray());
+        JsonObject coverage = facet(0, -1, false, null, "unavailable");
+        coverage.addProperty("reason", reason);
+        cov.add("address_spans", coverage);
+    }
+
+    boolean addressSpans(Function function, DecompileResults decoded, String code,
+                         JsonObject item, JsonObject cov) throws Exception {
+        if (decoded.getCCodeMarkup() == null) return false;
+        IllegalCharCppTransformer names = new IllegalCharCppTransformer();
+        PrettyPrinter printer = new PrettyPrinter(function, decoded.getCCodeMarkup(), names);
+        JsonArray spans = new JsonArray();
+        int offset = 0, mapped = 0;
+        int limit = Math.min(MAX_SPANS_PER_FUNCTION, MAX_SPANS_PER_JOB - retainedSpans);
+        for (ClangLine line : printer.getLines()) {
+            monitor.checkCancelled();
+            String indent = line.getIndentString();
+            if (!code.startsWith(indent, offset)) return false;
+            offset += indent.length();
+            for (ClangToken token : line.getAllTokens()) {
+                String tokenText = String.valueOf(token.getText());
+                boolean symbol = token instanceof ClangFuncNameToken || token instanceof ClangVariableToken ||
+                    token instanceof ClangTypeToken || token instanceof ClangFieldToken || token instanceof ClangLabelToken;
+                if (symbol && token.getSyntaxType() != ClangToken.CONST_COLOR) tokenText = names.simplify(tokenText);
+                if (!code.startsWith(tokenText, offset)) return false;
+                int end = offset + tokenText.length();
+                Address lo = token.getMinAddress(), hi = token.getMaxAddress();
+                if (offset < end && lo != null && hi != null && lo.isMemoryAddress() &&
+                    !lo.getAddressSpace().isOverlaySpace() &&
+                    lo.getAddressSpace().equals(hi.getAddressSpace()) && lo.compareTo(hi) <= 0 &&
+                    function.getBody().contains(lo, hi)) {
+                    mapped++;
+                    if (spans.size() < limit) {
+                        JsonObject span = new JsonObject();
+                        span.addProperty("text_start", offset); span.addProperty("text_end", end);
+                        JsonArray ranges = new JsonArray(), range = new JsonArray();
+                        range.add(address(lo)); range.add(address(hi)); ranges.add(range);
+                        span.add("ranges", ranges); spans.add(span);
+                    }
+                }
+                offset = end;
+            }
+            if (!code.startsWith(StringUtilities.LINE_SEPARATOR, offset)) return false;
+            offset += StringUtilities.LINE_SEPARATOR.length();
+        }
+        if (offset != code.length()) return false;
+        retainedSpans += spans.size();
+        item.add("address_spans", spans);
+        cov.add("address_spans", facet(spans.size(), mapped, spans.size() < mapped, null, "complete"));
+        return true;
     }
 
     JsonObject facet(int emitted, int total, boolean truncated, String err, String status) {

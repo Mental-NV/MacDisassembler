@@ -11,7 +11,8 @@ import sys
 from . import __version__, SCHEMA_VERSION
 from .errors import Error
 from .macho import inspect_path, read_regular
-from .storage import Project, atomic, canonical, identity, write_json
+from .pseudocode import address_spans
+from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
 from . import calls, engine, search
 from .schema import validate_envelope, validate_function
 
@@ -140,16 +141,23 @@ def normalize(raw, image, deps, manifest):
         va=hex(int(engine_entry,16)) if engine_entry.startswith('0x') else None
         space='ram' if va is not None else engine_entry.partition(':')[0]
         fid=identity({'analysis_id':aid,'image_id':image['image_id'],'entry_va':va,'address_space':space,'engine_entry':engine_entry})
-        f.update(function_id=fid,image_id=image['image_id'],arch=image['arch'],entry_va=va,address_space=space,engine_entry=engine_entry,analysis_id=aid,names=[{'name':f['name'],'origin':'ghidra'}],address_spans=[],origin={'engine':'Ghidra','version':'12.2','evidence':'decoded/inferred'})
+        f.update(function_id=fid,image_id=image['image_id'],arch=image['arch'],entry_va=va,address_space=space,engine_entry=engine_entry,analysis_id=aid,names=[{'name':f['name'],'origin':'ghidra'}],origin={'engine':'Ghidra','version':'12.2','evidence':'decoded/inferred'})
         f['entry_address']=location(engine_entry)
         for ins in f['instructions']:
             ins['location']=location(ins['addr'])
         f['instruction_bytes_sha256']=hashlib.sha256(bytes.fromhex(''.join(ins['bytes'] for ins in f['instructions']))).hexdigest()
-        f['facets']={key:{'available': key in ('instructions','blocks') or f.get(key) is not None and key != 'address_spans', 'reason': None if key in ('instructions','blocks') or f.get(key) else 'No output from engine; token-address spans are not yet exported' if key=='address_spans' else f.get('decompile_error') or 'Empty or unavailable engine facet'} for key in ('pseudocode','instructions','blocks','address_spans')}
+        f['facets']={key:{'available': key in ('instructions','blocks') or f.get(key) is not None, 'reason': None if key in ('instructions','blocks') or f.get(key) else f.get('decompile_error') or 'Empty or unavailable engine facet'} for key in ('pseudocode','instructions','blocks')}
+        displayed = redact(f.get('pseudocode'))
+        f['address_spans'], f['facets']['address_spans'] = address_spans(f, displayed)
+        if displayed != f.get('pseudocode') and 'address_spans' in f.get('coverage', {}):
+            f['coverage'] = dict(f['coverage'], address_spans={
+                'status': 'unavailable', 'emitted': 0, 'total': None, 'truncated': False, 'error': None,
+                'reason': f['facets']['address_spans']['reason'],
+            })
         validate_function(f)
         functions.append(f)
     functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['engine_entry'],f['function_id']))
-    value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','No token-to-address spans, annotations, rich ObjC/Swift metadata views or phase-3 features.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
+    value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','Pseudocode spans cover available token addresses within the function body.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
     return redact(value)
 
 
@@ -206,11 +214,13 @@ def fresh_decompile(args, project, image, function, aid):
     fresh = result['functions'][0]
     facet = fresh['coverage']['pseudocode']
     complete = facet['status'] == 'complete' and bool(fresh['pseudocode'])
+    spans, span_facet = address_spans(fresh, redact(fresh['pseudocode']))
     data = {
         'function_id': function['function_id'], 'image_id': image['image_id'], 'arch': image['arch'],
         'entry_va': function['entry_va'], 'names': function['names'],
         'pseudocode': fresh['pseudocode'], 'decompile_status': fresh['decompile_status'],
         'pseudocode_truncated': fresh['pseudocode_truncated'],
+        'address_spans': spans, 'address_span_coverage': span_facet,
         'origin': {'mode': 'fresh_readonly', 'job_id': job['job_id'],
                    'analysis_profile': job['analysis_profile'], 'bridge_version': result['bridge_version']},
     }
@@ -229,7 +239,7 @@ def execute(a):
     term = search.pattern(a.query) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
-        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.2.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
+        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.3.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='doctor':
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
         deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
@@ -298,8 +308,10 @@ def execute(a):
             aid=normalized['analysis_id']
             out=p.path/'snapshots'/(aid+'.json')
             payload=canonical(normalized)+b'\n'
+            if len(payload)>MAX_SNAPSHOT_BYTES:
+                raise Error('snapshot_limit','Normalized snapshot exceeds its read limit; analyze fewer functions',7)
             if out.exists():
-                if read_regular(out,64*1024*1024)!=payload:raise Error('nondeterministic_snapshot','Identical analysis identity produced different output; previous snapshot retained',5)
+                if read_regular(out,MAX_SNAPSHOT_BYTES)!=payload:raise Error('nondeterministic_snapshot','Identical analysis identity produced different output; previous snapshot retained',5)
             else:atomic(out,payload,mode=0o400)
             record={'snapshot_sha256':hashlib.sha256(payload).hexdigest(),'job_id':job['job_id'],'analysis_program_sha256':engine.tree_digest(p.path/'jobs'/job['job_id']/'program')}
             with p.db(False) as db:
