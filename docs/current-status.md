@@ -141,11 +141,13 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Test an experimental [fixed-width C printer](fixed-width-printer.md)
   in a separately selected full Ghidra engine. It preserved the paired
   machine evidence and moved 120 calculator instances to full passes.
+- [x] Test [byte-offset store rendering](byte-offset-stores.md) across
+  the calculator matrix. All 20 alignment failures moved to full
+  passes. The independent fixture exposed a separate load-order error.
 - [ ] Meet the recovered-C behavior and testability gates across the full
-  core. In the fixed-width printer experiment, O2 coverage reached
-  76.9% of routine instances and 51.2% of instruction bytes.
-  Misaligned stores, unsupported signatures, vector operations and
-  linkage remain open.
+  core. The store-printer calculator experiment reached 86.5% of O2
+  routine instances and 67.4% of O2 instruction bytes. Held-out load
+  order, unsupported signatures, vector operations and linkage remain open.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the

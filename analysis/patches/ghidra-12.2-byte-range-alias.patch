@@ -1,0 +1,181 @@
+--- a/coreaction.cc
++++ b/coreaction.cc
+@@ -3428,6 +3428,4 @@
+-/// Return false only if one Varnode is obtained by adding non-zero thing to another Varnode.
+-/// The order of the Varnodes is not important.
+-/// \param vn1 is the first Varnode
+-/// \param vn2 is the second Varnode
+-/// \return false if the additive relationship holds
+-bool ActionMarkImplied::isPossibleAliasStep(Varnode *vn1,Varnode *vn2)
++/// Strip a bounded chain of same-width copies, casts, and constant offsets.
++/// A null base represents an absolute address. Unknown expressions keep
++/// their own Varnode as the base.
++static const Varnode *splitByteAddress(const Varnode *address,uintb &offset)
+@@ -3436,11 +3434,38 @@
+-  Varnode *var[2];
+-  var[0] = vn1;
+-  var[1] = vn2;
+-  for(int4 i=0;i<2;++i) {
+-    Varnode *vncur = var[i];
+-    if (!vncur->isWritten()) continue;
+-    PcodeOp *op = vncur->getDef();
+-    OpCode opc = op->code();
+-    if ((opc!=CPUI_INT_ADD)&&(opc!=CPUI_PTRSUB)&&(opc!=CPUI_PTRADD)&&(opc!=CPUI_INT_XOR)) continue;
+-    if (var[1-i] != op->getIn(0)) continue;
+-    if (op->getIn(1)->isConstant()) return false;
++  for(int4 depth=0;depth<4 && address->isWritten();++depth) {
++    const PcodeOp *def = address->getDef();
++    if (def->numInput() == 0)
++      return address;
++    const Varnode *base = def->getIn(0);
++    uintb delta = 0;
++    switch(def->code()) {
++    case CPUI_COPY:
++    case CPUI_CAST:
++      break;
++    case CPUI_INT_ADD:
++      if (base->isConstant()) {
++        delta = base->getOffset();
++        base = def->getIn(1);
++      }
++      else if (def->getIn(1)->isConstant())
++        delta = def->getIn(1)->getOffset();
++      else
++        return address;
++      break;
++    case CPUI_PTRSUB:
++    case CPUI_PTRADD:
++      if (!def->getIn(1)->isConstant())
++        return address;
++      delta = def->getIn(1)->getOffset();
++      if (def->code() == CPUI_PTRADD) {
++        if (!def->getIn(2)->isConstant())
++          return address;
++        delta *= def->getIn(2)->getOffset();
++      }
++      break;
++    default:
++      return address;
++    }
++    if (base->getSize() != address->getSize())
++      return address;
++    offset += delta;
++    address = base;
+@@ -3448 +3473,4 @@
+-  return true;
++  if (!address->isConstant())
++    return address;
++  offset += address->getOffset();
++  return (const Varnode *)0;
+@@ -3450,0 +3479,3 @@
++/// Prove disjointness only for byte ranges with a shared base. Distances
++/// are modulo the address width, including ranges that cross zero.
++bool ActionMarkImplied::mayOverlap(const PcodeOp *load,const PcodeOp *store)
+@@ -3452,7 +3482,0 @@
+-/// Return false \b only if we can guarantee two Varnodes have different values.
+-/// \param vn1 is the first Varnode
+-/// \param vn2 is the second Varnode
+-/// \param depth is the maximum level to recurse
+-/// \return true if its possible the Varnodes hold the same value
+-bool ActionMarkImplied::isPossibleAlias(Varnode *vn1,Varnode *vn2,int4 depth)
+-
+@@ -3460,62 +3484,17 @@
+-  if (vn1 == vn2) return true;	// Definite alias
+-  if ((!vn1->isWritten())||(!vn2->isWritten())) {
+-    if (vn1->isConstant() && vn2->isConstant())
+-      return (vn1->getOffset()==vn2->getOffset()); // FIXME: these could be NEAR each other and still have an alias
+-    return isPossibleAliasStep(vn1,vn2);
+-  }
+-
+-  if (!isPossibleAliasStep(vn1,vn2))
+-    return false;
+-  Varnode *cvn1,*cvn2;
+-  PcodeOp *op1 = vn1->getDef();
+-  PcodeOp *op2 = vn2->getDef();
+-  OpCode opc1 = op1->code();
+-  OpCode opc2 = op2->code();
+-  int4 mult1 = 1;
+-  int4 mult2 = 1;
+-  if (opc1 == CPUI_PTRSUB)
+-    opc1 = CPUI_INT_ADD;
+-  else if (opc1 == CPUI_PTRADD) {
+-    opc1 = CPUI_INT_ADD;
+-    mult1 = (int4) op1->getIn(2)->getOffset();
+-  }
+-  if (opc2 == CPUI_PTRSUB)
+-    opc2 = CPUI_INT_ADD;
+-  else if (opc2 == CPUI_PTRADD) {
+-    opc2 = CPUI_INT_ADD;
+-    mult2 = (int4) op2->getIn(2)->getOffset();
+-  }
+-  if (opc1 != opc2) return true;
+-  if (depth == 0) return true;	// Couldn't find absolute difference
+-  depth -= 1;
+-  switch(opc1) {
+-  case CPUI_COPY:
+-  case CPUI_INT_ZEXT:
+-  case CPUI_INT_SEXT:
+-  case CPUI_INT_2COMP:
+-  case CPUI_INT_NEGATE:
+-    return isPossibleAlias(op1->getIn(0),op2->getIn(0),depth);
+-  case CPUI_INT_ADD:
+-    cvn1 = op1->getIn(1);
+-    cvn2 = op2->getIn(1);
+-    if (cvn1->isConstant() && cvn2->isConstant()) {
+-      uintb val1 = mult1 * cvn1->getOffset();
+-      uintb val2 = mult2 * cvn2->getOffset();
+-      if (val1 == val2)
+-	return isPossibleAlias(op1->getIn(0),op2->getIn(0),depth);
+-      return !functionalEquality(op1->getIn(0),op2->getIn(0));
+-    }
+-    if (mult1 != mult2) return true;
+-    if (functionalEquality(op1->getIn(0),op2->getIn(0)))
+-      return isPossibleAlias(op1->getIn(1),op2->getIn(1),depth);
+-    if (functionalEquality(op1->getIn(1),op2->getIn(1)))
+-      return isPossibleAlias(op1->getIn(0),op2->getIn(0),depth);
+-    if (functionalEquality(op1->getIn(0),op2->getIn(1)))
+-      return isPossibleAlias(op1->getIn(1),op2->getIn(0),depth);
+-    if (functionalEquality(op1->getIn(1),op2->getIn(0)))
+-      return isPossibleAlias(op1->getIn(0),op2->getIn(1),depth);
+-    break;
+-  default:
+-    break;
+-  }
+-  return true;
++  const AddrSpace *space = load->getIn(0)->getSpaceFromConst();
++  if (space->getWordSize() != 1)
++    return true;
++  const Varnode *loadAddress = load->getIn(1);
++  const Varnode *storeAddress = store->getIn(1);
++  int4 size = loadAddress->getSize();
++  if (size != storeAddress->getSize() || size != space->getAddrSize() || size > (int4)sizeof(uintb) || size < 1)
++    return true;
++  uintb loadOffset = 0;
++  uintb storeOffset = 0;
++  const Varnode *loadBase = splitByteAddress(loadAddress,loadOffset);
++  const Varnode *storeBase = splitByteAddress(storeAddress,storeOffset);
++  if (loadBase != storeBase)
++    return true;
++  uintb mask = calc_mask(size);
++  return ((storeOffset-loadOffset)&mask) < (uintb)load->getOut()->getSize()
++    || ((loadOffset-storeOffset)&mask) < (uintb)store->getIn(2)->getSize();
+@@ -3544,9 +3523,4 @@
+-      if (vn->getCover()->contain(storeop,2)) {
+-				// The LOAD crosses a STORE. We are cavalier
+-				// and let it through unless we can verify
+-				// that the pointers are actually the same
+-	if (storeop->getIn(0)->getOffset() == op->getIn(0)->getOffset()) {
+-	  //	  if (!functionalDifference(storeop->getIn(1),op->getIn(1),2)) return false;
+-	  if (isPossibleAlias(storeop->getIn(1),op->getIn(1),2)) return false;
+-	}
+-      }
++      if (vn->getCover()->contain(storeop,2)
++          && storeop->getIn(0)->getOffset() == op->getIn(0)->getOffset()
++          && mayOverlap(op,storeop))
++        return false;
+--- a/coreaction.hh
++++ b/coreaction.hh
+@@ -459,2 +459 @@
+-  static bool isPossibleAliasStep(Varnode *vn1,Varnode *vn2);	///< Check for additive relationship
+-  static bool isPossibleAlias(Varnode *vn1,Varnode *vn2,int4 depth);	///< Check for possible duplicate value
++  static bool mayOverlap(const PcodeOp *load,const PcodeOp *store);	///< Test byte-range overlap of a load and store
