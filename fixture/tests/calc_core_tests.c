@@ -153,6 +153,162 @@ static void feed_digits(calc_state_t *st, const char *digits) {
     }
 }
 
+static void test_format_capacity(void) {
+    const int64_t values[] = {0, 1, -1, 12, -123, INT64_MAX, INT64_MIN};
+    const char *want[] = {"0", "1", "-1", "12", "-123",
+                         "9223372036854775807", "-9223372036854775808"};
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        size_t need = strlen(want[i]) + 1;
+        for (size_t cap = 0; cap <= need + 1; cap++) {
+            char out[24], original[24];
+            memset(out, '#', sizeof(out));
+            memcpy(original, out, sizeof(out));
+            calc_status_t status = calc_format_int64(values[i], out, cap);
+            if (cap < need) {
+                CHECK(status == CALC_ERR_INVALID);
+                CHECK(memcmp(out, original, sizeof(out)) == 0);
+            } else {
+                CHECK(status == CALC_OK && strcmp(out, want[i]) == 0);
+                CHECK(memcmp(out + need, original + need, sizeof(out) - need) == 0);
+            }
+        }
+    }
+    CHECK(calc_format_int64(1, NULL, 21) == CALC_ERR_INVALID);
+}
+
+static void test_signed_digit_append(void) {
+    calc_result_t r;
+    r = calc_digit_append(-12, 3); CHECK(r.status == CALC_OK && r.value == -123);
+    r = calc_digit_append(-12, 0); CHECK(r.status == CALC_OK && r.value == -120);
+    r = calc_digit_append(0, 3); CHECK(r.status == CALC_OK && r.value == 3);
+    r = calc_digit_append(INT64_C(922337203685477580), 7);
+    CHECK(r.status == CALC_OK && r.value == INT64_MAX);
+    r = calc_digit_append(INT64_C(922337203685477580), 8);
+    CHECK(r.status == CALC_ERR_OVERFLOW);
+    r = calc_digit_append(-INT64_C(922337203685477580), 8);
+    CHECK(r.status == CALC_OK && r.value == INT64_MIN);
+    r = calc_digit_append(-INT64_C(922337203685477580), 9);
+    CHECK(r.status == CALC_ERR_OVERFLOW);
+    r = calc_digit_append(INT64_MIN, 0); CHECK(r.status == CALC_ERR_OVERFLOW);
+    r = calc_digit_append(-INT64_C(922337203685477581), 0);
+    CHECK(r.status == CALC_ERR_OVERFLOW);
+    r = calc_digit_append(-1, -1); CHECK(r.status == CALC_ERR_INVALID);
+    r = calc_digit_append(-1, 10); CHECK(r.status == CALC_ERR_INVALID);
+
+    /* Independent wide-integer oracle, balanced between appendable prefixes
+     * and full-width values. Separate seed preserves the original corpus. */
+    uint64_t saved_seed = rng_state;
+    rng_state = UINT64_C(0x84222325cbf29ce4);
+    for (int i = 0; i < 10000; i++) {
+        int64_t prefix = rand_s64();
+        if (i & 1) prefix /= 10;
+        int digit = (int)(next_rand() % 10);
+        __int128 value = (__int128)prefix * 10 + (prefix < 0 ? -digit : digit);
+        r = calc_digit_append(prefix, digit);
+        if (value > INT64_MAX || value < INT64_MIN) {
+            CHECK(r.status == CALC_ERR_OVERFLOW);
+        } else {
+            CHECK(r.status == CALC_OK && r.value == (int64_t)value);
+        }
+    }
+    rng_state = saved_seed;
+}
+
+static void test_engine_signed_entry(void) {
+    calc_state_t st;
+    calc_state_init(&st);
+    calc_engine_sign_toggle(&st);
+    CHECK(st.display == 0 && st.negative_zero && !st.fresh_entry);
+    feed_digits(&st, "00");
+    CHECK(st.display == 0 && st.negative_zero && !st.error_latched);
+    feed_digits(&st, "12");
+    CHECK(st.display == -12 && !st.negative_zero && !st.error_latched);
+    calc_engine_sign_toggle(&st); feed_digits(&st, "3");
+    CHECK(st.display == 123 && !st.negative_zero);
+
+    calc_state_init(&st);
+    feed_digits(&st, "8"); calc_engine_sign_toggle(&st); feed_digits(&st, "2");
+    CHECK(st.display == -82 && !st.error_latched);
+
+    calc_state_init(&st);
+    feed_digits(&st, "3"); calc_engine_input_op(&st, '+');
+    calc_engine_sign_toggle(&st);
+    CHECK(st.accumulator == 3 && st.pending_op == '+' && st.display == 0 &&
+          st.negative_zero && !st.fresh_entry);
+    feed_digits(&st, "4"); calc_engine_equals(&st);
+    CHECK(st.display == -1 && st.last_operand == -4 && !st.negative_zero);
+    calc_engine_equals(&st);
+    CHECK(st.display == -5 && !st.error_latched);
+
+    calc_state_init(&st);
+    feed_digits(&st, "3"); calc_engine_input_op(&st, '+');
+    calc_engine_sign_toggle(&st); calc_engine_sign_toggle(&st);
+    CHECK(st.display == 0 && !st.negative_zero && st.accumulator == 3);
+    feed_digits(&st, "4"); calc_engine_equals(&st);
+    CHECK(st.display == 7 && !st.error_latched);
+
+    /* Sign alone is a real zero RHS, not an operator replacement. */
+    calc_state_init(&st);
+    feed_digits(&st, "3"); calc_engine_input_op(&st, '+');
+    calc_engine_sign_toggle(&st); calc_engine_input_op(&st, '*');
+    CHECK(st.display == 3 && st.accumulator == 3 && st.fresh_entry && !st.negative_zero);
+    feed_digits(&st, "4"); calc_engine_equals(&st);
+    CHECK(st.display == 12 && !st.error_latched);
+
+    /* A sign on a completed result edits that result; it does not start RHS. */
+    calc_state_init(&st);
+    feed_digits(&st, "2"); calc_engine_input_op(&st, '+');
+    feed_digits(&st, "3"); calc_engine_equals(&st); calc_engine_sign_toggle(&st);
+    CHECK(st.display == -5 && !st.fresh_entry);
+    feed_digits(&st, "4"); CHECK(st.display == -54);
+
+    /* Both signed endpoints are enterable, adjacent out-of-range digits fail. */
+    calc_state_init(&st);
+    calc_engine_sign_toggle(&st); feed_digits(&st, "9223372036854775808");
+    CHECK(st.display == INT64_MIN && !st.error_latched && !st.negative_zero);
+    calc_engine_sign_toggle(&st);
+    CHECK(st.display == INT64_MIN && st.error_latched && st.error == CALC_ERR_OVERFLOW);
+    calc_state_t latched;
+    memcpy(&latched, &st, sizeof(st));
+    calc_engine_sign_toggle(&st); calc_engine_input_digit(&st, 0);
+    calc_engine_input_op(&st, '+'); calc_engine_equals(&st);
+    CHECK(memcmp(&st, &latched, sizeof(st)) == 0);
+    calc_engine_clear(&st);
+    CHECK(st.display == 0 && !st.negative_zero && st.fresh_entry && !st.error_latched);
+
+    feed_digits(&st, "9223372036854775807");
+    CHECK(st.display == INT64_MAX && !st.error_latched);
+    calc_engine_clear(&st); feed_digits(&st, "9223372036854775808");
+    CHECK(st.display == INT64_C(922337203685477580) && st.error == CALC_ERR_OVERFLOW);
+    calc_engine_clear(&st); calc_engine_sign_toggle(&st);
+    feed_digits(&st, "9223372036854775809");
+    CHECK(st.display == -INT64_C(922337203685477580) && st.error == CALC_ERR_OVERFLOW);
+    calc_engine_clear(&st); calc_engine_sign_toggle(&st);
+    feed_digits(&st, "9223372036854775808"); calc_engine_input_digit(&st, 0);
+    CHECK(st.display == INT64_MIN && st.error == CALC_ERR_OVERFLOW);
+
+    /* Starting a signed RHS must not attempt to negate INT64_MIN LHS. */
+    calc_engine_clear(&st); calc_engine_sign_toggle(&st);
+    feed_digits(&st, "9223372036854775808"); calc_engine_input_op(&st, '/');
+    calc_engine_sign_toggle(&st);
+    CHECK(st.accumulator == INT64_MIN && st.display == 0 && st.negative_zero &&
+          !st.error_latched);
+    feed_digits(&st, "1"); calc_engine_equals(&st);
+    CHECK(st.display == -1 && st.error == CALC_ERR_OVERFLOW);
+
+    /* Zero arithmetic clears entry sign. New digits after equals are positive. */
+    calc_engine_clear(&st); feed_digits(&st, "0"); calc_engine_input_op(&st, '+');
+    calc_engine_sign_toggle(&st); calc_engine_equals(&st);
+    CHECK(st.display == 0 && !st.negative_zero && st.fresh_entry);
+    calc_engine_input_digit(&st, 4); CHECK(st.display == 4 && !st.negative_zero);
+
+    calc_engine_clear(&st); calc_engine_sign_toggle(&st);
+    calc_engine_input_digit(&st, 10);
+    CHECK(st.display == 0 && st.negative_zero && st.error == CALC_ERR_INVALID);
+    calc_engine_clear(&st); calc_engine_sign_toggle(&st); calc_engine_sign_toggle(&st);
+    feed_digits(&st, "5"); CHECK(st.display == 5 && !st.negative_zero);
+}
+
 static void test_engine_directed(void) {
     calc_state_t st;
     /* 2 + 3 =  -> 5 */
@@ -287,7 +443,8 @@ static void test_seeded_random(void) {
             CHECK(g.status == CALC_OK && g.value == a / b);
         }
     }
-    /* 2,000 seeded engine state sequences: model-check display/err latch. */
+    /* 2,000 seeded engine state sequences: invariant smoke test, not an
+     * independent state-machine equivalence oracle. */
     for (i = 0; i < 2000; i++) {
         calc_state_t st;
         int steps = 1 + (int)(next_rand() % 12u);
@@ -301,6 +458,7 @@ static void test_seeded_random(void) {
             case 3: calc_engine_sign_toggle(&st); break;
             default: calc_engine_clear(&st); break;
             }
+            CHECK(!st.negative_zero || (st.display == 0 && !st.fresh_entry));
         }
         /* Invariants: no error -> display formatted; latch -> err set. */
         if (!st.error_latched) {
@@ -325,7 +483,10 @@ static void test_seeded_random(void) {
 int main(void) {
     test_directed_arithmetic();
     test_parse_format();
+    test_format_capacity();
+    test_signed_digit_append();
     test_engine_directed();
+    test_engine_signed_entry();
     test_history();
     test_seeded_random();
     printf("core_tests: pass=%d fail=%d\n", g_pass, g_fail);

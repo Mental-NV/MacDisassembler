@@ -30,7 +30,15 @@
 }
 
 - (void)pressOperator:(char)op {
+    // Only a pending operation with an entered RHS can complete here.
+    // Snapshot before the engine replaces it with the newly pressed op.
+    calc_state_t before = _state;
     calc_engine_input_op(&_state, op);
+    if (!before.error_latched && before.pending_op != 0 &&
+        !before.fresh_entry && !_state.error_latched) {
+        calc_history_push(&_history, before.accumulator, before.pending_op,
+                          before.display, _state.display);
+    }
     [self refreshViews];
 }
 
@@ -65,6 +73,9 @@
 
 - (NSString *)displayString {
     char buf[32];
+    if (_state.display == 0 && _state.negative_zero) {
+        return @"-0";
+    }
     if (calc_format_int64(_state.display, buf, sizeof(buf)) != CALC_OK) {
         return @"?";
     }

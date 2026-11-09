@@ -255,8 +255,12 @@ calc_result_t calc_digit_append(int64_t display, int digit) {
         r.status = CALC_ERR_INVALID;
         return r;
     }
+    /* Subtract on the negative path so INT64_MIN remains enterable without
+     * first forming an unrepresentable positive magnitude. */
     if (__builtin_mul_overflow(display, 10, &scaled) ||
-        __builtin_add_overflow(scaled, (int64_t)digit, &r.value)) {
+        __builtin_add_overflow(scaled, display < 0 ? -(int64_t)digit
+                                                 : (int64_t)digit,
+                               &r.value)) {
         r.value = 0;
         r.status = CALC_ERR_OVERFLOW;
         return r;
@@ -317,15 +321,22 @@ void calc_engine_input_digit(calc_state_t *st, int digit) {
     }
     if (st->fresh_entry) {
         st->display = (int64_t)digit;
+        st->negative_zero = 0;
         st->fresh_entry = 0;
         return;
     }
-    r = calc_digit_append(st->display, digit);
+    if (st->negative_zero) {
+        r.value = -(int64_t)digit;
+        r.status = CALC_OK;
+    } else {
+        r = calc_digit_append(st->display, digit);
+    }
     if (r.status != CALC_OK) {
         calc_latch_error(st, r.status);
         return;
     }
     st->display = r.value;
+    st->negative_zero = st->negative_zero && r.value == 0;
     st->fresh_entry = 0;
 }
 
@@ -356,6 +367,7 @@ CALC_NOINLINE void calc_engine_input_op(calc_state_t *st, char op) {
     }
     st->pending_op = op;
     st->fresh_entry = 1;
+    st->negative_zero = 0;
 }
 
 CALC_NOINLINE void calc_engine_equals(calc_state_t *st) {
@@ -374,6 +386,7 @@ CALC_NOINLINE void calc_engine_equals(calc_state_t *st) {
         st->has_last = 1;
         st->pending_op = 0;
         st->display = r.value;
+        st->negative_zero = 0;
         st->accumulator = r.value;
         st->fresh_entry = 1;
         return;
@@ -385,6 +398,7 @@ CALC_NOINLINE void calc_engine_equals(calc_state_t *st) {
             return;
         }
         st->display = r.value;
+        st->negative_zero = 0;
         st->accumulator = r.value;
         st->fresh_entry = 1;
         return;
@@ -397,12 +411,20 @@ void calc_engine_sign_toggle(calc_state_t *st) {
     if (st == NULL || st->error_latched) {
         return;
     }
+    if (st->fresh_entry && st->pending_op != 0) {
+        /* The displayed accumulator is not an entered RHS. Start a new
+         * signed entry, without changing the pending calculation's LHS. */
+        st->display = 0;
+        st->negative_zero = 0;
+    }
     r = calc_negate(st->display);
     if (r.status != CALC_OK) {
         calc_latch_error(st, r.status);
         return;
     }
     st->display = r.value;
+    st->negative_zero = r.value == 0 ? !st->negative_zero : 0;
+    st->fresh_entry = 0;
 }
 
 void calc_history_init(calc_history_t *h) {

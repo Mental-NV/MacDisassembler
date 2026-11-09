@@ -2,7 +2,7 @@
  * calc_core.h — pure C integer calculation core for the MacDisassembler
  * calculator fixture.
  *
- * No AppKit, no UI, no I/O. Semantics frozen in docs/semantics.md v1.0.
+ * No AppKit, no UI, no I/O. Current semantics: docs/semantics.md v1.1.
  * Every fallible routine reports via calc_result_t / calc_status_t;
  * values never wrap and errors never trap.
  */
@@ -52,7 +52,8 @@ calc_result_t calc_dispatch_table(char op, int64_t a, int64_t b);
 calc_result_t calc_parse_digits(const char *text, size_t len);
 calc_status_t calc_format_int64(int64_t value, char *out, size_t cap);
 
-/* Display digit append: display * 10 + digit. digit must be 0..9. */
+/* Append magnitude, preserving sign: -12 then 3 -> -123. digit: 0..9.
+ * Integer zero is nonnegative; the engine tracks a signed-zero entry. */
 calc_result_t calc_digit_append(int64_t display, int digit);
 
 /* Sign toggle: checked negate. */
@@ -71,6 +72,7 @@ typedef struct calc_state {
     int64_t last_operand; /* second operand of last completed computation */
     int has_last;
     int fresh_entry;      /* next digit starts a new entry */
+    int negative_zero;    /* negative entry sign when display is zero */
     int error_latched;
     calc_status_t error;
 } calc_state_t;

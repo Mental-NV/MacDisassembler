@@ -1,4 +1,4 @@
-// ui_journeys.m — 20 scripted UI journeys through the production
+// ui_journeys.m — scripted controller journeys through the production
 // CalcController press* pathways (the same methods AppKit buttons call).
 // Headless: no windows are created. Exit 0 on success, 1 on failure.
 //
@@ -65,16 +65,24 @@ int main(int argc, const char *argv[]) {
         enterDigits(c, "2"); [c pressOperator:'+']; enterDigits(c, "3");
         [c pressEquals]; [c pressEquals]; [c pressEquals];
         CHECK_STR([c displayString], @"11");
+        CHECK_STR([c historyString], @"2 + 3 = 5\n5 + 3 = 8\n8 + 3 = 11\n");
         // 7: consecutive operators, last wins.
         c = fresh();
         enterDigits(c, "3"); [c pressOperator:'+']; [c pressOperator:'*'];
+        CHECK_STR([c historyString], @"");
         enterDigits(c, "4"); [c pressEquals];
         CHECK_STR([c displayString], @"12");
+        CHECK_STR([c historyString], @"3 * 4 = 12\n");
         // 8: chained pending compute, no precedence.
         c = fresh();
         enterDigits(c, "2"); [c pressOperator:'+']; enterDigits(c, "3");
-        [c pressOperator:'*']; enterDigits(c, "4"); [c pressEquals];
+        [c pressOperator:'*'];
+        CHECK_STR([c historyString], @"2 + 3 = 5\n");
+        enterDigits(c, "4"); [c pressEquals];
         CHECK_STR([c displayString], @"20");
+        CHECK_STR([c historyString], @"2 + 3 = 5\n5 * 4 = 20\n");
+        [c pressEquals];
+        CHECK_STR([c historyString], @"2 + 3 = 5\n5 * 4 = 20\n20 * 4 = 80\n");
         // 9: sign toggle.
         c = fresh();
         enterDigits(c, "8"); [c pressNegate];
@@ -95,6 +103,7 @@ int main(int argc, const char *argv[]) {
         c = fresh();
         enterDigits(c, "9"); [c pressEquals];
         CHECK_STR([c displayString], @"9");
+        CHECK_STR([c historyString], @"");
         // 13: history records completed computation.
         c = fresh();
         enterDigits(c, "2"); [c pressOperator:'+']; enterDigits(c, "3");
@@ -138,6 +147,125 @@ int main(int argc, const char *argv[]) {
         enterDigits(c, "2"); [c pressOperator:'+']; enterDigits(c, "2");
         [c pressEquals]; [c pressDigit:7];
         CHECK_STR([c displayString], @"7");
+
+        // 21: failed chain, ignored presses, and clear never add history.
+        c = fresh();
+        enterDigits(c, "1"); [c pressOperator:'/']; enterDigits(c, "0");
+        [c pressOperator:'+'];
+        CHECK_STR([c errorString], @"Error: division by zero");
+        CHECK_STR([c historyString], @"");
+        [c pressOperator:'*']; [c pressEquals]; [c pressDigit:9]; [c pressNegate];
+        CHECK_STR([c displayString], @"0");
+        CHECK_STR([c historyString], @"");
+        [c pressClear];
+        CHECK_STR([c errorString], @"");
+        CHECK_STR([c historyString], @"");
+
+        // 22: a failed later chain preserves only earlier successful work.
+        c = fresh();
+        enterDigits(c, "2"); [c pressOperator:'+']; enterDigits(c, "3");
+        [c pressOperator:'/']; enterDigits(c, "0"); [c pressOperator:'*'];
+        CHECK_STR([c errorString], @"Error: division by zero");
+        CHECK_STR([c historyString], @"2 + 3 = 5\n");
+        [c pressEquals];
+        CHECK_STR([c historyString], @"2 + 3 = 5\n");
+        [c pressClear]; CHECK_STR([c historyString], @"");
+
+        // 23: overflow during a chained operator also adds nothing.
+        c = fresh();
+        enterDigits(c, "9223372036854775807"); [c pressOperator:'+'];
+        enterDigits(c, "1"); [c pressOperator:'*'];
+        CHECK_STR([c displayString], @"1");
+        CHECK_STR([c errorString], @"Error: overflow");
+        CHECK_STR([c historyString], @"");
+
+        // 24: invalid new operator cannot commit an otherwise valid chain.
+        c = fresh();
+        enterDigits(c, "2"); [c pressOperator:'+']; enterDigits(c, "3");
+        [c pressOperator:'?'];
+        CHECK_STR([c displayString], @"3");
+        CHECK_STR([c errorString], @"Error: invalid input");
+        CHECK_STR([c historyString], @"");
+
+        // 25: consecutive operators after a completed chain do not duplicate it.
+        c = fresh();
+        enterDigits(c, "2"); [c pressOperator:'+']; enterDigits(c, "3");
+        [c pressOperator:'*']; [c pressOperator:'-']; [c pressOperator:'/'];
+        CHECK_STR([c historyString], @"2 + 3 = 5\n");
+        enterDigits(c, "4"); [c pressEquals];
+        CHECK_STR([c historyString], @"2 + 3 = 5\n5 / 4 = 1\n");
+
+        // 26: sign-before-digits preserves negative zero and magnitude.
+        c = fresh(); [c pressNegate];
+        CHECK_STR([c displayString], @"-0");
+        enterDigits(c, "00"); CHECK_STR([c displayString], @"-0");
+        enterDigits(c, "12"); CHECK_STR([c displayString], @"-12");
+        CHECK_STR([c historyString], @"");
+        [c pressClear]; CHECK_STR([c displayString], @"0");
+        enterDigits(c, "8"); [c pressNegate]; enterDigits(c, "2");
+        CHECK_STR([c displayString], @"-82");
+
+        // 27: signed RHS leaves LHS intact and records negative operand.
+        c = fresh();
+        enterDigits(c, "3"); [c pressOperator:'+']; [c pressNegate];
+        CHECK_STR([c displayString], @"-0");
+        enterDigits(c, "4"); [c pressEquals];
+        CHECK_STR([c displayString], @"-1");
+        CHECK_STR([c historyString], @"3 + -4 = -1\n");
+
+        // 28: toggling the pending entry sign twice restores positive digits.
+        c = fresh();
+        enterDigits(c, "3"); [c pressOperator:'+']; [c pressNegate]; [c pressNegate];
+        CHECK_STR([c displayString], @"0");
+        enterDigits(c, "4"); [c pressEquals];
+        CHECK_STR([c displayString], @"7");
+        CHECK_STR([c historyString], @"3 + 4 = 7\n");
+
+        // 29: a sign-only RHS is an entered zero, so an operator computes it.
+        c = fresh();
+        enterDigits(c, "3"); [c pressOperator:'+']; [c pressNegate];
+        [c pressOperator:'*']; enterDigits(c, "4"); [c pressEquals];
+        CHECK_STR([c displayString], @"12");
+        CHECK_STR([c historyString], @"3 + 0 = 3\n3 * 4 = 12\n");
+
+        // 30: signed zero is normalized by a completed binary computation.
+        c = fresh();
+        enterDigits(c, "0"); [c pressOperator:'+']; [c pressNegate]; [c pressEquals];
+        CHECK_STR([c displayString], @"0");
+        CHECK_STR([c historyString], @"0 + 0 = 0\n");
+        [c pressDigit:4]; CHECK_STR([c displayString], @"4");
+
+        // 31: INT64_MIN can be entered directly; negating it latches overflow.
+        c = fresh(); [c pressNegate]; enterDigits(c, "9223372036854775808");
+        CHECK_STR([c displayString], @"-9223372036854775808");
+        CHECK_STR([c errorString], @"");
+        [c pressNegate];
+        CHECK_STR([c errorString], @"Error: overflow");
+        CHECK_STR([c displayString], @"-9223372036854775808");
+        CHECK_STR([c historyString], @"");
+
+        // 32: signed RHS on INT64_MIN does not negate the LHS.
+        c = fresh(); [c pressNegate]; enterDigits(c, "9223372036854775808");
+        [c pressOperator:'/']; [c pressNegate];
+        CHECK_STR([c displayString], @"-0");
+        CHECK_STR([c errorString], @"");
+        enterDigits(c, "1"); [c pressEquals];
+        CHECK_STR([c displayString], @"-1");
+        CHECK_STR([c errorString], @"Error: overflow");
+        CHECK_STR([c historyString], @"");
+
+        // 33: sign after equals edits the result and subsequent digits append.
+        c = fresh();
+        enterDigits(c, "2"); [c pressOperator:'+']; enterDigits(c, "3");
+        [c pressEquals]; [c pressNegate]; [c pressDigit:4];
+        CHECK_STR([c displayString], @"-54");
+        CHECK_STR([c historyString], @"2 + 3 = 5\n");
+
+        // 34: negative boundary overflow preserves the previous entered prefix.
+        c = fresh(); [c pressNegate]; enterDigits(c, "9223372036854775809");
+        CHECK_STR([c displayString], @"-922337203685477580");
+        CHECK_STR([c errorString], @"Error: overflow");
+        CHECK_STR([c historyString], @"");
         printf("ui_journeys: pass=%d fail=%d\n", g_pass, g_fail);
         return g_fail == 0 ? 0 : 1;
     }
