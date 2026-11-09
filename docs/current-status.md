@@ -90,6 +90,10 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Measure 100% branch-direction coverage for the owned reference core
   with directed and seeded stateful tests. See
   [reference coverage](semantics.md#reference-core-coverage).
+- [x] Compare all seven held-out switch routines across the frozen patched
+  and control captures. The [behavior check](heldout-switch.md#recovered-c-behavior)
+  records signed overflow and caller arity failures separately from
+  recovered control flow.
 - [ ] Measure recovered-C behavior and testability across the broader core.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch

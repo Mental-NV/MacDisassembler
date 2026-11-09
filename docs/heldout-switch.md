@@ -185,3 +185,46 @@ Run `doctor --full-digest --ghidra "$experiment/engine-patched"`. Select
 that same full tree with `--ghidra` for import, analyze and fresh queries
 in a new private workspace. Cached queries use the committed snapshot.
 The default engine and existing projects keep their original identity.
+
+## Recovered C behavior
+
+The evaluator matched all seven source routines to the frozen captures by
+dSYM UUID and linker-confirmed entry address. It compiled the emitted bodies
+and declarations as printed, with generic integer typedefs. The dispatcher
+linked against the six recovered helpers from the same capture. The harness
+used the printed parameter types and compared the 32-bit return bits against
+the frozen unsigned reference. It treated sanitizer failures as failed
+comparisons.
+
+Every completed helper test covered 121 directed and 10,000 seeded input
+pairs. Dispatcher tests were configured for 1,452 directed cases across all
+operations and defaults, plus 10,000 seeded cases.
+
+| Routine | Outcomes across 20 captures |
+| --- | --- |
+| `combine_xor`, `combine_mul`, `combine_max`, `combine_rot` | All 80 outputs passed 809,680 comparisons in total, with zero mismatches. |
+| `combine_add`, `combine_sub` | All 40 outputs triggered signed-overflow diagnostics on valid unsigned inputs. |
+| `heldout_dispatch` | Four unpatched x86_64 O0 outputs had incomplete control flow. Two patched arm64 O0 baseline outputs failed compilation. Fourteen compiled outputs triggered signed overflow in a recovered helper. |
+
+The two arm64 O0 baseline dispatchers emitted three arguments for helpers
+whose recovered declarations accepted two. The parameter-inference profile
+allowed those dispatchers to compile. The restored jump targets therefore
+establish reachability, while the full recovered dispatcher behavior gate
+remains open. These runs executed the generated comparison harness as
+native arm64 C.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 analysis/compare_heldout_switch.py \
+  --comparison /private/tmp/completed-patch-comparison \
+  --evaluator /path/to/owned/heldout-evaluator \
+  --inputs /private/tmp/frozen-heldout-inputs \
+  --output-dir /private/tmp/new-heldout-behavior \
+  --experimental-trusted-input
+```
+
+The comparison directory contains the 20 frozen exports and their A/B
+report. The evaluator directory contains the linked files and matching
+dSYMs. The input directory contains the captured symbol-bearing and stripped
+slices. The runner verifies their text and identity before any comparison.
+The measured behavior report SHA-256 is
+`a743ffead583bc0e6018fb7a21817dbbf7b746516ee525886b9adb40f2f476f8`.
