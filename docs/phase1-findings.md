@@ -165,7 +165,7 @@ bounds/non-overlap, and inspect Command-Q routing. The matrix script now runs
 this regression. It does not synthesize a Quit action or touch other apps.
 
 The isolated visual-review build is reproducible with
-`python3 fixture/build/build_ui_review.py build/ui-layout-review-v1`. It uses
+`python3 fixture/build/build_ui_review.py build/ui-layout-review-<new-id>`. It uses
 a copied Info.plist and Xcode overrides for bundle identifier
 `org.macsdisassembler.CalculatorFixture.UIReview` and display name
 `CalculatorFixture UI Review`, avoiding selection of an older running
@@ -175,3 +175,14 @@ Info.plist hash, and the new executable hash. No existing process is closed
 or killed by the build. This UI change creates a new binary identity; the
 prior full baseline stays frozen and is not a measurement of this UI build.
 No new 16-case analysis is claimed for a layout-only correction.
+
+Completed review build: `build/ui-layout-review-v2/evaluator/DebugAnalysis-arm64/CalculatorFixture.app`,
+source revision `d8f9176`, with the exact manifest in
+`build/ui-layout-review-v2/manifest.json`. The distinct bundle ID/display name
+were verified from the built Info.plist, and code-signature verification
+passed. An earlier `ui-layout-review-v1` Xcode service crash is retained as
+failed evidence. The successful retry separates Xcode's build/cache writes
+from the baseline worker's 64-MiB per-file cap, retaining the owned process
+group timeout and captured-log bound. No automatic app launch or actual
+keyboard Quit was performed by this build/test workflow; rendered visual
+recheck belongs to the parent review.
