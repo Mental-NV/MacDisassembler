@@ -73,6 +73,7 @@ macscope headers --project workspaces/calculator --json
 macscope sections --project workspaces/calculator --name-contains text --json
 macscope imports --project workspaces/calculator --json
 macscope strings --project workspaces/calculator --min-length 8 --json
+macscope fixups --project workspaces/calculator --kind bind --json
 macscope export --project workspaces/calculator --json --output private-results.json
 ```
 
@@ -183,7 +184,20 @@ fields from their digest-verified slice. The `loader` record includes
 symbol table ranges, linkedit payload ranges, function starts, and
 data-in-code entries. An incomplete decoded table makes the header result
 partial. Dyld stream, export trie, chained fixup and signature ranges are
-recorded as extents, with their payload interpretation tracked separately.
+recorded as extents.
+
+`fixups` reads the digest-verified imported slice before or after analysis.
+It decodes `DYLD_CHAINED_PTR_64` and `DYLD_CHAINED_PTR_64_OFFSET` chains with
+uncompressed names and import record formats 1–3. Rebase records carry
+unslid targets. Bind records carry declared symbols, ordinals, weak flags
+and addends, with an unresolved runtime address. Other pointer formats,
+compressed names and legacy opcode streams receive explicit partial
+coverage. No dependencies are loaded. Use `--kind bind|rebase|all`,
+`--limit` and `--cursor` to inspect the evidence.
+
+On 16 owned fixtures, `dyld_info -fixups` agreed on all 3,296 rebase
+addresses/targets and 594 bind addresses/symbols. Those binaries used
+`DYLD_CHAINED_PTR_64_OFFSET` and import format 1.
 
 `bytes --address 0xVA --length N`
 reads 1–4096 bytes within a single file-backed section of that same slice

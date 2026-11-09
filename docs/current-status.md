@@ -69,7 +69,9 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Record entry offsets, dylib dependencies, rpaths and linkedit extents,
   and decode bounded function-start and data-in-code tables. The owned
   16-binary comparison checked 708 function starts and 56 dylib paths.
-- [ ] Decode supported dyld bind/rebase and chained fixup payloads.
+- [x] Decode ordinary 64-bit chained bind and rebase pointers from immutable
+  slices. The 16 owned inputs matched Apple tool output for 3,890 fixups.
+- [ ] Decode legacy dyld bind/rebase opcodes and expand tested pointer formats.
 - [ ] Add Objective-C/Swift views with source and coverage distinctions.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.

@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotations, bundle, calls, engine, metadata, search
+from . import annotations, bundle, calls, dyld, engine, metadata, search
 from .schema import validate_envelope, validate_function
 
 
@@ -78,6 +78,8 @@ def parser():
     s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','parameter-inference','deep'),default='baseline',help='baseline is unchanged; parameter-inference is an explicit experimental binary-only profile');common(s);budgets(s)
     s=sub.add_parser('status');project(s);common(s)
     s=sub.add_parser('headers');project(s);common(s)
+    s=sub.add_parser('fixups');project(s);common(s);pagination(s)
+    s.add_argument('--kind',choices=('all','bind','rebase'),default='all')
     s=sub.add_parser('bytes');project(s);common(s)
     s.add_argument('--address',required=True)
     s.add_argument('--length',type=int,required=True,dest='byte_length')
@@ -460,6 +462,17 @@ def execute(a):
     if a.command=='bytes':
         return envelope(command,metadata.read_bytes_at(p,image,a.address,a.byte_length),
                         cov=coverage('selected image bytes',a.byte_length,a.byte_length))
+    if a.command=='fixups':
+        info,records,gaps=dyld.fixups(metadata.verified_slice(p,image),image)
+        records=[row for row in records if a.kind=='all' or row['kind']==a.kind]
+        records.sort(key=lambda row:int(row['va'],16))
+        rows,cov=page(records,a,image['image_id'],p.project_id,{'kind':a.kind},order='fixup-address/v1')
+        cov['scope']='selected image dyld fixups: '+a.kind
+        if gaps:
+            reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+            cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+        data=dict(info,image_id=image['image_id'],arch=image['arch'],records=rows)
+        return envelope(command,data,status='partial' if gaps else 'complete',cov=cov)
     if a.command in metadata.PREFLIGHT_LISTS:
         return metadata_collection(a,p,image)
     snapshot,record=p.snapshot(image)
