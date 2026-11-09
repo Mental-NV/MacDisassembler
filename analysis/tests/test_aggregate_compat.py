@@ -36,6 +36,25 @@ class AggregateCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(Unsupported, "unknown_identifier:STORE_LE128"):
             lowered("STORE_LE128((void *)param_1, param_1); return ZEXT816(param_1);")
 
+    def test_twelve_byte_temporary_uses_declared_subfields_and_truncates_the_call(self):
+        source = {
+            "FUN_100": """undefined1 [16] FUN_100(long param_1) {
+                undefined1 auVar1 [12];
+                auVar1 = FUN_200(param_1);
+                return ZEXT816(auVar1._8_4_);
+            }""",
+            "FUN_200": "undefined1 [16] FUN_200(long param_1) { return ZEXT816(param_1); }",
+        }
+        result, _ = lower_closure("FUN_100", source, 1)
+        self.assertIn("gh_low_bytes(FUN_200(param_1), 12)", result)
+        self.assertIn("gh_read(auVar1, 8, 4)", result)
+        with self.assertRaisesRegex(Unsupported, "invalid_aggregate_subfield"):
+            lowered("undefined1 auVar1 [12]; auVar1._8_8_ = param_1; return auVar1;")
+
+    def test_twelve_byte_return_does_not_mark_padding_known(self):
+        code = lowered("return ZEXT816(param_1);", header="undefined1 [12] FUN_100(long param_1)")
+        self.assertIn("return gh_low_bytes(gh_known((ZEXT816(param_1))), 12);", code)
+
     def test_does_not_rewrite_a_missing_aggregate_signature_or_unknown_dependency(self):
         with self.assertRaisesRegex(Unsupported, "aggregate_abi_unverified"):
             lowered("return param_1;", header="long FUN_100(long param_1)")

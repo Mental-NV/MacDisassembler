@@ -2,13 +2,13 @@
 import re
 
 
-POLICY = "macscope-ghidra-aggregate-compat/2"
+POLICY = "macscope-ghidra-aggregate-compat/3"
 MEMORY_STORES = frozenset(("STORE_LE16", "STORE_LE32", "STORE_LE64"))
 COMMENT = re.compile(r"/\*[^*]*(?:\*(?!/)[^*]*)*\*/")
 NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 SCALAR = r"(?:long|ulong|int|uint|bool|char|byte|void|undefined[1248])"
 HEADER = re.compile(
-    rf"\s*(undefined1\s*\[16\]|{SCALAR})\s+({NAME})\s*\(([^()]*)\)\s*\{{(.*)\}}\s*",
+    rf"\s*(undefined1\s*\[(?:12|16)\]|{SCALAR})\s+({NAME})\s*\(([^()]*)\)\s*\{{(.*)\}}\s*",
     re.S,
 )
 ARGUMENT = re.compile(rf"\s*{SCALAR}\s*(?:\*\s*)?(param_[0-9]+)\s*")
@@ -21,7 +21,7 @@ WORDS = set("long ulong int uint bool char byte void undefined1 undefined2 undef
             "if else while do for goto return break continue switch case default true false "
             "SCARRY8 SBORROW8 SEXT816 ZEXT816 SUB168".split()) | MEMORY_STORES
 CALL = re.compile(rf"\b({NAME})\s*\(")
-RAW_ARRAY = re.compile(r"\bundefined1\s+([a-z]{1,3}Var[0-9]+)\s*\[16\]\s*;")
+RAW_ARRAY = re.compile(r"\bundefined1\s+([a-z]{1,3}Var[0-9]+)\s*\[(12|16)\]\s*;")
 UNDEFINED_STACK = re.compile(r"\bundefined[1248]\s+([a-z]+Stack_[0-9a-f]+)\s*;")
 
 
@@ -60,31 +60,35 @@ def check_tokens(body, names):
         raise Unsupported("unsupported_token")
 
 
-def bounds(offset, width):
+def bounds(offset, width, capacity):
     if len(offset) > 2 or len(width) > 2:
         raise Unsupported("invalid_aggregate_subfield")
     offset, width = int(offset), int(width)
-    if not 0 <= offset < 16 or not 1 <= width <= 16 - offset:
+    if not 0 <= offset < capacity or not 1 <= width <= capacity - offset:
         raise Unsupported("invalid_aggregate_subfield")
     return offset, width
 
 
 def lower_function(text, name, functions, aggregate_required):
     return_type, params, body, arity = source_parts(text, name)
-    aggregate = return_type.startswith("undefined1") and "[" in return_type
-    if aggregate_required and not aggregate:
+    result_width = int(return_type.split("[")[1][:-1]) if "[" in return_type else None
+    if aggregate_required and result_width is None:
         raise Unsupported("aggregate_abi_unverified")
     check_tokens(body, functions)
-    arrays = sorted(set(RAW_ARRAY.findall(body)))
+    declarations = set(RAW_ARRAY.findall(body))
+    arrays = {variable: int(width) for variable, width in declarations}
+    if len(arrays) != len(declarations):
+        raise Unsupported("ambiguous_aggregate_width")
     undefined = set(UNDEFINED_STACK.findall(body))
     body = RAW_ARRAY.sub(r"gh_bits \1 = {0};", body)
     body = UNDEFINED_STACK.sub("", body)
     if arrays:
-        name_pattern = "(?:" + "|".join(arrays) + ")"
+        name_pattern = "(?:" + "|".join(sorted(arrays)) + ")"
         slot = rf"\b({name_pattern})(?:\._([0-9]+)_([0-9]+)_|\[([0-9]+)\])"
 
         def coordinates(match):
-            return bounds(match[2], match[3]) if match[4] is None else bounds(match[4], "1")
+            offset, width = (match[2], match[3]) if match[4] is None else (match[4], "1")
+            return bounds(offset, width, arrays[match[1]])
 
         def store(match):
             offset, width = coordinates(match)
@@ -104,9 +108,15 @@ def lower_function(text, name, functions, aggregate_required):
         body = re.sub(slot, read, body)
         # An explicitly sign-extended operand establishes the wide multiplication
         # form. Untyped aggregate division and other operators stay unlowered.
-        body = re.sub(rf"\b({name_pattern})\s*\*\s*(?=SEXT816\()", r"gh_signed(\1) * ", body)
+        wide_arrays = [variable for variable, width in sorted(arrays.items()) if width == 16]
+        if wide_arrays:
+            wide = "|".join(wide_arrays)
+            body = re.sub(rf"\b({wide})\s*\*\s*(?=SEXT816\()", r"gh_signed(\1) * ", body)
     else:
         name_pattern = r"(?!)"
+
+    def fit(expression, width):
+        return expression if width == 16 else f"gh_low_bytes({expression}, {width})"
 
     def value(expression):
         expression = expression.strip()
@@ -117,7 +127,7 @@ def lower_function(text, name, functions, aggregate_required):
             bits = int(shift[2], 0)
             if bits % 8 or not 0 <= bits < 128:
                 raise Unsupported("unsupported_aggregate_shift")
-            return f"gh_shift({shift[1]}, {bits // 8})"
+            return fit(f"gh_shift({shift[1]}, {bits // 8})", arrays[shift[1]])
         call = CALL.match(expression)
         if call and call[1] in functions:
             return expression
@@ -126,9 +136,9 @@ def lower_function(text, name, functions, aggregate_required):
         raise Unsupported("unsupported_aggregate_expression")
 
     body = re.sub(rf"\b({name_pattern})\s*=(?!=)\s*([^;{{}}]+);",
-                  lambda m: f"{m[1]} = {value(m[2])};", body)
-    if aggregate:
-        body = re.sub(r"\breturn\s+([^;{}]+);", lambda m: f"return {value(m[1])};", body)
+                  lambda m: f"{m[1]} = {fit(value(m[2]), arrays[m[1]])};", body)
+    if result_width is not None:
+        body = re.sub(r"\breturn\s+([^;{}]+);", lambda m: f"return {fit(value(m[1]), result_width)};", body)
         return_type = "gh_bits"
     if any(re.search(rf"\b{re.escape(stack)}\b", body) for stack in undefined):
         raise Unsupported("undefined_stack_value_consumed")
