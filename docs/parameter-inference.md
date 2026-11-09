@@ -164,6 +164,43 @@ The private report records all candidates and compiler and input provenance.
 The measured report SHA-256 is
 `e02a8b1de70ffada60dddae9293d4998d746030c0c019b4e45ab37ae49ac7cc3`.
 
+## Evaluator-side discovery measurement
+
+The evaluator matched the build manifest, dSYM UUID, symbol-bearing and
+stripped text bytes, and each captured input and analysis identity. It took
+concrete, contiguous DWARF subprogram ranges in `__TEXT,__text` with an
+independent Mach-O linker function start. It compared those ranges against
+the complete captured inventory of nonexternal, nonthunk functions by
+address. The two optimized dSYMs each contained 43 abstract or declaration
+records without a concrete range. No other records were excluded.
+
+Across 16 tool captures (two profiles, two architectures, O0/O2, with and
+without symbols), all 536 expected entries were present. There were no
+extra in-body or outside-cohort candidates. Exact, unadjudicated byte
+extents matched in 528 cases.
+
+| Architecture and build | Exact extents per capture | Byte-level adjudication |
+| --- | ---: | --- |
+| arm64 O0 | 36/36 | Complete agreement |
+| arm64 O2 | 31/31 | Complete agreement |
+| x86_64 O0 | 35/36 | `calc_apply_op` omitted 88 bytes, including four reachable case blocks. LLVM disassembly and the six signed table entries independently confirm the four targets and the repeated default target. |
+| x86_64 O2 | 30/31 | `corpus_stats_over_points` omitted a single eight-byte alignment NOP at `0x100000fc8`, immediately after an unconditional jump. |
+
+The strict O0 body gate remains open on x86_64. The O2 discrepancy is
+padding. These results cover the owned tool cohort and do not establish
+held-out precision or behavior. Both Ghidra profiles reported complete
+pseudocode for the x86_64 O0 dispatcher despite the missing case blocks.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 analysis/score_discovery.py \
+  --fixture-build-root /path/to/owned/build/review-v2 \
+  --profile-matrix /private/tmp/completed-profile-matrix \
+  --output /private/tmp/new-discovery-score.json
+```
+
+The measured report SHA-256 is
+`74b9b59c55f8bc69a53fbc94aa515285dfc579ee47ea53c4a838717a9bd7edfb`.
+
 ## Reproduce and inspect
 
 See [CLI instructions](cli.md#experimental-binary-derived-parameter-inference)
@@ -185,8 +222,7 @@ records input, source, implementation and report hashes. Full logs, saved
 Programs and recovered outputs remain private and are not checked into Git.
 The historical checkpoint remains unchanged and has its own code revision.
 
-Remaining gates: compiled/executed recovered-C comparisons, blind scoring,
-false-positive analysis, broader ObjC/Swift/third-party coverage, UI acceptance,
-and stronger input isolation. No input executable, recovered C or desktop UI
-was run for this work. The engine remains experimental for explicitly trusted,
-owned inputs; its sandbox is not a complete hostile-input boundary.
+Broader recovered-C comparisons, held-out scoring, broader
+ObjC/Swift/third-party coverage, UI acceptance and stronger input isolation
+remain open. The engine remains experimental for explicitly trusted, owned
+inputs. Its sandbox is not a complete hostile-input boundary.
