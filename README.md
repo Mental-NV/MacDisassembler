@@ -4,9 +4,15 @@ This is a new, independent specification repository for a reusable macOS binary-
 
 Start with [the implementation specification](docs/specification.md). The selected architecture is full Ghidra headless through its headless launcher and a project-owned Java bridge. The specification also covers optional REA MCP integration, a source-controlled calculator experiment, and later Taskovsky-oriented analysis workflows.
 
-**Status:** specification only, 9 November 2026. No CLI, calculator application, analysis engine, dependency installation, or experiment has been implemented or run. Commands in the specification are proposed interfaces or future experiment recipes, not working project commands. Numeric quality thresholds are proposed release gates, not measured results.
+**Status:** Phase 1 complete, 9 November 2026. Calculator fixture, build
+matrix, durable tests, and direct Ghidra baseline are implemented and
+measured — see [current status](docs/current-status.md), [Phase 1
+findings](docs/phase1-findings.md), and [lock manifest](docs/lock-manifest.md).
+No `macscope` CLI exists yet; commands in the specification remain proposed
+interfaces. Numeric gates in the specification remain proposed release
+targets; measured Phase 1 results are in `docs/phase1-findings.md`.
 
-This repository is separate from Taskovsky. It contains no third-party application binaries, recovered proprietary code, proprietary assets, credentials, or remote origin. Do not add those materials to this repository. Publishing a remote repository and choosing its owner, visibility, and license are separate decisions.
+This repository is separate from Taskovsky. It contains no third-party application binaries, recovered proprietary code, proprietary assets, credentials, or remote origin. Do not add those materials to this repository. Publishing a remote repository and choosing its owner, visibility, and license are separate decisions. No license has been chosen.
 
 ## Review decisions
 

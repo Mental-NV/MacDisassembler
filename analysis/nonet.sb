@@ -1,0 +1,10 @@
+;; nonet.sb — tested host isolation profile for Phase 1 baselines.
+;; Denies ALL network syscalls, allows everything else (file I/O, processes).
+;; Verified 2026-11-09: sandboxed `python3 socket.create_connection`
+;; fails with EPERM while the same call unsandboxed times out.
+;; This enforces no-network analysis; it is NOT a full security sandbox
+;; (no filesystem confinement: inputs are limited to our own fixtures by
+;; the runner, and outputs stay under the repo's ignored build/ paths).
+(version 1)
+(deny network*)
+(allow default)
