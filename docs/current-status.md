@@ -76,7 +76,8 @@ collections exceed documented bounds despite successful pseudocode output.
 - [ ] Expand tested dyld pointer formats and add export-trie decoding.
 - [x] Expose Objective-C classes, methods and selector references with
   static provenance. The owned app matrix matched 216 method addresses.
-- [ ] Expose available Swift names and explicit demangler provenance.
+- [x] Expose Swift symbol-table names and optional sandboxed demangling
+  with tool provenance. Broader Swift metadata decoding remains open.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.
 - [ ] Exercise isolation, malformed-input fuzzing, schema migrations and

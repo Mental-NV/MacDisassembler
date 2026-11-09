@@ -75,6 +75,7 @@ macscope imports --project workspaces/calculator --json
 macscope strings --project workspaces/calculator --min-length 8 --json
 macscope fixups --project workspaces/calculator --kind bind --json
 macscope objc methods --project workspaces/calculator --name-contains press --json
+macscope swift symbols --project workspaces/calculator --json
 macscope export --project workspaces/calculator --json --output private-results.json
 ```
 
@@ -222,6 +223,20 @@ Apple's `dyld_info -objc` agreed on the 16 class records and 216 method
 addresses across eight owned calculator app builds. Separately compiled
 arm64 and x86_64 probes also matched for instance, class and category
 methods. The views currently cover class, method and selector evidence.
+
+`swift symbols` lists Swift mangling candidates from the Mach-O symbol table,
+including raw names, definition state, available VAs and detected Swift
+sections. The command works before analysis. Use `--demangle
+--experimental-trusted-input` to demangle the current page using Xcode's
+local Swift demangler. Results identify its version and digest and preserve
+names it did not recognize. `macscope demangle NAME --experimental-trusted-input`
+uses the same helper for a standalone Swift name. The sandbox denies network
+and file writes. Symbolic references and broader Swift metadata decoding
+remain outside the name view. [Swift ABI mangling reference](https://github.com/swiftlang/swift/blob/main/docs/ABI/Mangling.rst)
+
+Two owned Swift libraries built for arm64 and x86_64 and their stripped copies
+matched `nm` on all 38 reported candidates. All eight retained names in the
+imported stripped arm64 library demangled before Ghidra analysis.
 
 `bytes --address 0xVA --length N`
 reads 1–4096 bytes within a single file-backed section of that same slice

@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotations, bundle, calls, dyld, engine, metadata, objc, search
+from . import annotations, bundle, calls, dyld, engine, metadata, objc, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -83,6 +83,11 @@ def parser():
     s=sub.add_parser('objc');ss=s.add_subparsers(dest='action',required=True)
     for c in ('classes','methods','selectors'):
         s=ss.add_parser(c);project(s);common(s);pagination(s);s.add_argument('--name-contains')
+    s=sub.add_parser('swift');ss=s.add_subparsers(dest='action',required=True)
+    s=ss.add_parser('symbols');project(s);common(s);pagination(s);s.add_argument('--name-contains')
+    s.add_argument('--demangle',action='store_true');s.add_argument('--experimental-trusted-input',action='store_true')
+    s=sub.add_parser('demangle');common(s);s.add_argument('name')
+    s.add_argument('--experimental-trusted-input',action='store_true')
     s=sub.add_parser('bytes');project(s);common(s)
     s.add_argument('--address',required=True)
     s.add_argument('--length',type=int,required=True,dest='byte_length')
@@ -383,6 +388,42 @@ def metadata_collection(args, project, image, snapshot=None):
     return envelope(args.command,rows,aid,'partial' if gap else 'complete',cov)
 
 
+def swift_collection(args, project, image):
+    if args.demangle and not args.experimental_trusted_input:
+        raise Error('isolation_required','Native Swift demangling requires --experimental-trusted-input',3)
+    info,records,gaps = swift_symbols.symbols(metadata.verified_slice(project,image))
+    records = [dict(row,image_id=image['image_id'],arch=image['arch']) for row in records
+               if args.name_contains is None or args.name_contains in row['mangled']]
+    records.sort(key=lambda row:(row['mangled'],row['symbol_index']))
+    filters = {'name_contains':args.name_contains,'demangle':args.demangle}
+    rows,cov = page(records,args,image['image_id'],project.project_id,filters,order='swift-symbol/v1')
+    provenance = None
+    if args.demangle:
+        eligible = []
+        for row in rows:
+            if swift_symbols.demangleable(row['mangled']):
+                eligible.append(row)
+            else:
+                row['demangle_status'] = 'unsupported_name'
+                gaps.append('unsupported_mangling')
+        try:
+            demangled,provenance = swift_symbols.demangle([row['mangled'] for row in eligible])
+            for row,value in zip(eligible,demangled):
+                row.update(value)
+                if value['demangle_status']!='demangled':
+                    gaps.append('unrecognized_mangling')
+        except Error as error:
+            for row in eligible:
+                row['demangle_status'] = 'unavailable'
+            gaps.append(error.code)
+    cov['scope'] = 'selected image Swift symbol-table candidates'
+    if gaps:
+        reasons = [*sorted(set(gaps)),*(['page_limit'] if cov['next_cursor'] else [])]
+        cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+    return envelope('swift symbols',dict(info,records=rows,demangler=provenance),
+                    status='partial' if gaps else 'complete',cov=cov)
+
+
 def execute(a):
     limits(a)
     fresh = a.command == 'decompile' and a.fresh
@@ -413,6 +454,14 @@ def execute(a):
             cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
         data=dict(inventory,inventory_id=inventory_id,records=rows)
         return envelope(command,data,status='partial' if gaps else 'complete',cov=cov)
+    if a.command=='demangle':
+        if not a.experimental_trusted_input:
+            raise Error('isolation_required','Native Swift demangling requires --experimental-trusted-input',3)
+        records,provenance=swift_symbols.demangle([a.name])
+        result=records[0]
+        partial=result['demangle_status']!='demangled'
+        return envelope(command,dict(result,demangler=provenance),status='partial' if partial else 'complete',
+                        cov=coverage('Swift name',partial=partial,reason='unrecognized_mangling' if partial else None))
     if a.command=='project':
         p=Project.create(a.path)
         return envelope(command,{'project_id':p.project_id,'schema_version':'1.0'})
@@ -462,6 +511,8 @@ def execute(a):
         return envelope(command,data,status='partial' if gaps else 'complete',
                         cov=coverage('selected image headers',partial=bool(gaps),
                                      reason='loader_metadata_incomplete' if gaps else None),diagnostics=gaps)
+    if a.command=='swift':
+        return swift_collection(a,p,image)
     if a.command=='bytes':
         return envelope(command,metadata.read_bytes_at(p,image,a.address,a.byte_length),
                         cov=coverage('selected image bytes',a.byte_length,a.byte_length))
