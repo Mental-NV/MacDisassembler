@@ -7,6 +7,7 @@ Run: PYTHONPATH=src python3 -m unittest discover -s tests -v
 import argparse
 import base64
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -15,6 +16,7 @@ from pathlib import Path
 import signal
 import sqlite3
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -25,7 +27,7 @@ from unittest import mock
 # Direct invocation and unittest discovery both work without installing a wheel.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from macscope import SCHEMA_VERSION
-from macscope import cli, engine, storage
+from macscope import cli, engine, macho, schema, storage
 from macscope.errors import Error
 
 
@@ -57,11 +59,12 @@ def synthetic_snapshot(project, aid='analysis-one'):
         functions.append({
             'function_id': f'function-{index}', 'image_id': image['image_id'],
             'analysis_id': aid, 'arch': 'arm64', 'entry_va': address,
+            'address_space': 'ram', 'engine_entry': address,
             'name': name, 'names': [{'name': name, 'origin': 'ghidra'}],
-            'body_ranges': [{'min': address, 'max': hex(int(address, 16) + 3)}],
+            'body_ranges': [[address, hex(int(address, 16) + 3)]],
             'signature': f'void {name}(void)', 'is_thunk': False, 'is_external': False,
             'decompile_status': 'complete', 'pseudocode': f'void {name}(void) {{ return; }}',
-            'instructions': [{'address': address, 'mnemonic': 'ret', 'bytes': 'c0035fd6'}],
+            'instructions': [{'addr': address, 'mnemonic': 'ret', 'bytes': 'c0035fd6'}],
             'blocks': [{'min': address, 'max': address, 'dsts': []}],
             'xrefs_to_entry': [], 'xrefs_from_sample': [], 'address_spans': [],
             'facets': {},
@@ -317,6 +320,148 @@ class PaginationAndSelectorsTests(TemporaryCase):
                 self.error('address', self.select, address=address)
 
 
+class SchemaTests(unittest.TestCase):
+    def function(self):
+        return {'function_id': 'a' * 64, 'image_id': 'b' * 64, 'arch': 'arm64',
+                'entry_va': '0x100000010', 'body_ranges': [['0x100000010', '0x100000013']],
+                'names': [{'name': 'example', 'origin': 'ghidra'}], 'signature': 'void example(void)',
+                'pseudocode': 'void example(void) {}', 'address_spans': [],
+                'facets': {'address_spans': {'available': False, 'reason': 'Not exported'}},
+                'origin': {'engine': 'Ghidra', 'version': '12.2'}}
+
+    def test_complete_envelope_validates(self):
+        schema.validate_envelope(cli.envelope('version', {'cli_version': 'test'}))
+
+    def test_every_required_envelope_field_is_required(self):
+        result = cli.envelope('version')
+        for field in ('schema_version', 'command', 'status', 'analysis_id', 'data', 'diagnostics', 'coverage'):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(result)
+                del invalid[field]
+                with self.assertRaises(ValueError):
+                    schema.validate_envelope(invalid)
+
+    def test_envelope_unknown_fields_and_version_rejected(self):
+        result = cli.envelope('version')
+        for changes in ({'schema_version': '99'}, {'unexpected': True}, {'status': 'probably'}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                schema.validate_envelope(dict(result, **changes))
+
+    def test_coverage_shape_and_integer_types_validated(self):
+        for changes in ({'returned_count': -1}, {'returned_count': True}, {'known_total': -1},
+                        {'next_cursor': 123}, {'truncation_reason': False}):
+            with self.subTest(changes=changes):
+                result = cli.envelope('functions list')
+                result['coverage'].update(changes)
+                with self.assertRaises(ValueError):
+                    schema.validate_envelope(result)
+
+    def test_error_envelope_requires_structured_error_fields(self):
+        result = cli.envelope('functions show', status='failed',
+                              cov=cli.coverage(count=0, total=None, partial=True, reason='function_selector'))
+        result['error'] = {'code': 'function_selector', 'message': 'Ambiguous function',
+                           'affected_object': None, 'retryable': False, 'partial_results': []}
+        schema.validate_envelope(result)
+        self.assertEqual(result['coverage']['status'], 'partial')
+        for field in ('code', 'message', 'affected_object', 'retryable', 'partial_results'):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(result)
+                del invalid['error'][field]
+                with self.assertRaises(ValueError):
+                    schema.validate_envelope(invalid)
+
+    def test_normal_function_schema_validates(self):
+        schema.validate_function(self.function())
+
+    def test_external_function_allows_null_va(self):
+        function = self.function()
+        function.update(entry_va=None, address_space='EXTERNAL', engine_entry='EXTERNAL:00000001',
+                        body_ranges=[], signature=None, pseudocode=None, is_external=True)
+        schema.validate_function(function)
+
+    def test_every_required_function_field_is_required(self):
+        function = self.function()
+        for field in ('function_id', 'image_id', 'arch', 'entry_va', 'body_ranges', 'names',
+                      'signature', 'pseudocode', 'address_spans', 'facets', 'origin'):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(function)
+                del invalid[field]
+                with self.assertRaises(ValueError):
+                    schema.validate_function(invalid)
+
+    def test_function_invalid_ids_addresses_and_ranges_rejected(self):
+        for changes in ({'function_id': 'short'}, {'image_id': 'z' * 64}, {'entry_va': '4096'},
+                        {'entry_va': 'EXTERNAL:00000001'}, {'entry_va': 4096}, {'arch': 'arm64e'},
+                        {'body_ranges': [['0x1']]}, {'body_ranges': [['0x1', '0x2', '0x3']]},
+                        {'names': [{'name': 'no provenance'}]}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                schema.validate_function(dict(self.function(), **changes))
+
+
+class NormalizationTests(unittest.TestCase):
+    def setUp(self):
+        self.image = {'image_id': 'a' * 64, 'sha256': 'b' * 64, 'arch': 'arm64', 'offset': '0x2000',
+                      'sections': [{'va': '0x100000000', 'size': '0x100', 'file_offset': '0x1000'}]}
+        function = {'name': 'example', 'entry_va': '0x100000010',
+                    'body_ranges': [['0x100000010', '0x100000013']], 'signature': 'void example(void)',
+                    'pseudocode': 'void example(void) {}', 'decompile_status': 'complete',
+                    'is_thunk': False, 'is_external': False, 'blocks': [],
+                    'instructions': [{'addr': '0x100000010', 'bytes': 'c0035fd6', 'mnemonic': 'ret'}]}
+        external = dict(function, name='puts', entry_va='EXTERNAL:00000001', body_ranges=[],
+                        instructions=[], pseudocode=None, is_external=True)
+        self.raw = {'language_id': 'AARCH64:LE:64:AppleSilicon', 'compiler_spec_id': 'default',
+                    'status': 'complete', 'image_base': '0x100000000', 'functions': [external, function]}
+        self.deps = {'ghidra_version': '12.2', 'ghidra_path': '/synthetic/ghidra',
+                     'java_home': '/synthetic/jdk', 'host_os': 'Synthetic OS'}
+        self.manifest = {'limits': {'max_functions': 100}}
+
+    def normalized(self):
+        return cli.normalize(copy.deepcopy(self.raw), self.image, self.deps, self.manifest)
+
+    def test_normalization_validates_and_orders_external_functions_last(self):
+        result = self.normalized()
+        self.assertEqual([f['name'] for f in result['functions']], ['example', 'puts'])
+        for function in result['functions']:
+            schema.validate_function(function)
+            self.assertEqual(function['analysis_id'], result['analysis_id'])
+            self.assertEqual(function['address_spans'], [])
+            self.assertFalse(function['facets']['address_spans']['available'])
+            self.assertTrue(function['facets']['address_spans']['reason'])
+
+    def test_normal_entry_address_maps_typed_va_rva_and_file_offsets(self):
+        function = self.normalized()['functions'][0]
+        location = function['entry_address']
+        self.assertEqual(location['address_space'], 'ram')
+        self.assertEqual(location['va'], '0x100000010')
+        self.assertEqual(location['rva'], '0x10')
+        self.assertEqual(location['slice_file_offset'], '0x1010')
+        self.assertEqual(location['container_file_offset'], '0x3010')
+        self.assertEqual(function['instructions'][0]['location'], location)
+        self.assertEqual(function['instruction_bytes_sha256'], hashlib.sha256(bytes.fromhex('c0035fd6')).hexdigest())
+
+    def test_external_entry_is_not_misrepresented_as_a_virtual_address(self):
+        function = self.normalized()['functions'][1]
+        self.assertIsNone(function['entry_va'])
+        self.assertEqual(function['address_space'], 'EXTERNAL')
+        self.assertEqual(function['engine_entry'], 'EXTERNAL:00000001')
+        for field in ('va', 'rva', 'slice_file_offset', 'container_file_offset'):
+            self.assertIsNone(function['entry_address'][field])
+
+    def test_address_selector_skips_external_function_without_crashing(self):
+        functions = self.normalized()['functions']
+        args = argparse.Namespace(address='0x100000010', function_id=None, name=None)
+        self.assertEqual(cli.select_function(functions, args)['name'], 'example')
+        args = argparse.Namespace(address=None, function_id=functions[1]['function_id'], name=None)
+        self.assertEqual(cli.select_function(functions, args)['name'], 'puts')
+
+    def test_analysis_identity_is_stable_across_host_install_paths(self):
+        expected = self.normalized()['analysis_id']
+        self.deps.update(ghidra_path='/other/ghidra', java_home='/other/jdk', host_os='Other OS')
+        self.assertEqual(self.normalized()['analysis_id'], expected)
+        self.deps['bridge_sha256'] = 'c' * 64
+        self.assertNotEqual(self.normalized()['analysis_id'], expected)
+
+
 class DependencyTests(TemporaryCase):
     def setUp(self):
         super().setUp()
@@ -333,6 +478,10 @@ class DependencyTests(TemporaryCase):
             target = self.j / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b'fixture')
+        for executable in (self.g / 'support/analyzeHeadless',
+                           self.g / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile',
+                           self.j / 'bin/java'):
+            executable.chmod(0o700)
         self.bridge.mkdir()
         for name in ('MacscopeBridge.java', 'MacscopeProfile.java'):
             (self.bridge / name).write_text('// fixture\n')
@@ -351,6 +500,23 @@ class DependencyTests(TemporaryCase):
         with mock.patch.object(engine.subprocess, 'run') as run:
             self.error('missing_dependency', self.check)
         run.assert_not_called()
+
+    def test_nonexecutable_dependency_fails_before_java_probe(self):
+        for target in (self.g / 'support/analyzeHeadless',
+                       self.g / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile',
+                       self.j / 'bin/java'):
+            with self.subTest(target=target), mock.patch.object(engine.subprocess, 'run') as run:
+                target.chmod(0o600)
+                try:
+                    self.error('dependency_permissions', self.check)
+                    run.assert_not_called()
+                finally:
+                    target.chmod(0o700)
+
+    def test_same_java_release_with_wrong_build_is_rejected(self):
+        result = subprocess.CompletedProcess([], 0, b'', b'openjdk version "25.0.5" 25.0.5+99')
+        with mock.patch.object(engine.subprocess, 'run', return_value=result):
+            self.error('incompatible_jdk', self.check)
 
     def test_incompatible_ghidra_does_not_start_java(self):
         (self.g / 'Ghidra/application.properties').write_text('application.version=12.1\n')
@@ -373,7 +539,7 @@ class DependencyTests(TemporaryCase):
             self.error('jdk_startup', self.check)
 
     def test_valid_pins_report_full_digests(self):
-        result = subprocess.CompletedProcess([], 0, b'', b'openjdk version "25.0.5" 25.0.5+3')
+        result = subprocess.CompletedProcess([], 0, b'', b'openjdk version "25.0.5" 25.0.5.0.3')
         with mock.patch.object(engine.subprocess, 'run', return_value=result) as run:
             dependencies = self.check(full=True)
         self.assertEqual(dependencies['ghidra_version'], '12.2')
@@ -416,6 +582,7 @@ class CliTests(TemporaryCase):
         self.assertIsInstance(result['diagnostics'], list)
         self.assertTrue({'scope', 'status', 'returned_count', 'known_total', 'next_cursor', 'truncation_reason'} <= result['coverage'].keys())
         self.assertIsInstance(result['coverage']['returned_count'], int)
+        schema.validate_envelope(result)
 
     def test_all_cached_queries_never_probe_engine_or_start_jvm(self):
         cases = [('status',), ('functions', 'list'), ('functions', 'show', '--function-id', 'function-0'),
@@ -532,6 +699,84 @@ class CliTests(TemporaryCase):
         with mock.patch.object(engine, 'dependencies') as probe:
             self.error('isolation_required', cli.execute, self.args('analyze'))
         probe.assert_not_called()
+
+    @contextlib.contextmanager
+    def failing_universal_import(self):
+        project = self.project('multi-slice')
+        # Two ordinary 64-bit headers inside a real, aligned universal image.
+        arm64 = struct.pack('<8I', 0xFEEDFACF, 0x100000C, 0, 2, 0, 0, 0, 0)
+        x86_64 = struct.pack('<8I', 0xFEEDFACF, 0x1000007, 3, 2, 0, 0, 0, 0)
+        original = (struct.pack('>II', 0xCAFEBABE, 2)
+                    + struct.pack('>IIIII', 0x100000C, 0, 64, len(arm64), 5)
+                    + struct.pack('>IIIII', 0x1000007, 3, 96, len(x86_64), 5)
+                    + bytes(16) + arm64 + x86_64)
+        metadata = macho.inspect_bytes(original)
+        metadata.update(input_name='synthetic-universal.macho', warnings=[])
+        deps = {'ghidra_version': '12.2', 'jdk_version': 'synthetic dependency record'}
+        first_id, second_id = [item['image_id'] for item in metadata['slices']]
+        def worker(p, image, mode, args, dependencies):
+            self.assertEqual(mode, 'import')
+            self.assertEqual(p.path, project.path)
+            self.assertEqual(dependencies, deps)
+            if image['image_id'] == second_id:
+                raise Error('worker_failed', 'Synthetic second-slice worker failure', 10, retryable=True)
+            self.assertEqual(image['image_id'], first_id)
+            baseline = p.path / 'engine' / image['image_id']
+            baseline.mkdir(mode=0o700)
+            (baseline / 'image.gpr').write_bytes(b'synthetic imported baseline')
+            return ({'validation': {'headless_analysis_enabled': False},
+                     'executable_format': 'Mac OS X Mach-O',
+                     'language_id': 'AARCH64:LE:64:AppleSilicon', 'compiler_spec_id': 'default',
+                     'executable_sha256': image['sha256']}, {'job_id': 'first-slice-job'})
+        argv = ['import', 'synthetic-universal.macho', '--project', str(project.path),
+                '--arch', 'all', '--experimental-trusted-input', '--json']
+        with mock.patch.object(cli, 'inspect_path', return_value=(metadata, original)), \
+             mock.patch.object(engine, 'dependencies', return_value=deps), \
+             mock.patch.object(engine, 'run', side_effect=worker) as run:
+            yield project, metadata, argv, run
+
+    def assert_partial_import(self, result, project, metadata):
+        first, second = metadata['slices']
+        self.assert_envelope(result)
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['coverage']['status'], 'partial')
+        self.assertEqual(result['coverage']['returned_count'], 1)
+        self.assertEqual(result['coverage']['known_total'], 2)
+        self.assertEqual(result['coverage']['truncation_reason'], 'worker_failed')
+        self.assertEqual(result['error']['code'], 'worker_failed')
+        self.assertTrue(result['error']['retryable'])
+        self.assertEqual(result['error']['affected_object'], second['image_id'])
+        completed = result['error']['partial_results']['completed_slices']
+        self.assertEqual(completed, result['data'])
+        self.assertEqual(completed, [{'image_id': first['image_id'], 'arch': 'arm64',
+                                     'status': 'imported', 'job_id': 'first-slice-job'}])
+        self.assertEqual(result['error']['partial_results']['failed_slice'], second['image_id'])
+        # Reopen to prove the first transaction is committed, not just visible
+        # within the import's connection, while the failed slice is unpublished.
+        reopened = storage.Project(project.path)
+        with reopened.db() as db:
+            rows = db.execute('SELECT id,imported,active_analysis FROM images').fetchall()
+        self.assertEqual(rows, [(first['image_id'], 1, None)])
+        self.assertEqual(reopened.images()[0]['loader_evidence']['executable_sha256'], first['sha256'])
+        self.assertEqual(reopened.images()[0]['engine_baseline_sha256'],
+                         engine.tree_digest(project.path / 'engine' / first['image_id']))
+        with reopened.writer():
+            pass  # Early partial return must also release the project writer.
+
+    def test_universal_import_second_worker_failure_keeps_first_commit(self):
+        with self.failing_universal_import() as (project, metadata, argv, run):
+            result = cli.execute(cli.parser().parse_args(argv))
+            self.assert_partial_import(result, project, metadata)
+        self.assertEqual([call.args[1]['image_id'] for call in run.call_args_list],
+                         [item['image_id'] for item in metadata['slices']])
+
+    def test_universal_import_partial_failure_main_returns_exit_six(self):
+        with self.failing_universal_import() as (project, metadata, argv, run):
+            code, output, stderr = self.invoke(argv)
+            self.assertEqual(code, 6)
+            self.assertEqual(stderr, '')
+            self.assert_partial_import(json.loads(output), project, metadata)
+        self.assertEqual(run.call_count, 2)
 
     def test_stale_job_pid_is_reported_without_signals(self):
         job = self.workspace.path / 'jobs' / 'stale'

@@ -125,7 +125,7 @@ def normalize(raw, image, deps, manifest):
         f['facets']={key:{'available': key in ('instructions','blocks') or f.get(key) is not None and key != 'address_spans', 'reason': None if key in ('instructions','blocks') or f.get(key) else 'No output from engine; token-address spans are not yet exported' if key=='address_spans' else f.get('decompile_error') or 'Empty or unavailable engine facet'} for key in ('pseudocode','instructions','blocks','address_spans')}
         validate_function(f)
         functions.append(f)
-    functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['function_id']))
+    functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['engine_entry'],f['function_id']))
     value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','No token-to-address spans, annotations, rich ObjC/Swift metadata views or phase-3 features.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.']}
     def redact(v):
         if isinstance(v,str):return re.sub(r'/Users/[^/\s\"\']+', '$HOME', v)
@@ -201,6 +201,7 @@ def execute(a):
         if not a.experimental_trusted_input:raise Error('isolation_required','Engine operations require explicit --experimental-trusted-input for trusted user-owned fixtures only',3)
         if a.jobs!=1 or a.max_memory_mib is not None or a.startup_timeout is not None:raise Error('unsupported_budget','Only jobs=1, total --timeout and Java-only --heap-mib are supported; hard process-memory/startup budgets are rejected',3)
         if a.command=='analyze' and a.profile!='baseline':raise Error('unsupported_profile','Only versioned baseline/1 is implemented; deep is not an alias',3)
+        if any(c in str(p.path) for c in ('\"','\\','\n','\r')):raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
         deps=engine.dependencies(a.ghidra,a.java_home,full=True)
         with p.writer():
             if a.command=='import':
@@ -210,24 +211,31 @@ def execute(a):
                 if not selected:raise Error('arch_missing','Requested architecture is not present',2)
                 result=[]
                 existing={r['image_id']:r for r in p.images()}
-                for s in selected:
-                    image=dict(s,artifact_sha256=meta['artifact_sha256'],input_name=meta['input_name'])
-                    if image['image_id'] in existing and existing[image['image_id']]['imported']:
-                        result.append({'image_id':image['image_id'],'arch':image['arch'],'status':'already_imported'});continue
-                    artifact=p.path/'inputs'/(meta['artifact_sha256']+'.artifact')
-                    if not artifact.exists():atomic(artifact,original,mode=0o400)
-                    elif hashlib.sha256(read_regular(artifact)).hexdigest()!=meta['artifact_sha256']:raise Error('input_integrity','Existing immutable artifact is corrupt')
-                    snap=p.path/'inputs'/(image['image_id']+'.macho')
-                    content=original[int(s['offset'],16):int(s['offset'],16)+int(s['size'],16)]
-                    if not snap.exists():atomic(snap,content,mode=0o400)
-                    elif hashlib.sha256(read_regular(snap)).hexdigest()!=s['sha256']:raise Error('input_integrity','Existing immutable slice is corrupt')
-                    raw,job=engine.run(p,image,'import',a,deps)
-                    if raw.get('validation',{}).get('headless_analysis_enabled') is not False:raise Error('import_analysis','Import did not disable autoanalysis',10)
-                    image['loader_evidence']={k:raw[k] for k in ('executable_format','language_id','compiler_spec_id','executable_sha256')}
-                    image['import_dependencies']=deps
-                    image['engine_baseline_sha256']=engine.tree_digest(p.path/'engine'/image['image_id'])
-                    with p.db(False) as db:db.execute('INSERT OR REPLACE INTO images(id,arch,metadata,imported) VALUES(?,?,?,1)',(image['image_id'],image['arch'],canonical(image).decode()))
-                    result.append({'image_id':image['image_id'],'arch':image['arch'],'status':'imported','job_id':job['job_id']})
+                try:
+                    for s in selected:
+                        image=dict(s,artifact_sha256=meta['artifact_sha256'],input_name=meta['input_name'])
+                        if image['image_id'] in existing and existing[image['image_id']]['imported']:
+                            result.append({'image_id':image['image_id'],'arch':image['arch'],'status':'already_imported'});continue
+                        artifact=p.path/'inputs'/(meta['artifact_sha256']+'.artifact')
+                        if not artifact.exists():atomic(artifact,original,mode=0o400)
+                        elif hashlib.sha256(read_regular(artifact)).hexdigest()!=meta['artifact_sha256']:raise Error('input_integrity','Existing immutable artifact is corrupt')
+                        snap=p.path/'inputs'/(image['image_id']+'.macho')
+                        content=original[int(s['offset'],16):int(s['offset'],16)+int(s['size'],16)]
+                        if not snap.exists():atomic(snap,content,mode=0o400)
+                        elif hashlib.sha256(read_regular(snap)).hexdigest()!=s['sha256']:raise Error('input_integrity','Existing immutable slice is corrupt')
+                        raw,job=engine.run(p,image,'import',a,deps)
+                        if raw.get('validation',{}).get('headless_analysis_enabled') is not False:raise Error('import_analysis','Import did not disable autoanalysis',10)
+                        image['loader_evidence']={k:raw[k] for k in ('executable_format','language_id','compiler_spec_id','executable_sha256')}
+                        image['import_dependencies']=deps
+                        image['engine_baseline_sha256']=engine.tree_digest(p.path/'engine'/image['image_id'])
+                        with p.db(False) as db:db.execute('INSERT OR REPLACE INTO images(id,arch,metadata,imported) VALUES(?,?,?,1)',(image['image_id'],image['arch'],canonical(image).decode()))
+                        result.append({'image_id':image['image_id'],'arch':image['arch'],'status':'imported','job_id':job['job_id']})
+                except Error as e:
+                    if not result:
+                        raise
+                    response=envelope(command,result,status='partial',cov=coverage('explicitly selected slices',len(result),len(selected),True,reason=e.code),diagnostics=[str(e)])
+                    response['error']={'code':e.code,'message':str(e),'affected_object':image['image_id'],'retryable':e.retryable,'partial_results':{'completed_slices':result,'failed_slice':image['image_id']}}
+                    return response
                 return envelope(command,result,cov=coverage('explicitly selected slices',len(result),len(selected)))
             image=p.select(a.image,a.arch)
             if hashlib.sha256(read_regular(p.path/'inputs'/(image['image_id']+'.macho'))).hexdigest()!=image['sha256']:raise Error('input_integrity','Immutable slice digest mismatch')
@@ -240,7 +248,7 @@ def execute(a):
             if out.exists():
                 if read_regular(out,64*1024*1024)!=payload:raise Error('nondeterministic_snapshot','Identical analysis identity produced different output; previous snapshot retained',5)
             else:atomic(out,payload,mode=0o400)
-            record={'snapshot_sha256':hashlib.sha256(payload).hexdigest(),'job_id':job['job_id']}
+            record={'snapshot_sha256':hashlib.sha256(payload).hexdigest(),'job_id':job['job_id'],'analysis_program_sha256':engine.tree_digest(p.path/'jobs'/job['job_id']/'program')}
             with p.db(False) as db:
                 db.execute('INSERT OR IGNORE INTO analyses(id,image_id,payload) VALUES(?,?,?)',(aid,image['image_id'],canonical(record).decode()))
                 db.execute('UPDATE images SET active_analysis=? WHERE id=?',(aid,image['image_id']))
@@ -265,7 +273,9 @@ def execute(a):
         partial=any(k not in ('complete','not_requested') for k in states)
         return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if partial else 'complete',cov)
     f=select_function(functions,a)
-    if a.command=='functions':return envelope(command,f,aid)
+    if a.command=='functions':
+        incomplete=any(c.get('truncated') or c.get('error') for c in f.get('coverage',{}).values())
+        return envelope(command,f,aid,'partial' if incomplete else 'complete',coverage('selected function evidence',1,1,incomplete,reason='facet_incomplete' if incomplete else None))
     if a.command=='disasm':
         data={'function_id':f['function_id'],'instructions':f['instructions']}
         partial=bool(f.get('instructions_truncated') or f.get('instructions_error'))
@@ -282,14 +292,14 @@ def execute(a):
         data={'function_id':f['function_id']}
         if a.direction in ('to','both'):data['to_entry']=f['xrefs_to_entry']
         if a.direction in ('from','both'):data['from_body']=f['xrefs_from_sample']
-        partial=bool(f.get('xrefs_to_entry_truncated') or f.get('xrefs_from_truncated') or f.get('xrefs_to_entry_error') or f.get('xrefs_from_error'))
+        partial=bool((a.direction in ('to','both') and (f.get('xrefs_to_entry_truncated') or f.get('xrefs_to_entry_error'))) or (a.direction in ('from','both') and (f.get('xrefs_from_truncated') or f.get('xrefs_from_error'))))
         count=sum(len(v) for v in data.values() if isinstance(v,list))
     return envelope(command,data,aid,'partial' if partial else 'complete',coverage('selected function '+a.command,count,None,partial,reason='facet_incomplete' if partial else None))
 
 
 def render(result,fmt):
     if fmt=='dot':
-        rows=['digraph cfg {']
+        rows=['digraph cfg {','  // status: '+result['status']+'; bounded static evidence, not exhaustive runtime flow']
         for b in result['data']['blocks']:
             rows.append('  '+json.dumps(b['min'])+' [label='+json.dumps(b['min']+'..'+b['max'])+'];')
             for edge in b['dsts']:rows.append('  '+json.dumps(b['min'])+' -> '+json.dumps(edge['to'])+' [label='+json.dumps(edge['flow'])+'];')

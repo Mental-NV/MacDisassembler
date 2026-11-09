@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import signal
 import shutil
 import subprocess
@@ -51,6 +52,8 @@ def dependencies(ghidra=None, java=None, full=False):
     for p in required:
         if not p.is_file():
             raise Error('missing_dependency', 'Missing required dependency: '+str(p), 4)
+    for p in (g/'support/analyzeHeadless',native,j/'bin/java'):
+        if not os.access(p,os.X_OK):raise Error('dependency_permissions','Required dependency is not executable: '+str(p),4)
     props = (g/'Ghidra/application.properties').read_text()
     if '\napplication.version=12.2\n' not in '\n'+props:
         raise Error('incompatible_ghidra', 'Requires exactly full Ghidra 12.2', 4)
@@ -59,7 +62,7 @@ def dependencies(ghidra=None, java=None, full=False):
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Error('jdk_startup', 'Cannot start pinned JDK: '+str(e), 4) from e
     version = (v.stderr+v.stdout).decode(errors='replace').strip()
-    if v.returncode or '25.0.5' not in version:
+    if v.returncode or '25.0.5.0.3' not in version:
         raise Error('incompatible_jdk', 'Requires tested JDK 25.0.5.0.3', 4)
     result = {'ghidra_version':'12.2', 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), 'native_decompiler_sha256':digest(native), 'java_sha256':digest(j/'bin/java'), 'jvm_sha256':digest(j/'lib/server/libjvm.dylib'), 'bridge_sha256':identity({p.name:digest(p) for p in sorted(BRIDGE.glob('*.java'))}), 'application_properties_sha256':digest(g/'Ghidra/application.properties'), 'isolation':'experimental-trusted-owned-input-only; deny-network and user-home filesystem restrictions; not a hostile-input sandbox', 'hard_process_memory_limit':False}
     if full:
@@ -71,7 +74,7 @@ def profile(project, dependencies):
     # Seatbelt strings are JSON quoted, never shell interpolated.
     reads = [str(project.path), str(BRIDGE.resolve()), dependencies['ghidra_path'], dependencies['java_home']]
     ancestors = sorted({str(p) for p in project.path.parents} | {str(p) for p in BRIDGE.resolve().parents})
-    literal = lambda p: json.dumps(p)
+    literal = lambda p: json.dumps(p,ensure_ascii=False)
     exclusions = ' '.join('(require-not (subpath '+literal(p)+'))' for p in reads) + ' ' + ' '.join('(require-not (literal '+literal(p)+'))' for p in ancestors)
     return '(version 1)\n(allow default)\n(deny network*)\n(deny file-read-data (require-all (subpath "/Users") '+exclusions+'))\n(deny file-write* (require-all (subpath "/Users") (require-not (subpath '+literal(str(project.path))+'))))\n'
 
@@ -140,6 +143,8 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
 
 
 def run(project, image, mode, args, deps):
+    if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
+        raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
         raise Error('isolation_required', 'Engine operations currently require --experimental-trusted-input for explicitly trusted, user-owned fixtures. Hostile-input isolation is not validated. No unsafe fallback is automatic.', 3)
     if args.jobs != 1:
@@ -160,9 +165,18 @@ def run(project, image, mode, args, deps):
     if mode == 'import':
         engine_dir.mkdir(mode=0o700)
     else:
-        # Every analysis starts from the saved no-analysis import, avoiding
-        # analyzer mutations from a preceding run under the same identity.
-        shutil.copytree(project.path/'engine'/image['image_id'], engine_dir, symlinks=False)
+        if mode == 'query':
+            _, active = project.snapshot(image)
+            if not re.fullmatch(r'[a-f0-9]{32}', active.get('job_id','')):
+                raise Error('analysis_program_missing','Active analyzed Program reference is invalid')
+            source = project.path/'jobs'/active['job_id']/'program'
+            if not source.is_dir() or active.get('analysis_program_sha256') != tree_digest(source):
+                raise Error('analysis_program_integrity','Saved analyzed Program is missing or changed; rerun analyze')
+        else:
+            # Every analysis starts from the saved no-analysis import, avoiding
+            # analyzer mutations from a preceding run under the same identity.
+            source = project.path/'engine'/image['image_id']
+        shutil.copytree(source, engine_dir, symlinks=False)
     argv = ['/usr/bin/sandbox-exec', '-f', str(sandbox), str(g/'support/analyzeHeadless'), str(engine_dir), 'image']
     if mode == 'import':
         argv += ['-import', str(project.path/'inputs'/(image['image_id']+'.macho')), '-noanalysis', '-loader', 'MachoLoader', '-loader-loadLibraries', 'false', '-loader-linkExistingProjectLibraries', 'false', '-loader-performReexports', 'false']
@@ -173,7 +187,7 @@ def run(project, image, mode, args, deps):
         else:
             argv += ['-preScript', 'MacscopeProfile.java']
     argv += ['-scriptPath', str(BRIDGE.resolve()), '-postScript', 'MacscopeBridge.java', str(outfile), mode, str(args.max_functions), str(args.function_timeout), '-max-cpu', '1', '-analysisTimeoutPerFile', str(args.timeout), '-log', str(job/'engine.log'), '-scriptlog', str(job/'script.log')]
-    env = {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'HOME':str(project.path/'home'), 'USER':os.environ.get('USER','macscope'), 'TMPDIR':str(job/'tmp')+'/', 'JAVA_HOME':str(j), 'GHIDRA_HEADLESS_MAXMEM':str(args.heap_mib)+'M', 'JAVA_TOOL_OPTIONS':'-Duser.home='+json.dumps(str(project.path/'home'))+' -Djava.io.tmpdir='+json.dumps(str(job/'tmp')), 'LANG':'en_US.UTF-8'}
+    env = {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'HOME':str(project.path/'home'), 'USER':os.environ.get('USER','macscope'), 'TMPDIR':str(job/'tmp')+'/', 'JAVA_HOME':str(j), 'GHIDRA_HEADLESS_MAXMEM':str(args.heap_mib)+'M', 'JAVA_TOOL_OPTIONS':'-Duser.home='+json.dumps(str(project.path/'home'),ensure_ascii=False)+' -Djava.io.tmpdir='+json.dumps(str(job/'tmp'),ensure_ascii=False), 'LANG':'en_US.UTF-8'}
     manifest = {'job_id':jobid, 'mode':mode, 'image_id':image['image_id'], 'dependencies':deps, 'limits':{'timeout_seconds':args.timeout,'function_timeout_seconds':args.function_timeout,'max_functions':args.max_functions,'jobs':1,'java_heap_mib':args.heap_mib,'process_memory_limit':None,'sampled_job_storage_bytes':512*1024*1024,'storage_is_hard_quota':False}, 'environment':env, 'sandbox_sha256':digest(sandbox)}
     run_process(argv, cwd=job, env=env, timeout=args.timeout, log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
     try:

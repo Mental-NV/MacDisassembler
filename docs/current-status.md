@@ -1,41 +1,56 @@
-# Current status — what exists vs what remains
+# Current status and remaining gates
 
-Last updated 9 November 2026 (end of Phase 1 milestone).
+Updated 9 November 2026. The specification is a staged roadmap; its historic
+pre-development wording is not a statement that the current repository still
+contains documentation only.
 
-## Implemented (done, verified this session)
+## Implemented
 
-- Frozen integer semantics: `docs/semantics.md` v1.0.
-- Calculator fixture: real AppKit UI (`CalculatorFixture.app`) backed by a
-  pure C core (21 routines) plus corpus target (4 extended routines);
-  Xcode project with shared `CalculatorFixture` scheme and `DebugAnalysis`
-  (`-O0`) / `ReleaseAnalysis` (`-O2`) configurations, no LTO, no fast math,
-  `ENABLE_DEBUG_DYLIB=NO`, 8 noinline markers.
-- Build matrix (`fixture/build/build_matrix.sh`): 8 thin variants
-  (arm64/x86_64 × O0/O2 × sym/stripped) + 4 universal containers, strip
-  verification (`__text` preserved 8/8), slice parity 16/16, full manifest
-  (`build/manifest.json`), arm64 reference outputs, app smoke launch.
-- Durable tests (in repo): `calc_core_tests` (36,091 checks: directed
-  boundaries + seeded random) and `ui_journeys` (20 scripted journeys
-  through production `CalcController` press paths) — all passing.
-- Direct Ghidra baseline (`analysis/scripts/MacscopeBaseline.java`,
-  `analysis/run_baseline.sh`): 16/16 headless runs green under a tested
-  deny-network sandbox; frozen outputs; source-aware evaluation
-  (`analysis/evaluate.py`): 120/120 discovery, 120/120 pseudocode,
-  8/8 LLVM adjudication. See `docs/phase1-findings.md`.
-- Environment lock: `docs/lock-manifest.md` (Ghidra 12.2, JDK 25.0.5.0.3,
-  Xcode 27.0, hashes of engine artifacts).
+- Source-controlled AppKit calculator, pure-C calculation core and corpus,
+  build matrix, core/controller tests and direct full-Ghidra baseline.
+  Current measurements and any unresolved phase-1 gates are documented in
+  [phase-1 findings](phase1-findings.md), not inferred from CLI completion.
+- Initial installable `macscope` 0.2.0 wheel, with no third-party Python
+  dependencies and no bundled engine. Uses full Ghidra12.2/JDK25 on the
+  tested macOS arm64 host.
+- Version/doctor, bounded Mach-O/app-main inspection, private project creation,
+  explicit thin/universal slice import without autoanalysis, versioned baseline
+  analysis, function list/show, disassembly, cached pseudocode, references,
+  CFG JSON/DOT, project/job status and normalized exports.
+- Package-owned Java bridge, effective analyzer-option recording, real saved
+  Program databases, immutable digest identities, SQLite committed snapshots,
+  writer lock, atomic result/output publication and pagination-bound cursors.
+- Owned-process cancellation, wall/per-function deadlines, bounded facets,
+  partial/error envelopes, and explicit rejection of unsupported hard-memory,
+  independent-startup and parallel-worker budgets.
+- Durable malformed-input, storage, selector, schema, dependency, cached-query
+  and process-lifecycle tests; controlled thin/fat64 integration and a clean
+  local wheel install. See [CLI validation](cli.md#reproduce-validation).
 
-## Remaining (spec stages, not started)
+## Phase-2 boundaries still open
 
-- Phase 2: narrow `macscope` CLI (`doctor`, `inspect`, `project`, `import`,
-  `analyze`, `functions`, `disasm`, `decompile`, `xrefs`, `cfg`, `export`,
-  JSON schemas), Java-bridge contract, job manifests, limits/cancellation,
-  atomic storage, end-to-end tests. Explicit analyzer-profile recording
-  (limitation 1 in phase1-findings).
-- Phase 3: annotations, ObjC/Swift metadata views, search, bundle
-  inventories, REA evidence import, Taskovsky calendar report.
-- Phase 4: packaging, SBOM/notices, compat matrix, fuzzing, arm64e,
-  broader Swift. License choice (owner decision, deliberately not made).
-- Unknowns carried forward: malformed-input safety, pseudocode behavioral
-  harness, full precision/false-positive analysis, stronger isolation for
-  untrusted inputs.
+Engine operations are **trusted-owned-input-only experimental**, with an
+explicit opt-in. Network and other user-home access are restricted, but the
+tested seatbelt profile is not a complete hostile-input filesystem sandbox.
+Hard process-memory/disk quotas are not available. No automatic unsafe
+fallback exists.
+
+Public queries use completed snapshots. A read-only/noanalysis reopened-engine
+query was independently tested, but a public uncached-decompile/refresh
+command remains unexposed. Token/address spans, polished terminal output,
+all Mach-O load-command/dyld decoding and broad host/version support remain
+incomplete. Some calculator batches correctly exit6 because their reference
+collections exceed documented bounds despite successful pseudocode output.
+
+## Later phases and separate gates
+
+- Phase3: annotations, type hints, ObjC/Swift metadata views, search,
+  multi-image/resource inventories, REA evidence and authorized Taskovsky work.
+- Phase4: hardened isolation, fuzzing, release SBOM/notices, signed packaging,
+  migrations, compatibility expansion, arm64e and broader Swift validation.
+- Behavioral equivalence of recovered pseudocode, blind scoring, false-positive
+  analysis and UI/real-app acceptance are independent gates. Engine completion
+  and CLI command coverage do not prove them.
+- Owner decisions: project license, publication/remote pushes and optional
+  integrations. No license selection, remote push, paid engine, or Taskovsky
+  edit is part of this milestone.

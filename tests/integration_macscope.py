@@ -30,7 +30,10 @@ def cli(*args, expected=(0,), dot=False):
     if dot:
         assert proc.stdout.startswith(b'digraph cfg {')
         return proc.stdout
-    data=json.loads(proc.stdout)
+    response=proc.stdout
+    if not response and '--output' in args:
+        response=Path(args[args.index('--output')+1]).read_bytes()
+    data=json.loads(response)
     validate_envelope(data)
     return data
 
@@ -71,13 +74,29 @@ try:
         assert '/Users/' not in json.dumps(snap), 'absolute personal path in export'
         snapshots[label]=snap
         out=WORK/(label+'.json')
-        cli('export','--project',p,'--json','--output',out,expected=(0,6)) if False else None
         cli('export','--project',p,'--json','--output',out,expected=(0,6))
         original=out.read_bytes()
         cli('export','--project',p,'--json','--output',out,expected=(8,))
         assert out.read_bytes()==original
         cli('export','--project',p,'--json','--output',out,'--force',expected=(0,6))
         assert out.read_bytes()==original
+    # Exercise the production uncached runner, not a separate hand-built
+    # invocation: it must reopen the active analyzed Program, never the
+    # no-analysis baseline. There is deliberately no public refresh flag yet.
+    from macscope import engine
+    from macscope.cli import parser
+    from macscope.storage import Project
+    project=Project(WORK/'arm thin');image=project.select()
+    snap,record=project.snapshot(image)
+    source=project.path/'jobs'/record['job_id']/'program'
+    before=engine.tree_digest(source)
+    args=parser().parse_args(['analyze','--project',str(project.path),'--experimental-trusted-input'])
+    raw,job=engine.run(project,image,'query',args,engine.dependencies(full=True))
+    assert engine.tree_digest(source)==before
+    assert len(raw['functions'])==len(snap['functions'])>9
+    assert raw['validation']['headless_analysis_enabled'] is False
+    assert '-readOnly' in job['argv'] and '-noanalysis' in job['argv']
+    (WORK/'production-query-verification.json').write_text(json.dumps({'status':'passed','function_count':len(raw['functions']),'source_program_sha256':before,'query_job_id':job['job_id'],'autoanalysis':False},indent=2))
     for arch in ('arm','x86'):
         left,right=snapshots[arch+' thin'],snapshots[arch+' fat64']
         assert left['image']['sha256']==right['image']['sha256']
