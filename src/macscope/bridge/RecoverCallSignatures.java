@@ -43,6 +43,7 @@ public class RecoverCallSignatures extends HeadlessScript {
     static final String DISPATCH = "macscope-dispatch-return-recovery/1";
     static final String DIRECT = "macscope-direct-call-signatures/1";
     static final String SCALAR = "macscope-scalar-call-signatures/1";
+    static final String PARAMETERS = "macscope-callee-parameters/1";
     static final String X86 = "x86:LE:64:default", ARM = "AARCH64:LE:64:AppleSilicon";
     int timeout;
 
@@ -66,7 +67,7 @@ public class RecoverCallSignatures extends HeadlessScript {
         String language = currentProgram.getLanguageID().getIdAsString();
         boolean supported = switch (policy) {
             case DISPATCH, DIRECT -> X86.equals(language);
-            case SCALAR -> X86.equals(language) || ARM.equals(language);
+            case SCALAR, PARAMETERS -> X86.equals(language) || ARM.equals(language);
             default -> false;
         };
         if (!supported || !text(plan, "image_sha256").equalsIgnoreCase(currentProgram.getExecutableSHA256()))
@@ -76,7 +77,14 @@ public class RecoverCallSignatures extends HeadlessScript {
         if (rows.isEmpty() || rows.size() > 32) throw new IllegalArgumentException("Unbounded ABI request");
         JsonObject report = new JsonObject();
         report.addProperty("policy", policy);
-        if (SCALAR.equals(policy)) {
+        if (PARAMETERS.equals(policy)) {
+            String selected = text(plan, "entry_va");
+            String expectedArch = ARM.equals(language) ? "arm64" : "x86_64";
+            if (!expectedArch.equals(text(plan, "arch")))
+                throw new IllegalStateException("Parameter proof architecture differs from the Program");
+            report.addProperty("entry_va", selected);
+            report.add("results", recoverParameters(internal(selected), rows, expectedArch));
+        } else if (SCALAR.equals(policy)) {
             String selected = text(plan, "entry_va");
             report.addProperty("entry_va", selected);
             report.add("results", recoverScalar(internal(selected), rows, language));
@@ -89,6 +97,83 @@ public class RecoverCallSignatures extends HeadlessScript {
         }
         Files.writeString(Path.of(args[1]), new Gson().toJson(report),
             StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+    }
+
+    JsonArray recoverParameters(Function selected, JsonArray rows, String arch) throws Exception {
+        if (rows.size() > 16) throw new IllegalArgumentException("Unbounded callee parameter query");
+        String[] slots = arch.equals("arm64")
+            ? new String[] {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"}
+            : new String[] {"RDI", "RSI", "RDX", "RCX", "R8", "R9"};
+        Map<Function, JsonObject> targets = new LinkedHashMap<>();
+        for (JsonElement element : rows) {
+            JsonObject row = element.getAsJsonObject();
+            String entry = text(row, "target_va");
+            Function callee = internal(entry);
+            JsonObject result = new JsonObject();
+            result.addProperty("target_va", entry);
+            if (callee.equals(selected) || targets.putIfAbsent(callee, result) != null)
+                throw new IllegalArgumentException("Invalid callee parameter target");
+            verifyPath(selected, callee, row.getAsJsonArray("path"));
+        }
+        JsonArray results = new JsonArray();
+        for (var item : targets.entrySet()) {
+            monitor.checkCancelled();
+            Function callee = item.getKey();
+            JsonObject result = item.getValue();
+            results.add(result);
+            if (callee.getSignatureSource() != SourceType.DEFAULT) {
+                skipped(result, "existing_callee_parameters");
+                continue;
+            }
+            if (callee.hasCustomVariableStorage()) {
+                skipped(result, "unsupported_callee_parameters");
+                continue;
+            }
+            HighFunction high = highFunction(callee);
+            FunctionPrototype inferred = high.getFunctionPrototype();
+            JsonArray parameters = registerParameters(inferred, slots);
+            if (parameters == null) {
+                skipped(result, "unsupported_callee_parameters");
+                continue;
+            }
+            DataType oldReturn = callee.getReturnType();
+            VariableStorage oldStorage = callee.getReturn().getVariableStorage();
+            HighFunctionDBUtil.commitParamsToDatabase(high, true,
+                HighFunctionDBUtil.ReturnCommitOption.NO_COMMIT, SourceType.ANALYSIS);
+            if (!oldReturn.isEquivalent(callee.getReturnType()) ||
+                !oldStorage.equals(callee.getReturn().getVariableStorage()) ||
+                callee.getParameterCount() != parameters.size())
+                throw new IllegalStateException("Callee parameter recovery changed the return or parameter count");
+            for (int i = 0; i < parameters.size(); i++) {
+                var actual = callee.getParameter(i);
+                var observed = inferred.getParam(i);
+                if (!actual.getDataType().isEquivalent(observed.getDataType()) ||
+                    !actual.getVariableStorage().equals(observed.getStorage()))
+                    throw new IllegalStateException("Committed callee parameter differs from native inference");
+            }
+            result.addProperty("status", "applied");
+            result.addProperty("return_unchanged", true);
+            result.add("parameters", parameters);
+        }
+        return results;
+    }
+
+    JsonArray registerParameters(FunctionPrototype proto, String[] slots) {
+        int count = proto.getNumParams();
+        if (proto.isVarArg() || count < 1 || count > slots.length) return null;
+        JsonArray result = new JsonArray();
+        for (int i = 0; i < count; i++) {
+            var parameter = proto.getParam(i);
+            if (parameter == null) return null;
+            int size = parameter.getDataType().getLength();
+            if (!Set.of(1, 2, 4, 8).contains(size) ||
+                !registerStorage(parameter.getStorage(), slots[i], size)) return null;
+            JsonObject row = new JsonObject();
+            row.addProperty("register", slots[i]);
+            row.addProperty("size", size);
+            result.add(row);
+        }
+        return result;
     }
 
     JsonArray recoverScalar(Function selected, JsonArray rows, String language) throws Exception {

@@ -25,7 +25,15 @@ def forwarding_return(code, site):
     return sequence + [end]
 
 
-def direct_edges(code, function, entries):
+def arm64_direct_target(address, raw):
+    word = int.from_bytes(raw, "little")
+    if len(raw) != 4 or word >> 26 != 0b100101:
+        return None
+    delta = word & 0x3ffffff
+    return address + 4 * (delta - (1 << 26) if delta & (1 << 25) else delta)
+
+
+def direct_edges(code, function, entries, decode=direct_target):
     facet = function["coverage"]["xrefs_from"]
     rows = function["xrefs_from_sample"]
     if facet["status"] != "complete" or facet["truncated"] or facet["error"] or facet["emitted"] != len(rows):
@@ -38,7 +46,7 @@ def direct_edges(code, function, entries):
         if ins["flow"] != "UNCONDITIONAL_CALL":
             continue
         address = int(ins["addr"], 16)
-        target = direct_target(address, code[address])
+        target = decode(address, code[address])
         if target is None or target < 0:
             continue
         entry = hex(target)

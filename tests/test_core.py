@@ -771,6 +771,17 @@ class CliTests(TemporaryCase):
             self.error('isolation_required', cli.execute, self.args('decompile', *selector, '--fresh'))
         deps.assert_not_called()
 
+    def test_callee_parameter_recovery_requires_its_own_trusted_fresh_query(self):
+        selector = ('--name', 'unique', '--recover-callee-parameters')
+        with mock.patch.object(engine, 'dependencies') as deps:
+            self.error('callee_parameter_scope', cli.execute, self.args('decompile', *selector))
+            for flag in ('--with-type-hints', '--recover-dispatch-return', '--recover-direct-signatures',
+                         '--recover-scalar-call-signatures'):
+                self.error('callee_parameter_scope', cli.execute,
+                           self.args('decompile', *selector, '--fresh', flag))
+            self.error('isolation_required', cli.execute, self.args('decompile', *selector, '--fresh'))
+        deps.assert_not_called()
+
     def test_fresh_decompile_keeps_selected_snapshot_and_labels_new_evidence(self):
         record = {'pseudocode': 'char *f() { return "/Users/local/private"; }',
                   'decompile_status': 'complete', 'pseudocode_truncated': False,

@@ -1,6 +1,6 @@
 """Binary evidence for a direct scalar result or the Darwin stack-check ABI."""
 from . import dyld
-from .direct_signatures import direct_edges
+from .direct_signatures import arm64_direct_target, direct_edges
 from .dispatch_returns import instruction_bytes, signed
 from .dispatch_tables import UnverifiedDispatch
 from .errors import Error
@@ -142,12 +142,9 @@ def arm_requests(binary, image, root, functions):
         return []
     proofs = []
     for site, raw in code.items():
-        word = int.from_bytes(raw, "little")
-        if len(raw) != 4 or word >> 26 != 0b100101:
-            continue
-        delta = word & 0x3ffffff
-        target = site + 4 * (delta - (1 << 26) if delta & (1 << 25) else delta)
-        if hex(target) not in thunks or calls.get(hex(site)) != {("UNCONDITIONAL_CALL", hex(target), False)}:
+        target = arm64_direct_target(site, raw)
+        if target is None or hex(target) not in thunks or calls.get(hex(site)) != {
+                ("UNCONDITIONAL_CALL", hex(target), False)}:
             continue
         stub = arm_stub(binary, image, target)
         if stub is not None and stub[0] == binds[0]["va"]:
