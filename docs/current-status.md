@@ -134,10 +134,14 @@ collections exceed documented bounds despite successful pseudocode output.
   captures and test unmodified comparison, history and state routines against
   the reference. See [recovered core behavior](semantics.md#recovered-core-behavior)
   for instruction-byte denominators and the distinct blockers.
+- [x] Evaluate aggregate returns, state transitions and formatting with
+  strict sanitizers and immutable capture evidence. Run the frozen
+  aggregate policy on a separate fixture. See
+  [the combined results](semantics.md#combined-core-behavior).
 - [ ] Meet the recovered-C behavior and testability gates across the full
-  core. The [aggregate comparison](semantics.md#aggregate-returns) now
-  measures all 208 aggregate instances. State-machine harnesses,
-  recovered overflow, and unsupported signatures or linkage remain open.
+  core. O2 primary domains currently cover 60.6% of routine instances
+  and 37.8% of instruction bytes. Recovered arithmetic, misaligned
+  stores, unsupported signatures, vector operations and linkage remain open.
 - [x] Measure owned-tool discovery against evaluator-side DWARF and linker
   starts. All 536 entries matched. LLVM confirmed a missed x86_64 O0 switch
   and adjudicated the x86_64 O2 padding discrepancy. See the

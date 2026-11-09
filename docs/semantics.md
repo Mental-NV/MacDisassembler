@@ -302,3 +302,97 @@ projects. The fixture binaries are data-only. All exports are hashed
 before evaluator-side address mapping. A matching dSYM and linker
 function starts identify the routines. UUID, text, function starts and
 symbol states verify the pairing.
+
+#### Held-out results
+
+Full Ghidra captured 16 exports with the locally patched 12.2 engine.
+The policy and fixture were committed in `e9feb4d`. The final capture
+revision `0896f5b` added explicit project creation and baseline analysis.
+The scoring rules and fixture stayed byte-identical.
+
+| Build | Packet routine | Checked-add routine |
+| --- | --- | --- |
+| arm64 O0 | 4 passed | 4 signed overflows |
+| arm64 O2 | 4 passed | 4 passed |
+| x86_64 O0 | 4 passed | 4 untestable `memset` calls |
+| x86_64 O2 | 4 passed | 4 passed |
+
+The 24 complete domains ran 246,144 comparisons with zero mismatches.
+The arm64 O0 checked-add output adds 1 to `INT64_MAX` before checking
+overflow. The four x86_64 O0 cases call an external `memset` that the
+frozen policy does not bind.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/compare_heldout_aggregates.py \
+  --ghidra /path/to/local-patched-ghidra \
+  --java-home /path/to/pinned-jdk \
+  --output-dir /private/tmp/new-heldout-aggregates \
+  --experimental-trusted-input
+```
+
+The frozen plan, raw export manifest, and behavior report have SHA-256
+digests `0b7e3fd94c9e2e2c09c6985f814a69d92e3e0d53e58f4174e1545aa4877e761c`,
+`c0236b395972c824876c591ee10b042e56738bf167acd366438693dc4586ade5`,
+and `1360166cac58ae761b62aa9c2cf47fc4893c09cec40d75c039593512de1cfec9`.
+
+### State transitions and integer formatting
+
+The state harness compares all named fields of the Darwin state layout
+after each call. It tests initialized boundary states and states
+produced by a seeded sequence of reference operations. The compatibility
+policy is unchanged. Direct dependencies come from uniquely named
+captured functions, including private helpers. The formatting harness
+compares the status and all bytes in the caller's buffer. It binds the
+printed stack-guard reference to libSystem only when LLVM-decoded
+instructions and the Mach-O bind record agree on its slot. The exact
+stack-check failure call compiles against the libSystem prototype.
+
+| Routine | Cases | Full pass | Undefined behavior | Compile failed | Untestable |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `calc_engine_input_digit` | 16 | 0 | 12 | 0 | 4 |
+| `calc_engine_input_op` | 16 | 2 | 2 | 2 | 10 |
+| `calc_engine_equals` | 16 | 0 | 6 | 2 | 8 |
+| `calc_engine_sign_toggle` | 16 | 0 | 12 | 2 | 2 |
+| `calc_format_int64` | 16 | 4 | 0 | 4 | 8 |
+
+Both x86_64 O2 parameter-inference operator cases passed 6,252 directed
+and 10,000 seeded cases each. All four x86_64 O0 formatting cases passed
+1,005 directed and 10,000 seeded cases each. Clang rejected the arm64 O0
+formatting calls that pass an argument to `__stack_chk_fail`. The O2
+formatting output still requires vector operations and, on x86_64,
+global-data linkage. The state harness recorded 22 signed arithmetic
+failures, ten misaligned stores, and six direct-call type or arity
+errors. Sign toggle had no complete domain in either audit.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/compare_state_operations.py \
+  --fixture-build-root /path/to/owned-calculator-build \
+  --profile-matrix /private/tmp/owned-patched-profile-matrix \
+  --output-dir /private/tmp/new-state-and-format-behavior \
+  --experimental-trusted-input
+```
+
+The state and formatting report SHA-256 is
+`536d5302877f7b20fa6db1459b3874a62352e4bd3ed02dd6e7a4f3a18a2fb9ae`.
+
+### Combined core behavior
+
+The three calculator reports account for all 416 routine instances.
+Matching their capture keys, pseudocode digests, and instruction-byte
+counts preserves the original denominator. Sixteen history cases that
+completed the primary domain failed the separate wide-counter domain.
+The earlier sign-toggle verdicts are superseded by the expanded state
+check.
+
+| Build | Cases | Primary domains complete | Full pass | Instruction bytes | Primary domain bytes | Full pass bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| arm64 O0 | 104 | 44 | 40 | 19,168 | 6,304 | 5,696 |
+| arm64 O2 | 104 | 60 | 60 | 8,864 | 2,800 | 2,800 |
+| x86_64 O0 | 104 | 48 | 44 | 15,408 | 6,596 | 6,064 |
+| x86_64 O2 | 104 | 66 | 58 | 8,212 | 3,652 | 3,196 |
+| Total | 416 | 218 | 202 | 51,652 | 19,352 | 17,756 |
+
+All complete domains had zero mismatches. The O2 testability gate
+remains open with 126 of 208 routine instances (60.6%) and 6,452 of
+17,076 instruction bytes (37.8%) completing their primary domains.
+Both measures require at least 90%.
