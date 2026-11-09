@@ -227,7 +227,7 @@ def table_targets(binary, instructions):
         slots = table_entries(binary, image, layout)
     except UnverifiedDispatch as error:
         raise Unsupported(str(error)) from error
-    return dict(layout, base_va=hex(base), call_va=hex(layout["call_va"]), slots=slots)
+    return dict(layout, base_va=hex(layout["base_va"]), call_va=hex(layout["call_va"]), slots=slots)
 
 
 POINTER_LABEL = r"PTR_[A-Za-z0-9_]+_([0-9a-f]+)"

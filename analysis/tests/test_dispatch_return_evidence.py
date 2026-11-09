@@ -1,6 +1,8 @@
 """A return witness must survive the actual instructions after the direct call."""
 import unittest
+from unittest.mock import patch
 
+from dispatch_linkage import table_targets
 from dispatch_return_evidence import caller_observation
 from recover_dispatch_returns import preserves_cfg
 
@@ -21,6 +23,14 @@ def instructions(*rows):
 
 
 class DispatchReturnEvidenceTests(unittest.TestCase):
+    def test_dispatch_table_report_keeps_verified_hex_addresses(self):
+        layout = {"base_va": 0x2000, "call_va": 0x1032}
+        with (patch("dispatch_linkage.thin", return_value={"arch": "x86_64"}),
+              patch("dispatch_linkage.machine_layout", return_value=layout),
+              patch("dispatch_linkage.table_entries", return_value=[{"target_va": "0x1100"}])):
+            self.assertEqual(table_targets(b"owned fixture", {}),
+                             {"base_va": "0x2000", "call_va": "0x1032", "slots": [{"target_va": "0x1100"}]})
+
     def test_finds_both_widths_in_rip_relative_stores(self):
         code = instructions(
             ("8915371b0000", "movl", "%edx, 0x1b37(%rip) ## 0x3000"),
