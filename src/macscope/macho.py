@@ -118,7 +118,7 @@ def thin(data):
         raise Error('command_limit', 'Invalid or excessive load-command table')
     bounded(32, cmdbytes, len(data), 'Load commands')
     cursor, end = 32, 32 + cmdbytes
-    sections, commands, warnings, uuid = [], [], [], None
+    segments, sections, commands, warnings, uuid = [], [], [], [], None
     for _ in range(ncmds):
         bounded(cursor, 8, end, 'Load command header')
         cmd, size = struct.unpack_from('<2I', data, cursor)
@@ -144,6 +144,11 @@ def thin(data):
             bounded(off, filesize, len(data), 'Segment file bytes')
             if filesize > vmsize or nsects > 4096 or 72 + nsects * 80 != size or va + vmsize > 2**64:
                 raise Error('section_bounds', 'Invalid segment/section table')
+            segments.append({'name': name.split(b'\0')[0].decode('utf-8','backslashreplace'),
+                             'va': hex(va), 'size': hex(vmsize),
+                             'file_offset': hex(off) if filesize else None,
+                             'file_size': hex(filesize), 'protections': prot,
+                             'max_protections': maxprot, 'flags': hex(segflags)})
             for i in range(nsects):
                 at = cursor + 72 + i * 80
                 sn, sg, addr, sz, fo, align, reloff, nreloc, sf, r1, r2, r3 = struct.unpack_from('<16s16s2Q8I', data, at)
@@ -170,7 +175,9 @@ def thin(data):
         cursor += size
     if cursor != end:
         raise Error('command_size', 'Load-command count and byte size disagree')
-    return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype, 'uuid': uuid, 'sections': sections, 'load_commands': commands, 'warnings': warnings}
+    return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,
+            'flags': hex(flags), 'uuid': uuid, 'segments': segments, 'sections': sections,
+            'load_commands': commands, 'warnings': warnings}
 
 
 def inspect_bytes(data):

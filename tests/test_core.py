@@ -154,6 +154,11 @@ class AtomicStorageTests(TemporaryCase):
 
 
 class ProjectTests(TemporaryCase):
+    def test_sqlite_paths_preserve_literal_uri_characters(self):
+        workspace = self.project('Project #1? Ω')
+        self.assertEqual(workspace.images(), [])
+        self.assertEqual(synthetic_snapshot(workspace)[0], workspace.snapshot(workspace.select())[0])
+
     def test_create_makes_private_workspace_and_schema(self):
         project = self.project()
         self.assertEqual(stat.S_IMODE(project.path.stat().st_mode), 0o700)
@@ -796,6 +801,30 @@ class CliTests(TemporaryCase):
         self.assertIsNotNone(cursor)
         cli.execute(self.args('rename', '--clear', '--function-id', 'function-2'))
         self.error('stale_cursor', cli.execute, self.args('annotations', 'history', '--cursor', cursor))
+
+    def test_cached_metadata_filters_keep_address_space_and_coverage(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        snapshot['engine']['imports'] = [
+            {'name': '_puts', 'address': 'EXTERNAL:00000001', 'library': '/usr/lib/libSystem.B.dylib'}
+        ]
+        snapshot['engine']['coverage']['imports'] = {'status': 'complete', 'emitted': 1}
+        snapshot['engine']['strings'] = [
+            {'value': 'long hint', 'length_bytes': 10, 'address': '0x100000080'},
+            {'value': None, 'length_bytes': 4097, 'value_truncated': True, 'address': '0x100000100'},
+        ]
+        snapshot['engine']['coverage']['strings']['emitted'] = 2
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})), \
+             mock.patch.object(engine, 'dependencies') as dependency:
+            imports = cli.execute(self.args('imports', '--name-contains', 'puts'))
+            strings = cli.execute(self.args('strings', '--min-length', '8', '--contains', 'hint'))
+        dependency.assert_not_called()
+        imported, = imports['data']
+        self.assertIsNone(imported['va'])
+        self.assertEqual(imported['address_space'], 'EXTERNAL')
+        self.assertEqual(imports['status'], 'complete')
+        self.assertEqual(strings['data'][0]['value'], 'long hint')
+        self.assertEqual(strings['status'], 'partial')
+        self.assertIsNone(strings['coverage']['known_total'])
 
     def assert_envelope(self, result):
         required = {'schema_version', 'command', 'status', 'analysis_id', 'data', 'diagnostics', 'coverage'}

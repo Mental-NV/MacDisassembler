@@ -64,6 +64,9 @@ collections exceed documented bounds despite successful pseudocode output.
   resumable pages.
 - [x] Import explicit embedded images and resolve bounded in-bundle framework
   links. The owned arm64 main and x86_64 helper passed real Ghidra import.
+- [x] Query imported headers, segments, sections and file-backed bytes,
+  plus saved symbol, string, import and export collections.
+- [ ] Extend load-command evidence and decode supported dyld records.
 - [ ] Add Objective-C/Swift views with source and coverage distinctions.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.

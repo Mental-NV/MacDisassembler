@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotations, bundle, calls, engine, search
+from . import annotations, bundle, calls, engine, metadata, search
 from .schema import validate_envelope, validate_function
 
 
@@ -77,6 +77,16 @@ def parser():
                    help='Include an exact bundle-relative executable path in addition to the main image')
     s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','parameter-inference','deep'),default='baseline',help='baseline is unchanged; parameter-inference is an explicit experimental binary-only profile');common(s);budgets(s)
     s=sub.add_parser('status');project(s);common(s)
+    s=sub.add_parser('headers');project(s);common(s)
+    s=sub.add_parser('bytes');project(s);common(s)
+    s.add_argument('--address',required=True)
+    s.add_argument('--length',type=int,required=True,dest='byte_length')
+    for c in (*metadata.PREFLIGHT_LISTS,*metadata.ENGINE_LISTS):
+        s=sub.add_parser(c);project(s);common(s);pagination(s)
+        if c=='strings':
+            s.add_argument('--contains')
+            s.add_argument('--min-length',type=int,default=0)
+        else:s.add_argument('--name-contains')
     s=sub.add_parser('functions');ss=s.add_subparsers(dest='action',required=True)
     for c in ('list','show'):
         s=ss.add_parser(c);project(s);common(s)
@@ -116,7 +126,7 @@ def parser():
 
 
 def limits(args):
-    for key, low, high in [('timeout',1,3600),('function_timeout',1,120),('heap_mib',256,4096),('max_functions',1,10000),('limit',1,1000),('depth',1,8),('max_edges',1,2000)]:
+    for key, low, high in [('timeout',1,3600),('function_timeout',1,120),('heap_mib',256,4096),('max_functions',1,10000),('limit',1,1000),('depth',1,8),('max_edges',1,2000),('byte_length',1,4096),('min_length',0,1048576)]:
         v=getattr(args,key,None)
         if v is not None and not low<=v<=high:
             raise Error('argument_limit', key+' must be '+str(low)+'..'+str(high),2)
@@ -357,6 +367,17 @@ def import_inputs(args, project, deps):
     return envelope('import',result,cov=coverage(scope,len(result),known_total))
 
 
+def metadata_collection(args, project, image, snapshot=None):
+    rows,filters,gap = metadata.records(args,project,image,snapshot)
+    aid = snapshot['analysis_id'] if snapshot else None
+    rows,cov = page(rows,args,aid or image['image_id'],project.project_id,filters,order='metadata-address/v1')
+    cov['scope'] = 'selected image '+args.command
+    if gap:
+        reasons = [gap,*(['page_limit'] if cov['next_cursor'] else [])]
+        cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+    return envelope(args.command,rows,aid,'partial' if gap else 'complete',cov)
+
+
 def execute(a):
     limits(a)
     fresh = a.command == 'decompile' and a.fresh
@@ -427,7 +448,16 @@ def execute(a):
                 db.execute('UPDATE images SET active_analysis=? WHERE id=?',(aid,image['image_id']))
             return envelope(command,{'image_id':image['image_id'],'function_count':len(normalized['functions']),'job_id':job['job_id'],'decompile_summary':raw.get('decompile_summary'),'analysis_profile':job['analysis_profile'],'limitations':normalized['limitations']},aid,raw['status'],coverage('selected image analysis',len(normalized['functions']),raw.get('function_count_total_reported_by_engine'),raw['status']!='complete',reason='engine_or_facet_partial' if raw['status']!='complete' else None))
     image=p.select(a.image,a.arch)
+    if a.command=='headers':
+        return envelope(command,metadata.headers(p,image))
+    if a.command=='bytes':
+        return envelope(command,metadata.read_bytes_at(p,image,a.address,a.byte_length),
+                        cov=coverage('selected image bytes',a.byte_length,a.byte_length))
+    if a.command in metadata.PREFLIGHT_LISTS:
+        return metadata_collection(a,p,image)
     snapshot,record=p.snapshot(image)
+    if a.command in metadata.ENGINE_LISTS:
+        return metadata_collection(a,p,image,snapshot)
     aid=snapshot['analysis_id']
     functions=snapshot['functions']
     if a.command == 'export' and not a.include_annotations:

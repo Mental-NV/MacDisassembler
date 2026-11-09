@@ -69,6 +69,10 @@ macscope cfg --project workspaces/calculator --name _calc_add --format dot
 macscope search calc_add --in all --project workspaces/calculator --json
 macscope calls --name _calc_add --direction callers --depth 2 --project workspaces/calculator --json
 macscope status --project workspaces/calculator --json
+macscope headers --project workspaces/calculator --json
+macscope sections --project workspaces/calculator --name-contains text --json
+macscope imports --project workspaces/calculator --json
+macscope strings --project workspaces/calculator --min-length 8 --json
 macscope export --project workspaces/calculator --json --output private-results.json
 ```
 
@@ -171,6 +175,19 @@ relocatable objects and malformed ranges receive explicit failures. The
 preflight is **not** a complete Mach-O/dyld parser or a security proof.
 
 ## Persistence, identity and freshness
+
+`headers`, `segments`, and `sections` query imported Mach-O metadata and
+work before analysis. Older imports can recover the added header and segment
+fields from their digest-verified slice. `bytes --address 0xVA --length N`
+reads 1–4096 bytes within a single file-backed section of that same slice
+and returns both slice and container offsets.
+
+`imports`, `exports`, `symbols`, and `strings` query the saved engine
+collections. The first three accept a literal `--name-contains` filter.
+`strings` searches Ghidra-defined string records with `--contains` and
+`--min-length` in bytes. All collection commands support `--limit` and
+`--cursor` and report the coverage of the selected facet. They run without
+starting Ghidra.
 
 Import passes `-noanalysis` to Ghidra, disables loading/reexporting/linking
 libraries, and records the actual language/compiler pair. A no-analysis

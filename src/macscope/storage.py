@@ -88,7 +88,8 @@ class Project:
 
     @contextlib.contextmanager
     def db(self, readonly=True):
-        db = sqlite3.connect('file:'+str(self.path/'index.sqlite')+('?mode=ro' if readonly else '?mode=rw'), uri=True, timeout=0.1)
+        uri = (self.path/'index.sqlite').as_uri() + ('?mode=ro' if readonly else '?mode=rw')
+        db = sqlite3.connect(uri, uri=True, timeout=0.1)
         try:
             yield db
             if not readonly:
