@@ -13,7 +13,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotations, bundle, calls, dyld, engine, metadata, search
+from . import annotations, bundle, calls, dyld, engine, metadata, objc, search
 from .schema import validate_envelope, validate_function
 
 
@@ -80,6 +80,9 @@ def parser():
     s=sub.add_parser('headers');project(s);common(s)
     s=sub.add_parser('fixups');project(s);common(s);pagination(s)
     s.add_argument('--kind',choices=('all','bind','rebase'),default='all')
+    s=sub.add_parser('objc');ss=s.add_subparsers(dest='action',required=True)
+    for c in ('classes','methods','selectors'):
+        s=ss.add_parser(c);project(s);common(s);pagination(s);s.add_argument('--name-contains')
     s=sub.add_parser('bytes');project(s);common(s)
     s.add_argument('--address',required=True)
     s.add_argument('--length',type=int,required=True,dest='byte_length')
@@ -473,6 +476,19 @@ def execute(a):
             cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
         data=dict(info,image_id=image['image_id'],arch=image['arch'],records=rows)
         return envelope(command,data,status='partial' if gaps else 'complete',cov=cov)
+    if a.command=='objc':
+        records,gaps=objc.inventory(metadata.verified_slice(p,image),image,a.action)
+        records=[dict(row,image_id=image['image_id'],arch=image['arch'])
+                 for row in records if a.name_contains is None or a.name_contains in row['name']]
+        records.sort(key=lambda row:(row['name'],row.get('class_name') or '',
+                                    int(row.get('record_va',row.get('class_va')),16)))
+        rows,cov=page(records,a,image['image_id'],p.project_id,
+                      {'action':a.action,'name_contains':a.name_contains},order='objc-name/address/v1')
+        cov['scope']='selected image Objective-C '+a.action
+        if gaps:
+            reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+            cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+        return envelope(command,rows,status='partial' if gaps else 'complete',cov=cov)
     if a.command in metadata.PREFLIGHT_LISTS:
         return metadata_collection(a,p,image)
     snapshot,record=p.snapshot(image)

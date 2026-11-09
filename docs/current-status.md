@@ -74,7 +74,9 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Decode ordinary pointer operations in legacy dyld streams. Four
   separately linked owned binaries matched Apple tooling on 1,086 fixups.
 - [ ] Expand tested dyld pointer formats and add export-trie decoding.
-- [ ] Add Objective-C/Swift views with source and coverage distinctions.
+- [x] Expose Objective-C classes, methods and selector references with
+  static provenance. The owned app matrix matched 216 method addresses.
+- [ ] Expose available Swift names and explicit demangler provenance.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.
 - [ ] Exercise isolation, malformed-input fuzzing, schema migrations and

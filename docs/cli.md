@@ -74,6 +74,7 @@ macscope sections --project workspaces/calculator --name-contains text --json
 macscope imports --project workspaces/calculator --json
 macscope strings --project workspaces/calculator --min-length 8 --json
 macscope fixups --project workspaces/calculator --kind bind --json
+macscope objc methods --project workspaces/calculator --name-contains press --json
 macscope export --project workspaces/calculator --json --output private-results.json
 ```
 
@@ -205,6 +206,22 @@ Four separately linked owned tools and AppKit binaries using
 `-Wl,-no_fixup_chains` matched Apple tooling on 906 rebases, 142 ordinary
 binds and 38 lazy binds. Synthetic tests cover weak binds and a backward
 address delta emitted by the linker.
+
+`objc classes`, `objc methods`, and `objc selectors` read static declarations
+and selector references from the immutable slice. Class records include the
+metadata address and a local or external superclass reference. Method
+records distinguish instance and class declarations and preserve category
+names when present in the linked image. Absolute and relative method records
+include selector and implementation evidence. Selector declarations and
+reference slots remain separate, and none imply a resolved runtime dispatch.
+Use the reported implementation address with `functions show --address` in
+an analyzed project. The views work before analysis and support filtered,
+paginated output. [Apple Objective-C runtime structures](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.h)
+
+Apple's `dyld_info -objc` agreed on the 16 class records and 216 method
+addresses across eight owned calculator app builds. Separately compiled
+arm64 and x86_64 probes also matched for instance, class and category
+methods. The views currently cover class, method and selector evidence.
 
 `bytes --address 0xVA --length N`
 reads 1–4096 bytes within a single file-backed section of that same slice

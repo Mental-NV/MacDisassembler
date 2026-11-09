@@ -162,8 +162,9 @@ def decode_chained(data, image, parsed, extent):
     return result, records, sorted(set(unsupported))
 
 
-def fixups(data, image):
-    parsed = thin(data)
+def fixups(data, image, *, parsed=None):
+    if parsed is None:
+        parsed = thin(data)
     loader = parsed["loader"]
     extents = [row for row in loader["linkedit"] if row["kind"]=="chained_fixups"]
     if len(extents)>1:
