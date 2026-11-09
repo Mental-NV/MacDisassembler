@@ -15,7 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
-from . import callee_parameters, direct_signatures, dispatch_returns, flow_boundaries, jobs, scalar_signatures, worker_lifecycle
+from . import callee_parameters, direct_signatures, dispatch_returns, flow_boundaries, forwarded_returns, jobs, scalar_signatures, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -29,6 +29,7 @@ SIGNATURE_RECOVERIES = {
     'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
     'scalar_signature_recovery': (scalar_signatures, 'scalar-signatures'),
     'callee_parameter_recovery': (callee_parameters, 'callee-parameters'),
+    'forwarded_return_recovery': (forwarded_returns, 'forwarded-return'),
 }
 
 

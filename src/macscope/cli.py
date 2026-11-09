@@ -14,7 +14,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotation_transfer, annotations, bundle, callee_parameters, calls, direct_signatures, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols
+from . import annotation_transfer, annotations, bundle, callee_parameters, calls, direct_signatures, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols
 from .schema import validate_envelope, validate_function
 
 
@@ -136,6 +136,8 @@ def parser():
                            help='Use verified scalar call signatures in a fresh query')
             s.add_argument('--recover-callee-parameters',action='store_true',
                            help='Infer parameters along verified direct calls in a fresh query')
+            s.add_argument('--recover-forwarded-return',action='store_true',
+                           help='Recover an observed integer result forwarded through a direct call')
         if c=='xrefs':s.add_argument('--direction',choices=('to','from','both'),default='both')
     s=sub.add_parser('search');project(s);common(s);pagination(s)
     s.add_argument('query')
@@ -795,6 +797,7 @@ def execute(a):
     recover_direct = a.command == 'decompile' and a.recover_direct_signatures
     recover_scalar = a.command == 'decompile' and a.recover_scalar_call_signatures
     recover_parameters = a.command == 'decompile' and a.recover_callee_parameters
+    recover_forwarded = a.command == 'decompile' and a.recover_forwarded_return
     if with_hints and not fresh:
         raise Error('type_hints_require_fresh','Type-hinted decompilation requires --fresh',3)
     if recover_dispatch and (not fresh or with_hints):
@@ -805,6 +808,8 @@ def execute(a):
         raise Error('scalar_signature_scope','Scalar signature recovery requires --fresh and its own query',3)
     if recover_parameters and (not fresh or with_hints or recover_dispatch or recover_direct or recover_scalar):
         raise Error('callee_parameter_scope','Callee parameter recovery requires --fresh and its own query',3)
+    if recover_forwarded and (not fresh or with_hints or recover_dispatch or recover_direct or recover_scalar or recover_parameters):
+        raise Error('forwarded_return_scope','Forwarded return recovery requires --fresh and its own query',3)
     if fresh and a.all:
         raise Error('fresh_selection','--fresh requires one function selector',2)
     term = search.pattern(a.query) if a.command == 'search' else None
@@ -813,7 +818,7 @@ def execute(a):
         return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.4.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='doctor':
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
-        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
+        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'forwarded_return_recovery':forwarded_returns.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
         return envelope(command,deps)
     if a.command=='inspect':
         data,_=inspect_path(a.input,allow_arm64e=True)
@@ -966,7 +971,7 @@ def execute(a):
     f=select_function(functions,a)
     if fresh:
         hints=annotations.type_hints(annotations_rows,functions) if with_hints else None
-        policy = next((policy for enabled, policy in ((recover_parameters, callee_parameters),
+        policy = next((policy for enabled, policy in ((recover_forwarded, forwarded_returns), (recover_parameters, callee_parameters),
                       (recover_scalar, scalar_signatures), (recover_direct, direct_signatures), (recover_dispatch, dispatch_returns)) if enabled), None)
         plan = policy.request(metadata.verified_slice(p,image),image,f,functions) if policy else None
         return flow_evidence.query_view(fresh_decompile(a,p,image,f,record,revision,hints,signature_plan=plan),f)

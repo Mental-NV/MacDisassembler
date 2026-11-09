@@ -22,11 +22,13 @@ import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.util.headless.HeadlessScript;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.data.AbstractIntegerDataType;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.FunctionDefinitionDataType;
 import ghidra.program.model.data.IntegerDataType;
 import ghidra.program.model.data.ParameterDefinition;
 import ghidra.program.model.data.ParameterDefinitionImpl;
+import ghidra.program.model.data.Undefined;
 import ghidra.program.model.data.Undefined8DataType;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.listing.Function;
@@ -44,6 +46,7 @@ public class RecoverCallSignatures extends HeadlessScript {
     static final String DIRECT = "macscope-direct-call-signatures/1";
     static final String SCALAR = "macscope-scalar-call-signatures/1";
     static final String PARAMETERS = "macscope-callee-parameters/1";
+    static final String FORWARDED = "macscope-forwarded-return/1";
     static final String X86 = "x86:LE:64:default", ARM = "AARCH64:LE:64:AppleSilicon";
     int timeout;
 
@@ -67,7 +70,7 @@ public class RecoverCallSignatures extends HeadlessScript {
         String language = currentProgram.getLanguageID().getIdAsString();
         boolean supported = switch (policy) {
             case DISPATCH, DIRECT -> X86.equals(language);
-            case SCALAR, PARAMETERS -> X86.equals(language) || ARM.equals(language);
+            case SCALAR, PARAMETERS, FORWARDED -> X86.equals(language) || ARM.equals(language);
             default -> false;
         };
         if (!supported || !text(plan, "image_sha256").equalsIgnoreCase(currentProgram.getExecutableSHA256()))
@@ -77,13 +80,15 @@ public class RecoverCallSignatures extends HeadlessScript {
         if (rows.isEmpty() || rows.size() > 32) throw new IllegalArgumentException("Unbounded ABI request");
         JsonObject report = new JsonObject();
         report.addProperty("policy", policy);
-        if (PARAMETERS.equals(policy)) {
+        if (PARAMETERS.equals(policy) || FORWARDED.equals(policy)) {
             String selected = text(plan, "entry_va");
             String expectedArch = ARM.equals(language) ? "arm64" : "x86_64";
             if (!expectedArch.equals(text(plan, "arch")))
                 throw new IllegalStateException("Parameter proof architecture differs from the Program");
             report.addProperty("entry_va", selected);
-            report.add("results", recoverParameters(internal(selected), rows, expectedArch));
+            Function root = internal(selected);
+            report.add("results", PARAMETERS.equals(policy)
+                ? recoverParameters(root, rows, expectedArch) : recoverForwarded(root, rows, expectedArch));
         } else if (SCALAR.equals(policy)) {
             String selected = text(plan, "entry_va");
             report.addProperty("entry_va", selected);
@@ -101,9 +106,7 @@ public class RecoverCallSignatures extends HeadlessScript {
 
     JsonArray recoverParameters(Function selected, JsonArray rows, String arch) throws Exception {
         if (rows.size() > 16) throw new IllegalArgumentException("Unbounded callee parameter query");
-        String[] slots = arch.equals("arm64")
-            ? new String[] {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"}
-            : new String[] {"RDI", "RSI", "RDX", "RCX", "R8", "R9"};
+        String[] slots = inputRegisters(arch);
         Map<Function, JsonObject> targets = new LinkedHashMap<>();
         for (JsonElement element : rows) {
             JsonObject row = element.getAsJsonObject();
@@ -136,26 +139,153 @@ public class RecoverCallSignatures extends HeadlessScript {
                 skipped(result, "unsupported_callee_parameters");
                 continue;
             }
-            DataType oldReturn = callee.getReturnType();
-            VariableStorage oldStorage = callee.getReturn().getVariableStorage();
-            HighFunctionDBUtil.commitParamsToDatabase(high, true,
-                HighFunctionDBUtil.ReturnCommitOption.NO_COMMIT, SourceType.ANALYSIS);
-            if (!oldReturn.isEquivalent(callee.getReturnType()) ||
-                !oldStorage.equals(callee.getReturn().getVariableStorage()) ||
-                callee.getParameterCount() != parameters.size())
-                throw new IllegalStateException("Callee parameter recovery changed the return or parameter count");
-            for (int i = 0; i < parameters.size(); i++) {
-                var actual = callee.getParameter(i);
-                var observed = inferred.getParam(i);
-                if (!actual.getDataType().isEquivalent(observed.getDataType()) ||
-                    !actual.getVariableStorage().equals(observed.getStorage()))
-                    throw new IllegalStateException("Committed callee parameter differs from native inference");
-            }
+            commitVerifiedParameters(high, parameters.size());
             result.addProperty("status", "applied");
             result.addProperty("return_unchanged", true);
             result.add("parameters", parameters);
         }
         return results;
+    }
+
+    String[] inputRegisters(String arch) {
+        return arch.equals("arm64")
+            ? new String[] {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"}
+            : new String[] {"RDI", "RSI", "RDX", "RCX", "R8", "R9"};
+    }
+
+    void commitVerifiedParameters(HighFunction high, int count) throws Exception {
+        Function callee = high.getFunction();
+        FunctionPrototype inferred = high.getFunctionPrototype();
+        DataType oldReturn = callee.getReturnType();
+        VariableStorage oldStorage = callee.getReturn().getVariableStorage();
+        HighFunctionDBUtil.commitParamsToDatabase(high, true,
+            HighFunctionDBUtil.ReturnCommitOption.NO_COMMIT, SourceType.ANALYSIS);
+        if (!oldReturn.isEquivalent(callee.getReturnType()) ||
+            !oldStorage.equals(callee.getReturn().getVariableStorage()) ||
+            callee.getParameterCount() != count)
+            throw new IllegalStateException("Callee parameter recovery changed the return or parameter count");
+        for (int i = 0; i < count; i++) {
+            var actual = callee.getParameter(i);
+            var observed = inferred.getParam(i);
+            if (!actual.getDataType().isEquivalent(observed.getDataType()) ||
+                !actual.getVariableStorage().equals(observed.getStorage()))
+                throw new IllegalStateException("Committed callee parameter differs from native inference");
+        }
+    }
+
+    boolean ordinaryInputs(FunctionPrototype proto, String[] slots) {
+        return !proto.isVarArg() && (proto.getNumParams() == 0 || registerParameters(proto, slots) != null);
+    }
+
+    boolean protectsReturn(Function function) {
+        return function.getSignatureSource() == SourceType.USER_DEFINED ||
+            function.getSignatureSource() == SourceType.IMPORTED;
+    }
+
+    JsonArray recoverForwarded(Function root, JsonArray rows, String arch) throws Exception {
+        if (rows.size() != 1) throw new IllegalArgumentException("Expected one forwarded return");
+        JsonObject proof = rows.get(0).getAsJsonObject(), result = new JsonObject();
+        JsonArray results = new JsonArray();
+        results.add(result);
+        for (String key : List.of("target_va", "call_va", "observer_va", "observer_call_va",
+                                  "store_va", "destination_va"))
+            result.add(key, proof.get(key));
+
+        Function callee = internal(text(proof, "target_va"));
+        Function observer = internal(text(proof, "observer_va"));
+        Address call = address(text(proof, "call_va")), observedCall = address(text(proof, "observer_call_va"));
+        JsonArray tail = proof.getAsJsonArray("tail"), reads = proof.getAsJsonArray("observer");
+        checkBytes(tail, root, 4);
+        checkBytes(reads, observer, 8);
+        if (root.equals(callee) || observer.equals(root) || observer.equals(callee) ||
+            !address(text(tail.get(0).getAsJsonObject(), "va")).equals(call) ||
+            !address(text(reads.get(0).getAsJsonObject(), "va")).equals(observedCall) ||
+            !text(reads.get(reads.size() - 1).getAsJsonObject(), "va").equals(text(proof, "store_va")))
+            throw new IllegalStateException("Unexpected forwarded return path");
+        checkDirect(root, call, callee);
+        checkDirect(observer, observedCall, root);
+        Address last = address(text(tail.get(tail.size() - 1).getAsJsonObject(), "va"));
+        if (!verifiedForwardingFlow(root, call, last)) {
+            skipped(result, "unverified_forwarding_flow");
+            return results;
+        }
+        if (protectsReturn(root) || protectsReturn(callee) || !Undefined.isUndefined(root.getReturnType())) {
+            skipped(result, "existing_forwarded_return");
+            return results;
+        }
+
+        String register = arch.equals("arm64") ? "x0" : "RAX";
+        String[] slots = inputRegisters(arch);
+        FunctionPrototype leaf = prototype(callee);
+        DataType type = leaf.getReturnType();
+        if (root.hasCustomVariableStorage() || callee.hasCustomVariableStorage() ||
+            root.hasNoReturn() || callee.hasNoReturn() ||
+            !(type instanceof AbstractIntegerDataType) || type.getLength() != 8 ||
+            !registerStorage(leaf.getReturnStorage(), register, 8) ||
+            !ordinaryInputs(leaf, slots) || !ordinaryInputs(prototype(root), slots) ||
+            !Undefined.isUndefined(callee.getReturnType()) && !type.isEquivalent(callee.getReturnType())) {
+            skipped(result, "unsupported_forwarded_signature");
+            return results;
+        }
+
+        recoverParameters(root, proof.getAsJsonArray("parameters"), arch);
+        HighFunction recoveredLeaf = highFunction(callee);
+        FunctionPrototype afterLeaf = recoveredLeaf.getFunctionPrototype();
+        if (!type.isEquivalent(afterLeaf.getReturnType()) || !registerStorage(afterLeaf.getReturnStorage(), register, 8) ||
+            !ordinaryInputs(afterLeaf, slots))
+            throw new IllegalStateException("Callee parameters changed the inferred forwarded return");
+        if (callee.getSignatureSource() == SourceType.DEFAULT)
+            commitVerifiedParameters(recoveredLeaf, afterLeaf.getNumParams());
+        applyWordReturn(callee, type, register);
+
+        HighFunction wrapper = highFunction(root);
+        FunctionPrototype wrapperProto = wrapper.getFunctionPrototype();
+        if (!ordinaryInputs(wrapperProto, slots))
+            throw new IllegalStateException("Unexpected wrapper parameters after callee inference");
+        if (root.getSignatureSource() == SourceType.DEFAULT)
+            commitVerifiedParameters(wrapper, wrapperProto.getNumParams());
+        applyWordReturn(root, type, register);
+        FunctionPrototype after = prototype(root);
+        if (!type.isEquivalent(after.getReturnType()) || !registerStorage(after.getReturnStorage(), register, 8))
+            throw new IllegalStateException("Decompiler did not retain the proved return");
+        result.addProperty("status", "applied");
+        result.addProperty("return_storage", register + ":8");
+        return results;
+    }
+
+    boolean verifiedForwardingFlow(Function root, Address call, Address last) {
+        if (!root.getBody().getMaxAddress().equals(last.add(currentProgram.getListing().getInstructionAt(last)
+                .getLength() - 1))) return false;
+        var instructions = currentProgram.getListing().getInstructions(root.getBody(), true);
+        while (instructions.hasNext()) {
+            Instruction instruction = instructions.next();
+            Address address = instruction.getAddress();
+            var flow = instruction.getFlowType();
+            if (address.equals(last) ? !flow.isTerminal() : flow.isTerminal() || flow.isComputed())
+                return false;
+            if (flow.isJump()) {
+                for (Address target : instruction.getFlows()) {
+                    if (!root.getBody().contains(target) || target.compareTo(call) > 0) return false;
+                }
+                if (instruction.getFlows().length == 0) return false;
+            }
+        }
+        return true;
+    }
+
+    void applyWordReturn(Function function, DataType type, String register) throws Exception {
+        var before = function.getParameters();
+        if (Undefined.isUndefined(function.getReturnType()))
+            function.setReturnType(type, SourceType.ANALYSIS);
+        var after = function.getParameters();
+        if (!type.isEquivalent(function.getReturnType()) ||
+            !registerStorage(function.getReturn().getVariableStorage(), register, 8) || before.length != after.length)
+            throw new IllegalStateException("Committed forwarded return does not match the proved ABI");
+        for (int i = 0; i < before.length; i++) {
+            if (!before[i].getDataType().isEquivalent(after[i].getDataType()) ||
+                !before[i].getVariableStorage().equals(after[i].getVariableStorage()))
+                throw new IllegalStateException("Forwarded return changed an input parameter");
+        }
     }
 
     JsonArray registerParameters(FunctionPrototype proto, String[] slots) {
