@@ -1,0 +1,283 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		B10000000000000000000001 /* calc_core.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* calc_core.c */; };
+		B10000000000000000000002 /* CalcController.m in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* CalcController.m */; };
+		B10000000000000000000003 /* CalculatorFixtureAppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* CalculatorFixtureAppDelegate.m */; };
+		B10000000000000000000004 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* main.m */; };
+		B10000000000000000000005 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* Cocoa.framework */; };
+		B10000000000000000000006 /* calc_core.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* calc_core.c */; };
+		B10000000000000000000007 /* corpus.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000010 /* corpus.c */; };
+		B10000000000000000000008 /* corpus_main.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* corpus_main.c */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A10000000000000000000001 /* calc_core.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = src/calc_core.h; sourceTree = "<group>"; };
+		A10000000000000000000002 /* calc_core.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = src/calc_core.c; sourceTree = "<group>"; };
+		A10000000000000000000003 /* CalcController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc.h; path = src/CalcController.h; sourceTree = "<group>"; };
+		A10000000000000000000004 /* CalcController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = src/CalcController.m; sourceTree = "<group>"; };
+		A10000000000000000000005 /* CalculatorFixtureAppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc.h; path = src/CalculatorFixtureAppDelegate.h; sourceTree = "<group>"; };
+		A10000000000000000000006 /* CalculatorFixtureAppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = src/CalculatorFixtureAppDelegate.m; sourceTree = "<group>"; };
+		A10000000000000000000007 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = src/main.m; sourceTree = "<group>"; };
+		A10000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = src/Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000009 /* corpus.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = src/corpus.h; sourceTree = "<group>"; };
+		A10000000000000000000010 /* corpus.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = src/corpus.c; sourceTree = "<group>"; };
+		A10000000000000000000011 /* corpus_main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = src/corpus_main.c; sourceTree = "<group>"; };
+		A10000000000000000000012 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
+		A10000000000000000000013 /* CalculatorFixture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CalculatorFixture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000014 /* CorpusFixture */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CorpusFixture; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C10000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000005 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000002 /* Project object */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000001 /* calc_core.h */,
+				A10000000000000000000002 /* calc_core.c */,
+				A10000000000000000000003 /* CalcController.h */,
+				A10000000000000000000004 /* CalcController.m */,
+				A10000000000000000000005 /* CalculatorFixtureAppDelegate.h */,
+				A10000000000000000000006 /* CalculatorFixtureAppDelegate.m */,
+				A10000000000000000000007 /* main.m */,
+				A10000000000000000000008 /* Info.plist */,
+				A10000000000000000000009 /* corpus.h */,
+				A10000000000000000000010 /* corpus.c */,
+				A10000000000000000000011 /* corpus_main.c */,
+				A10000000000000000000012 /* Cocoa.framework */,
+				A00000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000013 /* CalculatorFixture.app */,
+				A10000000000000000000014 /* CorpusFixture */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		D10000000000000000000001 /* CalculatorFixture */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E10000000000000000000002 /* Build configuration list for PBXNativeTarget "CalculatorFixture" */;
+			buildPhases = (
+				C10000000000000000000001 /* Sources */,
+				C10000000000000000000003 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CalculatorFixture;
+			productName = CalculatorFixture;
+			productReference = A10000000000000000000013 /* CalculatorFixture.app */;
+			productType = "com.apple.product-type.application";
+		};
+		D10000000000000000000002 /* CorpusFixture */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E10000000000000000000003 /* Build configuration list for PBXNativeTarget "CorpusFixture" */;
+			buildPhases = (
+				C10000000000000000000002 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CorpusFixture;
+			productName = CorpusFixture;
+			productReference = A10000000000000000000014 /* CorpusFixture */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2700;
+			};
+			buildConfigurationList = E10000000000000000000001 /* Build configuration list for PBXProject */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00000000000000000000002 /* Project object */;
+			productRefGroup = A00000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				D10000000000000000000001 /* CalculatorFixture */,
+				D10000000000000000000002 /* CorpusFixture */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C10000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000001 /* calc_core.c in Sources */,
+				B10000000000000000000002 /* CalcController.m in Sources */,
+				B10000000000000000000003 /* CalculatorFixtureAppDelegate.m in Sources */,
+				B10000000000000000000004 /* main.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C10000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000006 /* calc_core.c in Sources */,
+				B10000000000000000000007 /* corpus.c in Sources */,
+				B10000000000000000000008 /* corpus_main.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		F10000000000000000000001 /* DebugAnalysis */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_DEBUG_DYLIB = NO;
+				GCC_C_LANGUAGE_STANDARD = c11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_SYMBOLS_PRIVATE_EXTERN = NO;
+				LLVM_LTO = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CFLAGS = "-fno-fast-math";
+				SDKROOT = macosx;
+			};
+			name = DebugAnalysis;
+		};
+		F10000000000000000000002 /* ReleaseAnalysis */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_DEBUG_DYLIB = NO;
+				GCC_C_LANGUAGE_STANDARD = c11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 2;
+				GCC_SYMBOLS_PRIVATE_EXTERN = NO;
+				LLVM_LTO = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CFLAGS = "-fno-fast-math";
+				SDKROOT = macosx;
+			};
+			name = ReleaseAnalysis;
+		};
+		F10000000000000000000003 /* DebugAnalysis */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				INFOPLIST_FILE = src/Info.plist;
+				LD_GENERATE_MAP_FILE = YES;
+				LD_MAP_FILE_PATH = "$(CONFIGURATION_BUILD_DIR)/$(PRODUCT_NAME)-$(CURRENT_ARCH).LinkMap.txt";
+				PRODUCT_BUNDLE_IDENTIFIER = "org.macsdisassembler.CalculatorFixture";
+				PRODUCT_NAME = CalculatorFixture;
+			};
+			name = DebugAnalysis;
+		};
+		F10000000000000000000004 /* ReleaseAnalysis */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				INFOPLIST_FILE = src/Info.plist;
+				LD_GENERATE_MAP_FILE = YES;
+				LD_MAP_FILE_PATH = "$(CONFIGURATION_BUILD_DIR)/$(PRODUCT_NAME)-$(CURRENT_ARCH).LinkMap.txt";
+				PRODUCT_BUNDLE_IDENTIFIER = "org.macsdisassembler.CalculatorFixture";
+				PRODUCT_NAME = CalculatorFixture;
+			};
+			name = ReleaseAnalysis;
+		};
+		F10000000000000000000005 /* DebugAnalysis */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				LD_GENERATE_MAP_FILE = YES;
+				LD_MAP_FILE_PATH = "$(CONFIGURATION_BUILD_DIR)/$(PRODUCT_NAME)-$(CURRENT_ARCH).LinkMap.txt";
+				PRODUCT_NAME = CorpusFixture;
+			};
+			name = DebugAnalysis;
+		};
+		F10000000000000000000006 /* ReleaseAnalysis */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				LD_GENERATE_MAP_FILE = YES;
+				LD_MAP_FILE_PATH = "$(CONFIGURATION_BUILD_DIR)/$(PRODUCT_NAME)-$(CURRENT_ARCH).LinkMap.txt";
+				PRODUCT_NAME = CorpusFixture;
+			};
+			name = ReleaseAnalysis;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E10000000000000000000001 /* Build configuration list for PBXProject */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F10000000000000000000001 /* DebugAnalysis */,
+				F10000000000000000000002 /* ReleaseAnalysis */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = ReleaseAnalysis;
+		};
+		E10000000000000000000002 /* Build configuration list for PBXNativeTarget "CalculatorFixture" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F10000000000000000000003 /* DebugAnalysis */,
+				F10000000000000000000004 /* ReleaseAnalysis */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = ReleaseAnalysis;
+		};
+		E10000000000000000000003 /* Build configuration list for PBXNativeTarget "CorpusFixture" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F10000000000000000000005 /* DebugAnalysis */,
+				F10000000000000000000006 /* ReleaseAnalysis */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = ReleaseAnalysis;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A00000000000000000000001 /* Project object */;
+}

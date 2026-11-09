@@ -14,3 +14,5 @@ private-corpus/
 third-party-exports/
 *.log
 
+
+.work/
