@@ -62,7 +62,9 @@ collections exceed documented bounds despite successful pseudocode output.
   affected-cache handling.
 - [x] Inventory physical bundle images and resources with hashes and
   resumable pages.
-- [ ] Add explicit embedded-image import and Objective-C/Swift views.
+- [x] Import explicit embedded images and resolve bounded in-bundle framework
+  links. The owned arm64 main and x86_64 helper passed real Ghidra import.
+- [ ] Add Objective-C/Swift views with source and coverage distinctions.
 - [ ] Measure blind discovery and false positives on the owned corpus. For
   behavior, freeze a mechanical recovered-C harness before held-out scoring.
 - [ ] Exercise isolation, malformed-input fuzzing, schema migrations and

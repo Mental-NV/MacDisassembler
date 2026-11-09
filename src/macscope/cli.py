@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 from . import __version__, SCHEMA_VERSION
 from .errors import Error
-from .macho import inspect_path, read_regular
+from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
 from . import annotations, bundle, calls, engine, search
@@ -73,6 +73,8 @@ def parser():
     s=sub.add_parser('project');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('create');s.add_argument('path');common(s)
     s=sub.add_parser('import');s.add_argument('input');s.add_argument('--project',required=True);s.add_argument('--arch',choices=('arm64','x86_64','all'));common(s);budgets(s)
+    s.add_argument('--include-images',action='append',metavar='PATH|all',
+                   help='Include an exact bundle-relative executable path in addition to the main image')
     s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','parameter-inference','deep'),default='baseline',help='baseline is unchanged; parameter-inference is an explicit experimental binary-only profile');common(s);budgets(s)
     s=sub.add_parser('status');project(s);common(s)
     s=sub.add_parser('functions');ss=s.add_subparsers(dest='action',required=True)
@@ -272,6 +274,89 @@ def revise_annotation(args, project, command):
     return envelope(command,{'revision':row,'changed':changed},snapshot['analysis_id'])
 
 
+def import_slice(project, image, original, args, deps):
+    artifact = project.path/'inputs'/(image['artifact_sha256']+'.artifact')
+    if not artifact.exists():
+        atomic(artifact,original,mode=0o400)
+    elif hashlib.sha256(read_regular(artifact)).hexdigest()!=image['artifact_sha256']:
+        raise Error('input_integrity','Existing immutable artifact is corrupt')
+    snap = project.path/'inputs'/(image['image_id']+'.macho')
+    start, size = int(image['offset'],16), int(image['size'],16)
+    if not snap.exists():
+        atomic(snap,original[start:start+size],mode=0o400)
+    elif hashlib.sha256(read_regular(snap)).hexdigest()!=image['sha256']:
+        raise Error('input_integrity','Existing immutable slice is corrupt')
+    raw,job = engine.run(project,image,'import',args,deps)
+    if raw.get('validation',{}).get('headless_analysis_enabled') is not False:
+        raise Error('import_analysis','Import did not disable autoanalysis',10)
+    image['loader_evidence'] = {k:raw[k] for k in ('executable_format','language_id','compiler_spec_id','executable_sha256')}
+    image['import_dependencies'] = deps
+    image['engine_baseline_sha256'] = engine.tree_digest(project.path/'engine'/image['image_id'])
+    with project.db(False) as db:
+        db.execute('INSERT OR REPLACE INTO images(id,arch,metadata,imported) VALUES(?,?,?,1)',
+                   (image['image_id'],image['arch'],canonical(image).decode()))
+    return job['job_id']
+
+
+def import_inputs(args, project, deps):
+    bundled = bool(args.include_images)
+    targets = bundle.select_images(args.input,args.include_images) if bundled else [(args.input,None,None)]
+    existing = {row['image_id'] for row in project.images() if row['imported']}
+    scope = 'explicitly selected bundle slices' if bundled else 'explicitly selected slices'
+    result = []
+    size_total = 0
+    known_total = None
+    failed_slice = None
+    relative = None
+    try:
+        for index,(path,relative,expected_sha) in enumerate(targets):
+            failed_slice = None
+            if bundled:
+                original = read_regular(path)
+                size_total += len(original)
+                if size_total > bundle.MAX_HASH_BYTES:
+                    raise Error('bundle_input_limit','Selected bundle images exceed the 512 MiB aggregate limit',7)
+                meta = dict(inspect_bytes(original),input_name=path.name)
+                if expected_sha and meta['artifact_sha256'] != expected_sha:
+                    raise Error('bundle_image_changed','Bundle image changed after inventory',5)
+            else:
+                meta,original = inspect_path(path)
+            if len(meta['slices'])>1 and args.arch is None:
+                raise Error('arch_required','Universal input requires explicit --arch arm64|x86_64|all',2)
+            selected = [s for s in meta['slices'] if args.arch in (None,'all',s['arch'])]
+            if not selected:
+                raise Error('arch_missing','Requested architecture is not present',2)
+            if index == len(targets)-1:
+                known_total = len(result)+len(selected)
+            for slice_meta in selected:
+                image = dict(slice_meta,artifact_sha256=meta['artifact_sha256'],input_name=meta['input_name'])
+                failed_slice = image['image_id']
+                row = {'image_id':failed_slice,'arch':image['arch']}
+                if bundled:
+                    origin = {'relative_path':relative,'main_executable':index==0}
+                    image['bundle_image'] = row['bundle_image'] = origin
+                if failed_slice in existing:
+                    row['status'] = 'already_imported'
+                else:
+                    row.update(status='imported',job_id=import_slice(project,image,original,args,deps))
+                    existing.add(failed_slice)
+                result.append(row)
+    except Error as error:
+        if not result:
+            raise
+        response = envelope('import',result,status='partial',
+                            cov=coverage(scope,len(result),known_total,True,reason=error.code),
+                            diagnostics=[str(error)])
+        partial = {'completed_slices':result,'failed_slice':failed_slice}
+        if bundled:
+            partial['failed_bundle_image'] = relative
+        response['error'] = {'code':error.code,'message':str(error),
+                             'affected_object':failed_slice or relative,
+                             'retryable':error.retryable,'partial_results':partial}
+        return response
+    return envelope('import',result,cov=coverage(scope,len(result),known_total))
+
+
 def execute(a):
     limits(a)
     fresh = a.command == 'decompile' and a.fresh
@@ -322,38 +407,7 @@ def execute(a):
         deps=engine.dependencies(a.ghidra,a.java_home,full=True)
         with p.writer():
             if a.command=='import':
-                meta,original=inspect_path(a.input)
-                if len(meta['slices'])>1 and a.arch is None:raise Error('arch_required','Universal input requires explicit --arch arm64|x86_64|all',2)
-                selected=[s for s in meta['slices'] if a.arch in (None,'all',s['arch'])]
-                if not selected:raise Error('arch_missing','Requested architecture is not present',2)
-                result=[]
-                existing={r['image_id']:r for r in p.images()}
-                try:
-                    for s in selected:
-                        image=dict(s,artifact_sha256=meta['artifact_sha256'],input_name=meta['input_name'])
-                        if image['image_id'] in existing and existing[image['image_id']]['imported']:
-                            result.append({'image_id':image['image_id'],'arch':image['arch'],'status':'already_imported'});continue
-                        artifact=p.path/'inputs'/(meta['artifact_sha256']+'.artifact')
-                        if not artifact.exists():atomic(artifact,original,mode=0o400)
-                        elif hashlib.sha256(read_regular(artifact)).hexdigest()!=meta['artifact_sha256']:raise Error('input_integrity','Existing immutable artifact is corrupt')
-                        snap=p.path/'inputs'/(image['image_id']+'.macho')
-                        content=original[int(s['offset'],16):int(s['offset'],16)+int(s['size'],16)]
-                        if not snap.exists():atomic(snap,content,mode=0o400)
-                        elif hashlib.sha256(read_regular(snap)).hexdigest()!=s['sha256']:raise Error('input_integrity','Existing immutable slice is corrupt')
-                        raw,job=engine.run(p,image,'import',a,deps)
-                        if raw.get('validation',{}).get('headless_analysis_enabled') is not False:raise Error('import_analysis','Import did not disable autoanalysis',10)
-                        image['loader_evidence']={k:raw[k] for k in ('executable_format','language_id','compiler_spec_id','executable_sha256')}
-                        image['import_dependencies']=deps
-                        image['engine_baseline_sha256']=engine.tree_digest(p.path/'engine'/image['image_id'])
-                        with p.db(False) as db:db.execute('INSERT OR REPLACE INTO images(id,arch,metadata,imported) VALUES(?,?,?,1)',(image['image_id'],image['arch'],canonical(image).decode()))
-                        result.append({'image_id':image['image_id'],'arch':image['arch'],'status':'imported','job_id':job['job_id']})
-                except Error as e:
-                    if not result:
-                        raise
-                    response=envelope(command,result,status='partial',cov=coverage('explicitly selected slices',len(result),len(selected),True,reason=e.code),diagnostics=[str(e)])
-                    response['error']={'code':e.code,'message':str(e),'affected_object':image['image_id'],'retryable':e.retryable,'partial_results':{'completed_slices':result,'failed_slice':image['image_id']}}
-                    return response
-                return envelope(command,result,cov=coverage('explicitly selected slices',len(result),len(selected)))
+                return import_inputs(a,p,deps)
             image=p.select(a.image,a.arch)
             if hashlib.sha256(read_regular(p.path/'inputs'/(image['image_id']+'.macho'))).hexdigest()!=image['sha256']:raise Error('input_integrity','Immutable slice digest mismatch')
             if engine.tree_digest(p.path/'engine'/image['image_id'])!=image['engine_baseline_sha256']:raise Error('baseline_integrity','Saved import Program DB changed; create a fresh project')

@@ -7,9 +7,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from macscope import bundle, cli
+from macscope import bundle, cli, engine
 from macscope.errors import Error
-from test_macho import image
+from macscope.storage import Project
+from test_macho import X86_64, image
 
 
 class BundleInventoryTests(unittest.TestCase):
@@ -97,3 +98,53 @@ class BundleInventoryTests(unittest.TestCase):
         with patch.object(bundle, "MAX_ENTRIES", 1):
             partial = self.run_inventory()
         self.assertEqual(partial["coverage"]["truncation_reason"], "entry_limit")
+
+    def test_include_images_resolves_versioned_framework_links_inside_bundle(self):
+        framework = self.contents / "Frameworks" / "Test.framework"
+        real = framework / "Versions" / "A" / "Test"
+        real.parent.mkdir(parents=True)
+        real.write_bytes(image(cpu=X86_64, filetype=6))
+        (framework / "Versions" / "Current").symlink_to("A")
+        (framework / "Test").symlink_to("Versions/Current/Test")
+        alias = "Contents/Frameworks/Test.framework/Test"
+        selected = bundle.select_images(self.app, [alias])
+        self.assertEqual([row[0] for row in selected], [self.main, real])
+        self.assertEqual(selected[1][1], real.relative_to(self.app).as_posix())
+        self.assertEqual(bundle.select_images(self.app, ["all"])[1][2],
+                         hashlib.sha256(real.read_bytes()).hexdigest())
+
+        project = Project.create(self.root / "project")
+        args = cli.parser().parse_args(["import", str(self.app), "--project", str(project.path),
+                                        "--include-images", alias, "--experimental-trusted-input"])
+
+        def worker(workspace, imported, mode, options, dependencies):
+            self.assertEqual(mode, "import")
+            (workspace.path / "engine" / imported["image_id"]).mkdir()
+            result = {"validation": {"headless_analysis_enabled": False},
+                      "executable_format": "Mac OS X Mach-O", "language_id": imported["arch"],
+                      "compiler_spec_id": "test", "executable_sha256": imported["sha256"]}
+            return result, {"job_id": "test"}
+
+        with patch.object(engine, "dependencies", return_value={}), \
+             patch.object(engine, "run", side_effect=worker) as run:
+            imported = cli.execute(args)
+            repeated = cli.execute(args)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual([row["arch"] for row in imported["data"]], ["arm64", "x86_64"])
+        self.assertTrue(imported["data"][0]["bundle_image"]["main_executable"])
+        self.assertEqual(imported["data"][1]["bundle_image"]["relative_path"], selected[1][1])
+        self.assertEqual([row["status"] for row in repeated["data"]], ["already_imported"] * 2)
+
+    def test_include_images_rejects_escaping_links_and_ambiguous_selection(self):
+        (self.root / "outside").write_bytes(image())
+        (self.assets / "escape").symlink_to("../../../outside")
+        (self.assets / "cycle").symlink_to("cycle")
+        for paths, code in (
+            (["Contents/Resources/escape"], "bundle_link_escape"),
+            (["Contents/Resources/cycle"], "bundle_link_limit"),
+            (["../outside"], "bundle_image_path"),
+            (["all", "Contents/MacOS/Fixture"], "bundle_image_selection"),
+        ):
+            with self.subTest(paths=paths), self.assertRaises(Error) as caught:
+                bundle.select_images(self.app, paths)
+            self.assertEqual(caught.exception.code, code)

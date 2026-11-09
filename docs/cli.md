@@ -52,6 +52,9 @@ macscope bundle list path/to/CalculatorFixture.app --kind images --json
 macscope project create workspaces/calculator
 macscope import path/to/CorpusFixture --project workspaces/calculator \
   --arch arm64 --experimental-trusted-input --json
+macscope import path/to/CalculatorFixture.app --project workspaces/calculator \
+  --include-images 'Contents/Frameworks/Example.framework/Example' \
+  --arch all --experimental-trusted-input --json
 macscope analyze --project workspaces/calculator --profile baseline \
   --experimental-trusted-input --timeout 300 --json
 macscope functions list --project workspaces/calculator --limit 100 --json
@@ -146,11 +149,23 @@ and 512 MiB of hashing. Read or budget gaps are partial. Pagination rescans
 the selected scope and rejects a cursor when the inventory changes.
 Header candidates can be checked with `inspect` before import.
 
+Bundle import includes the main executable by default. Repeat
+`--include-images PATH` to add exact bundle-relative image paths or use
+`--include-images all` for the complete physical image inventory. Relative
+framework links are resolved through the bundle's own directory descriptors.
+Escaping, absolute, cyclic, and over-limit links are rejected. The result
+records each canonical relative path and keeps the ordinary immutable image
+identity. Selection is limited to 64 images and 512 MiB in aggregate.
+
+A universal image still requires an explicit architecture selection. The
+selected architecture applies to every image in the import. A failure after
+an earlier image has been committed reports partial completion and the failed
+bundle path. Repeating an import reuses an already imported identity.
+
 `inspect` is a bounded stdlib preflight for thin/fat/fat64 little-endian
 64-bit arm64 and x86_64 executable/dylib/bundle images. It resolves a main
 `.app/Contents/Info.plist` executable and reports companion debug dylibs.
-Every path component is opened without following symlinks. Symlinks,
-including legitimate internal framework links, are rejected in this MVP.
+Ordinary input paths open each component without following symlinks.
 Encrypted images, arm64e, x86_64h, other CPU subtypes, 32-bit images,
 relocatable objects and malformed ranges receive explicit failures. The
 preflight is **not** a complete Mach-O/dyld parser or a security proof.

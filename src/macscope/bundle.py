@@ -1,5 +1,6 @@
 """Bounded, data-only inventory of an application bundle."""
 import hashlib
+from collections import deque
 from itertools import islice
 import os
 from pathlib import Path, PurePosixPath
@@ -12,6 +13,8 @@ from .macho import MAX_INPUT, open_directory, resolve_input
 MAX_ENTRIES = 10000
 MAX_DEPTH = 16
 MAX_HASH_BYTES = 512 * 1024 * 1024
+MAX_SELECTED_IMAGES = 64
+MAX_LINKS = 8
 THIN_MAGIC = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
               b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce"}
 FAT_MAGIC = {b"\xca\xfe\xba\xbe": "big", b"\xca\xfe\xba\xbf": "big",
@@ -144,3 +147,84 @@ def inventory(path, kind):
     return {"bundle_name": path.name, "main_executable": main, "kind": kind,
             "entries_scanned": seen, "bytes_hashed": hashed, "warnings": warnings,
             "records": rows}, sorted(gaps)
+
+
+def physical_image(root, requested):
+    """Resolve relative framework links through directory descriptors anchored at the bundle."""
+    relative = PurePosixPath(requested)
+    if (not relative.parts or relative.is_absolute() or relative.as_posix() != requested
+            or ".." in relative.parts or "\0" in requested or len(os.fsencode(requested)) > 4096
+            or len(relative.parts) > MAX_DEPTH + 1):
+        raise Error("bundle_image_path", "Select an exact bundle-relative image path", 2)
+    remaining = deque(relative.parts)
+    directories = []
+    physical = []
+    links = 0
+    try:
+        directories.append(open_directory(root))
+        device = os.fstat(directories[0]).st_dev
+        while remaining:
+            part = remaining.popleft()
+            if part == "..":
+                if not physical:
+                    raise Error("bundle_link_escape", "Embedded image link escapes the bundle", 5)
+                os.close(directories.pop())
+                physical.pop()
+                continue
+            directory = directories[-1]
+            info = os.stat(part, dir_fd=directory, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                target = PurePosixPath(os.readlink(part, dir_fd=directory))
+                links += 1
+                if target.is_absolute():
+                    raise Error("bundle_link_escape", "Embedded image link must be relative to the bundle", 5)
+                if links > MAX_LINKS or len(target.parts) + len(remaining) > 256:
+                    raise Error("bundle_link_limit", "Embedded image link chain exceeds its bound", 7)
+                remaining.extendleft(reversed(target.parts))
+            elif remaining:
+                if not stat.S_ISDIR(info.st_mode):
+                    raise Error("bundle_image_path", "An embedded image parent is not a directory", 5)
+                if len(physical) >= MAX_DEPTH:
+                    raise Error("bundle_link_limit", "Embedded image path exceeds the directory depth limit", 7)
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                directories.append(child)
+                if fingerprint(os.fstat(child)) != fingerprint(info) or info.st_dev != device:
+                    raise Error("bundle_image_path", "Embedded image directory changed or crosses a mount", 5)
+                physical.append(part)
+            else:
+                if not stat.S_ISREG(info.st_mode):
+                    raise Error("bundle_image_path", "Embedded image must be a regular file", 5)
+                return PurePosixPath(*physical, part).as_posix(), info.st_size
+        raise Error("bundle_image_path", "Embedded image link resolves to a directory", 5)
+    except OSError as error:
+        raise Error("bundle_image_path", "Embedded image is missing or changed during selection", 5) from error
+    finally:
+        for directory in reversed(directories):
+            os.close(directory)
+
+
+def select_images(path, requested):
+    root = Path(os.path.abspath(path))
+    if root.suffix.lower() != ".app":
+        raise Error("bundle_required", "--include-images requires a macOS .app bundle", 2)
+    main = resolve_input(root)[0].relative_to(root).as_posix()
+    if len(requested) >= MAX_SELECTED_IMAGES or ("all" in requested and requested != ["all"]):
+        raise Error("bundle_image_selection", "Use all alone or select at most 63 embedded paths", 2)
+    if requested == ["all"]:
+        manifest, gaps = inventory(root, "images")
+        if gaps:
+            raise Error("bundle_inventory_incomplete", "Image inventory is partial; select explicit paths", 7)
+        rows = {row["relative_path"]: row for row in manifest["records"]}
+        if main not in rows:
+            raise Error("bundle_image_path", "The bundle main executable is missing or has an unsupported header", 5)
+        order = [main, *(path for path in rows if path != main)]
+        if len(order) > MAX_SELECTED_IMAGES:
+            raise Error("bundle_image_selection", "Bundle exceeds 64 images; select explicit paths", 7)
+        return [(root / relative, relative, rows[relative]["sha256"]) for relative in order]
+    selected = {}
+    for relative in [main, *requested]:
+        canonical, size = physical_image(root, relative)
+        selected[canonical] = size
+    if sum(selected.values()) > MAX_HASH_BYTES:
+        raise Error("bundle_input_limit", "Selected bundle images exceed the 512 MiB aggregate limit", 7)
+    return [(root / relative, relative, None) for relative in selected]
