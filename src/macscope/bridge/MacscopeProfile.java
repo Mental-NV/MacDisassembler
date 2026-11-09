@@ -12,6 +12,7 @@ import ghidra.program.model.listing.Program;
 
 public class MacscopeProfile extends HeadlessScript {
     public static final String PROFILE = "macscope-binary-only/1";
+    public static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     private static final int MAX_OPTIONS = 4096;
 
     @Override
@@ -20,6 +21,12 @@ public class MacscopeProfile extends HeadlessScript {
             if (currentProgram == null || !"12.2".equals(getGhidraVersion())) {
                 throw new IllegalStateException("Profile requires a loaded Program and Ghidra 12.2");
             }
+            String[] args = getScriptArgs();
+            if (args.length > 1 || (args.length == 1 && !args[0].equals("parameter-inference"))) {
+                throw new IllegalArgumentException("Only explicit parameter-inference is supported");
+            }
+            boolean inferParameters = args.length == 1;
+            String selectedProfile = inferParameters ? PARAMETER_PROFILE : PROFILE;
             // Reset prior saved/user-specific choices before applying this versioned profile.
             resetAllAnalysisOptions(currentProgram);
             Map<String, String> values = getCurrentAnalysisOptionsAndValues(currentProgram);
@@ -46,7 +53,14 @@ public class MacscopeProfile extends HeadlessScript {
                     disabled.add(name);
                 }
             }
+            if (inferParameters) {
+                setAnalysisOption(currentProgram, "Decompiler Parameter ID", "true");
+            }
             Map<String, String> effective = getCurrentAnalysisOptionsAndValues(currentProgram);
+            String expectedParameterID = inferParameters ? "true" : "false";
+            if (!expectedParameterID.equals(effective.get("Decompiler Parameter ID"))) {
+                throw new IllegalStateException("Unexpected Decompiler Parameter ID setting");
+            }
             for (int i = 0; i < disabled.size() && i < MAX_OPTIONS; i++) {
                 String name = disabled.get(i);
                 if (!"false".equalsIgnoreCase(effective.get(name))) {
@@ -54,11 +68,12 @@ public class MacscopeProfile extends HeadlessScript {
                 }
             }
             Options info = currentProgram.getOptions(Program.PROGRAM_INFO);
-            info.setString("Macscope Profile", PROFILE);
+            info.setString("Macscope Profile", selectedProfile);
+            info.setBoolean("Macscope Parameter Inference", inferParameters);
             info.setString("Macscope Profile Ghidra", getGhidraVersion());
             info.setString("Macscope Disabled Options", new Gson().toJson(disabled));
             info.setBoolean("Macscope Profile Applied", true);
-            println("MacscopeProfile: " + PROFILE + "; disabled " + disabled.size() + " options");
+            println("MacscopeProfile: " + selectedProfile + "; disabled " + disabled.size() + " options");
         } catch (Exception e) {
             // Headless may otherwise proceed after a script exception. Explicitly
             // prevent autoanalysis and abort this file if profile setup failed.

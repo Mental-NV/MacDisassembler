@@ -22,6 +22,58 @@ GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
 
+ANALYSIS_PROFILES = {
+    'baseline': {'name': 'baseline', 'identity': 'baseline/1',
+                 'marker': 'macscope-binary-only/1', 'parameter_inference': False},
+    'parameter-inference': {'name': 'parameter-inference', 'identity': 'parameter-inference/1',
+                 'marker': 'macscope-binary-only-parameters/1', 'parameter_inference': True},
+}
+
+
+def analysis_profile(name='baseline'):
+    try:
+        return dict(ANALYSIS_PROFILES[name])
+    except (KeyError, TypeError):
+        raise Error('unsupported_profile',
+                    'Supported profiles are baseline and experimental parameter-inference; deep remains unsupported', 3) from None
+
+
+def profile_for_snapshot(snapshot):
+    identity_value = snapshot.get('identity', {}).get('profile')
+    for name, spec in ANALYSIS_PROFILES.items():
+        if spec['identity'] == identity_value:
+            return analysis_profile(name)
+    raise Error('unsupported_profile', 'Saved analysis profile is unsupported; no baseline fallback', 3)
+
+
+def validate_analysis_profile(raw, expected, mode):
+    """Confirm the requested policy actually ran before publishing its provenance."""
+    if expected != analysis_profile(expected.get('name')):
+        raise Error('profile_contract', 'Invalid requested profile configuration', 10)
+    recorded = raw.get('analysis_profile', {})
+    if (recorded.get('name') != expected['marker']
+            or recorded.get('applied') is not True
+            or recorded.get('ghidra_version') != '12.2'
+            or recorded.get('parameter_inference_enabled') is not expected['parameter_inference']):
+        raise Error('profile_mismatch', 'Saved Program does not have the requested analysis profile', 10)
+    options = raw.get('effective_analysis_options', {})
+    desired = 'true' if expected['parameter_inference'] else 'false'
+    if options.get('Decompiler Parameter ID') != desired:
+        raise Error('profile_options_mismatch', 'Parameter-inference option differs from the requested profile', 10)
+    option_coverage = raw.get('coverage', {}).get('effective_analysis_options', {})
+    if (option_coverage.get('status') != 'complete'
+            or option_coverage.get('truncated') is not False or option_coverage.get('error')
+            or option_coverage.get('emitted') != len(options)):
+        raise Error('profile_options_incomplete', 'Effective analysis options were not fully recorded', 10)
+    if mode == 'query':
+        # Reopen can register dormant defaults; never run their analysis here.
+        if raw.get('validation', {}).get('headless_analysis_enabled') is not False:
+            raise Error('query_analysis', 'Reopened query unexpectedly enabled autoanalysis', 10)
+    else:
+        for name, value in options.items():
+            if re.search(r'dwarf|pdb|source|demangl|external|library|debug', name, re.I) and value == 'true':
+                raise Error('profile_source_option', 'A source/external analyzer was unexpectedly enabled: ' + name, 10)
+
 
 def digest(path):
     h = hashlib.sha256()
@@ -153,6 +205,10 @@ def run(project, image, mode, args, deps):
         raise Error('hard_memory_unsupported', 'A hard process-memory budget cannot be enforced here. --heap-mib caps only the Java heap.', 3)
     if args.startup_timeout is not None:
         raise Error('startup_budget_unsupported', 'Separate startup deadlines are not yet supported; use --timeout for a total wall deadline', 3)
+    requested_profile = analysis_profile(getattr(args, 'profile', 'baseline')) if mode == 'analyze' else None
+    if mode == 'query':
+        saved_snapshot, _ = project.snapshot(image)
+        requested_profile = profile_for_snapshot(saved_snapshot)
     jobid = uuid.uuid4().hex
     job = project.path/'jobs'/jobid
     job.mkdir(mode=0o700)
@@ -186,9 +242,11 @@ def run(project, image, mode, args, deps):
             argv += ['-readOnly', '-noanalysis']
         else:
             argv += ['-preScript', 'MacscopeProfile.java']
+            if requested_profile['parameter_inference']:
+                argv += [requested_profile['name']]
     argv += ['-scriptPath', str(BRIDGE.resolve()), '-postScript', 'MacscopeBridge.java', str(outfile), mode, str(args.max_functions), str(args.function_timeout), '-max-cpu', '1', '-analysisTimeoutPerFile', str(args.timeout), '-log', str(job/'engine.log'), '-scriptlog', str(job/'script.log')]
     env = {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'HOME':str(project.path/'home'), 'USER':os.environ.get('USER','macscope'), 'TMPDIR':str(job/'tmp')+'/', 'JAVA_HOME':str(j), 'GHIDRA_HEADLESS_MAXMEM':str(args.heap_mib)+'M', 'JAVA_TOOL_OPTIONS':'-Duser.home='+json.dumps(str(project.path/'home'),ensure_ascii=False)+' -Djava.io.tmpdir='+json.dumps(str(job/'tmp'),ensure_ascii=False), 'LANG':'en_US.UTF-8'}
-    manifest = {'job_id':jobid, 'mode':mode, 'image_id':image['image_id'], 'dependencies':deps, 'limits':{'timeout_seconds':args.timeout,'function_timeout_seconds':args.function_timeout,'max_functions':args.max_functions,'jobs':1,'java_heap_mib':args.heap_mib,'process_memory_limit':None,'sampled_job_storage_bytes':512*1024*1024,'storage_is_hard_quota':False}, 'environment':env, 'sandbox_sha256':digest(sandbox)}
+    manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':{'timeout_seconds':args.timeout,'function_timeout_seconds':args.function_timeout,'max_functions':args.max_functions,'jobs':1,'java_heap_mib':args.heap_mib,'process_memory_limit':None,'sampled_job_storage_bytes':512*1024*1024,'storage_is_hard_quota':False}, 'environment':env, 'sandbox_sha256':digest(sandbox)}
     run_process(argv, cwd=job, env=env, timeout=args.timeout, log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
     try:
         if b'Skipping unsupported -loader-' in read_regular(job/'launcher.log',8*1024*1024):
@@ -214,6 +272,8 @@ def run(project, image, mode, args, deps):
             raise Error('engine_input_integrity', 'Ghidra loaded a different input digest')
         if result.get('status') == 'failed':
             raise Error('bridge_failed', 'Bridge failed: '+str(result.get('errors')), 10)
+        if mode != 'import':
+            validate_analysis_profile(result, requested_profile, mode)
         if mode == 'import':
             destination = project.path/'engine'/image['image_id']
             if destination.exists():

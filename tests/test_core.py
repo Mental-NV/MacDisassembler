@@ -413,7 +413,10 @@ class NormalizationTests(unittest.TestCase):
                     'status': 'complete', 'image_base': '0x100000000', 'functions': [external, function]}
         self.deps = {'ghidra_version': '12.2', 'ghidra_path': '/synthetic/ghidra',
                      'java_home': '/synthetic/jdk', 'host_os': 'Synthetic OS'}
-        self.manifest = {'limits': {'max_functions': 100}}
+        self.raw.update(analysis_profile={'name':'macscope-binary-only/1','applied':True,'ghidra_version':'12.2','parameter_inference_enabled':False},
+                        effective_analysis_options={'Decompiler Parameter ID':'false'},
+                        coverage={'effective_analysis_options':{'status':'complete','truncated':False,'error':None,'emitted':1}})
+        self.manifest = {'limits': {'max_functions': 100}, 'analysis_profile': engine.analysis_profile()}
 
     def normalized(self):
         return cli.normalize(copy.deepcopy(self.raw), self.image, self.deps, self.manifest)

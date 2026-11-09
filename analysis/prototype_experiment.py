@@ -24,6 +24,7 @@ PROFILE = "macscope-prototype-experiment/1/"
 CASES = ("DebugAnalysis-arm64", "ReleaseAnalysis-arm64",
          "DebugAnalysis-x86_64", "ReleaseAnalysis-x86_64")
 MARKER = '"macscope-binary-only/1"'
+PARAMETER_MARKER = '"macscope-binary-only-parameters/1"'
 OPTION_POINT = "            Map<String, String> effective = getCurrentAnalysisOptionsAndValues(currentProgram);"
 
 
@@ -55,22 +56,19 @@ def prepare_scripts(destination, mode):
         raise ValueError("Unknown experiment mode")
     destination.mkdir()
     bridge = (ROOT / "src/macscope/bridge/MacscopeBridge.java").read_text()
-    if bridge.count(MARKER) != 1:
+    marker = PARAMETER_MARKER if mode == "paramid" else MARKER
+    if bridge.count(marker) != 1:
         raise ValueError("Bridge profile marker changed; review the experiment adapter")
-    bridge = bridge.replace(MARKER, json.dumps(PROFILE + mode))
+    bridge = bridge.replace(marker, json.dumps(PROFILE + mode))
     (destination / "MacscopeBridge.java").write_text(bridge)
     if mode == "callee":
         shutil.copyfile(ROOT / "analysis/scripts/InferCalleeParameters.java",
                         destination / "InferCalleeParameters.java")
     else:
         profile = (ROOT / "src/macscope/bridge/MacscopeProfile.java").read_text()
-        if profile.count(MARKER) != 1 or profile.count(OPTION_POINT) != 1:
+        if profile.count(marker) != 1 or profile.count(OPTION_POINT) != 1:
             raise ValueError("Production profile changed; review the experiment adapter")
-        profile = profile.replace(MARKER, json.dumps(PROFILE + mode))
-        if mode == "paramid":
-            profile = profile.replace(OPTION_POINT,
-                '            setAnalysisOption(currentProgram, "Decompiler Parameter ID", "true");\n'
-                + OPTION_POINT)
+        profile = profile.replace(marker, json.dumps(PROFILE + mode))
         (destination / "MacscopeProfile.java").write_text(profile)
     return {p.name: sha(read_bytes(p)) for p in destination.glob("*.java")}
 
@@ -151,6 +149,8 @@ def run_case(output, label, mode, source, data, dependencies, timeout, copied_fr
         argv += ["-import", str(case / "CorpusFixture"), "-loader", "MachoLoader",
                  "-loader-loadLibraries", "false", "-loader-linkExistingProjectLibraries",
                  "false", "-loader-reexport", "false", "-preScript", "MacscopeProfile.java"]
+        if mode == "paramid":
+            argv += ["parameter-inference"]
     argv += ["-scriptPath", str(case / "scripts"), "-postScript", "MacscopeBridge.java",
              str(case / "result.json"), "query" if copied_from else "analyze", "5000", "30",
              "-max-cpu", "1", "-analysisTimeoutPerFile", str(max(1, timeout - 10)),

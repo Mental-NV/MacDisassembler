@@ -53,8 +53,9 @@ import ghidra.program.model.symbol.SymbolTable;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.0.0";
+    static final String VERSION = "1.1.0";
     static final String PROFILE = "macscope-binary-only/1";
+    static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final int MAX_INSTRUCTIONS = 2000, MAX_BLOCKS = 500, MAX_EDGES = 500;
     static final int MAX_XREFS = 200, MAX_RANGES = 512, MAX_SECTIONS = 2048;
     static final int MAX_SYMBOLS = 10000, MAX_STRINGS = 5000, MAX_SCAN = 100000;
@@ -170,6 +171,11 @@ public class MacscopeBridge extends HeadlessScript {
         put(profile, "name", info.getString("Macscope Profile", null));
         put(profile, "ghidra_version", info.getString("Macscope Profile Ghidra", null));
         profile.addProperty("applied", info.getBoolean("Macscope Profile Applied", false));
+        profile.addProperty("parameter_inference_enabled", info.getBoolean("Macscope Parameter Inference", false));
+        put(profile, "inference_source", "binary-derived; no source prototypes supplied");
+        put(profile, "inference_status", mode.equals("query") ? "saved Program; inference not rerun" :
+            info.getBoolean("Macscope Parameter Inference", false) ? "enabled during analysis" : "disabled");
+        put(profile, "semantic_validation", "not performed");
         profile.addProperty("host_filesystem_sandboxed", false);
         put(profile, "scope", "Binary-only analyzers; runner must also disable loader library/source discovery. This is not a filesystem sandbox.");
         String disabled = info.getString("Macscope Disabled Options", "[]");
@@ -228,7 +234,8 @@ public class MacscopeBridge extends HeadlessScript {
             fatal = true; errors.add("Query must use -noanalysis and -readOnly");
         } else if (mode.equals("analyze")) {
             Options info = currentProgram.getOptions(Program.PROGRAM_INFO);
-            if (!PROFILE.equals(info.getString("Macscope Profile", null)) ||
+            String appliedProfile = info.getString("Macscope Profile", null);
+            if ((!PROFILE.equals(appliedProfile) && !PARAMETER_PROFILE.equals(appliedProfile)) ||
                 !info.getBoolean("Macscope Profile Applied", false)) {
                 fatal = true; errors.add("Required binary-only pre-analysis profile was not applied");
             }

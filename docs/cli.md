@@ -100,9 +100,10 @@ Inputs are private immutable copies with SHA-256 for the whole container and
 selected slice. The original binary is never changed. A saved full Ghidra
 Program database is retained. Each analysis clones the pristine no-analysis
 import, so a retry cannot silently inherit preceding analyzer mutations.
-The bridge applies `macscope-binary-only/1`, resets and records every effective
-analysis option, and disables source/DWARF/PDB/debug/external/library and
-demangler options. `deep` is explicitly unsupported, not an alias.
+The default bridge profile remains `macscope-binary-only/1`. It resets and
+records every effective analysis option and disables source/DWARF/PDB/debug/
+external/library and demangler options. `deep` is explicitly unsupported,
+not an alias. See the explicit alternate profile below.
 
 SQLite points only to completed, digest-checked immutable JSON snapshots.
 A writer lock serializes import and analyze; readers continue using the
@@ -129,12 +130,72 @@ records; interrupted/disconnected running markers become
 `unknown_after_disconnect`, with no attempt to signal stale PIDs.
 
 Raw bridge JSON and job manifests/logs remain private in the workspace.
-Normalized exports sort records, omit volatile Program-info/timing fields and
+Normalized exports sort function and unordered cross-reference records (retaining
+duplicate references), omit volatile Program-info/timing fields and
 installation paths, and redact `/Users/<name>` prefixes even when embedded
 in recovered binary strings. Raw evidence is retained separately. These
 exports can still contain sensitive recovered code/strings; never publish
 them by default. Logs are bounded per job but retained until the owner removes
 the workspace; no automatic retention or deletion task is installed.
+
+## Experimental binary-derived parameter inference
+
+Baseline remains the default. To request Ghidra's generic whole-program
+`Decompiler Parameter ID` analyzer, explicitly select the alternate profile:
+
+```sh
+macscope analyze --project workspaces/calculator --profile parameter-inference \
+  --experimental-trusted-input --json
+```
+
+This is a binary-only inference pass, not source recovery or a calculator-
+specific call rewrite. It takes no source declarations, dSYMs, symbol-server
+data or manual prototype hints. Symbol-bearing inputs can still provide their
+embedded names. All source/external analyzers disabled by baseline remain
+disabled. The only changed analyzer option is `Decompiler Parameter ID=true`.
+
+Baseline's analyzer configuration and default selection are unchanged; new
+provenance fields and canonical cross-reference ordering change serialized
+exports. Analysis identities already include bridge component hashes, so this
+is not a promise of identical IDs or bytes across code versions. Existing
+snapshots are not rewritten or migrated.
+
+The profile is `parameter-inference/1` with Program marker
+`macscope-binary-only-parameters/1`. Baseline remains `baseline/1`.
+The requested configuration is in the job manifest, normalized snapshot,
+analysis identity and analyze response; the bridge records the applied marker,
+inference flag, source description, semantic-validation status and complete
+effective options. Missing, incomplete or mismatched policy evidence rejects
+the result before snapshot publication. `doctor` lists supported profiles.
+
+Each profile starts from the same pristine import. Switching back to baseline
+does not reuse inferred parameter commits. Existing snapshots stay immutable,
+and cached queries return whichever profile is active. The internal reopened
+query inherits the saved profile and uses `-readOnly -noanalysis`; it never
+silently falls back to baseline or reruns inference.
+
+Inferred argument counts, parameter types, return types and calling-convention
+labels may be wrong. Whole-program inference changes many functions, not just
+the known arm64 invalid-digit call. The tests establish the recorded policy,
+profile isolation and selected static properties, **not semantic equivalence**.
+There is no automatic promotion, automatic profile selection or hidden fallback.
+
+A source-aware fixture matrix covers arm64/x86_64, O0/O2, symbol-bearing/stripped,
+and the owned AppKit app main/command-line tool. It does not launch the app,
+execute recovered pseudocode or validate broad ObjC/Swift behavior:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 tests/integration_profiles.py \
+  --fixture-build-root build/review-v2 \
+  --output-dir /private/tmp/new-macscope-profile-matrix \
+  --experimental-trusted-input
+```
+
+The schema-2 fixture manifest and each input digest must match. The output
+directory must be new; private evidence remains there even on failure.
+Use an absolute build-root path when running from a separate worktree.
+See [the profile evidence review](parameter-inference.md) for measured scope
+and remaining limits.
 
 ## Limits and safety boundaries
 

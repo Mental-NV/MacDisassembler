@@ -1,8 +1,11 @@
 # Independent decompiler evidence review
 
-This is research tooling, not a change to macscope's production profile or CLI.
-It uses only this repository's owned calculator fixtures. A completed decompiler
-operation is not proof that the emitted C-like text preserves behavior.
+This documents the original independent research checkpoint at commit
+`fe1783850642409822f2134bbc293f3c0edbe2a9`. It uses only this repository's
+owned calculator fixtures. A completed decompiler operation is not proof that
+the emitted C-like text preserves behavior. A later
+[explicit alternate CLI profile](parameter-inference.md) builds on this
+research without changing baseline as the default.
 
 ## Findings, 9 November 2026
 
@@ -80,8 +83,9 @@ x86_64. Those changes have **not** been behaviorally validated. The callee-only
 experiment changed one saved signature and four caller pseudocode bodies.
 
 The narrower experiment is the demonstrated option for this diagnosed
-mismatch. Neither approach is enabled automatically. A future production
-option requires an explicit, versioned analysis identity and further review.
+mismatch. Neither approach is enabled automatically. The later alternate CLI
+profile provides an explicit, versioned whole-program option with separate
+provenance; the targeted callee commit remains research-only.
 
 ## Repeat the read-only instruction check
 
@@ -183,6 +187,7 @@ The compact measured checkpoint is in
 [evidence/decompiler-review-20261109.json](evidence/decompiler-review-20261109.json).
 Generated binaries, full engine outputs and private workspaces are not tracked.
 
-Remaining limits: no compiled or executed recovered-C comparison, no stripped
-inference matrix, no ObjC/Swift or third-party population, no source-equivalence
-proof, and no promotion of this research profile into the production default.
+This historical checkpoint did not cover stripped inference inputs or app
+mains. The later profile matrix adds those owned fixtures, without a compiled
+or executed recovered-C comparison, broad ObjC/Swift or third-party population,
+source-equivalence proof, or a change to the production default.

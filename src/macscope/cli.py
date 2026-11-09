@@ -69,7 +69,7 @@ def parser():
     s=sub.add_parser('project');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('create');s.add_argument('path');common(s)
     s=sub.add_parser('import');s.add_argument('input');s.add_argument('--project',required=True);s.add_argument('--arch',choices=('arm64','x86_64','all'));common(s);budgets(s)
-    s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','deep'),default='baseline');common(s);budgets(s)
+    s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','parameter-inference','deep'),default='baseline',help='baseline is unchanged; parameter-inference is an explicit experimental binary-only profile');common(s);budgets(s)
     s=sub.add_parser('status');project(s);common(s)
     s=sub.add_parser('functions');ss=s.add_subparsers(dest='action',required=True)
     for c in ('list','show'):
@@ -96,7 +96,9 @@ def limits(args):
 
 
 def normalize(raw, image, deps, manifest):
-    analysis_key={'image':image['image_id'],'slice_sha256':image['sha256'],'profile':'baseline/1','engine':{k:v for k,v in deps.items() if k not in ('ghidra_path','java_home','host_os')},'language_id':raw['language_id'],'compiler_spec_id':raw['compiler_spec_id'],'options':raw.get('effective_analysis_options',{}),'limits':manifest['limits'],'auxiliary_inputs':[],'import_baseline_sha256':image.get('engine_baseline_sha256')}
+    selected_profile = manifest['analysis_profile']
+    engine.validate_analysis_profile(raw, selected_profile, 'analyze')
+    analysis_key={'image':image['image_id'],'slice_sha256':image['sha256'],'profile':selected_profile['identity'],'profile_configuration':selected_profile,'engine':{k:v for k,v in deps.items() if k not in ('ghidra_path','java_home','host_os')},'language_id':raw['language_id'],'compiler_spec_id':raw['compiler_spec_id'],'options':raw.get('effective_analysis_options',{}),'limits':manifest['limits'],'auxiliary_inputs':[],'import_baseline_sha256':image.get('engine_baseline_sha256')}
     aid=identity(analysis_key)
     def location(value):
         loc={'image_id':image['image_id'],'arch':image['arch'],'address_space':value.partition(':')[0] if not value.startswith('0x') else 'ram','va':None,'rva':None,'slice_file_offset':None,'container_file_offset':None}
@@ -113,6 +115,11 @@ def normalize(raw, image, deps, manifest):
     functions=[]
     for f in raw.get('functions',[]):
         f=dict(f)
+        # Ghidra reference iteration order can differ between identical runs.
+        # Normalize unordered collections without dropping duplicate evidence.
+        for key in ('xrefs_to_entry', 'xrefs_from_sample'):
+            if key in f:
+                f[key] = sorted(f[key], key=canonical)
         engine_entry=f['entry_va']
         va=hex(int(engine_entry,16)) if engine_entry.startswith('0x') else None
         space='ram' if va is not None else engine_entry.partition(':')[0]
@@ -126,7 +133,7 @@ def normalize(raw, image, deps, manifest):
         validate_function(f)
         functions.append(f)
     functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['engine_entry'],f['function_id']))
-    value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','No token-to-address spans, annotations, rich ObjC/Swift metadata views or phase-3 features.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.']}
+    value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','No token-to-address spans, annotations, rich ObjC/Swift metadata views or phase-3 features.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
     def redact(v):
         if isinstance(v,str):return re.sub(r'/Users/[^/\s\"\']+', '$HOME', v)
         if isinstance(v,list):return [redact(x) for x in v]
@@ -173,10 +180,10 @@ def execute(a):
     limits(a)
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
-        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.0.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
+        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.1.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='doctor':
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
-        deps['capabilities']={'cached_queries':True,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False}
+        deps['capabilities']={'cached_queries':True,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
         return envelope(command,deps)
     if a.command=='inspect':
         data,_=inspect_path(a.input)
@@ -200,7 +207,7 @@ def execute(a):
         # All budget validation occurs before importing or mutating workspace.
         if not a.experimental_trusted_input:raise Error('isolation_required','Engine operations require explicit --experimental-trusted-input for trusted user-owned fixtures only',3)
         if a.jobs!=1 or a.max_memory_mib is not None or a.startup_timeout is not None:raise Error('unsupported_budget','Only jobs=1, total --timeout and Java-only --heap-mib are supported; hard process-memory/startup budgets are rejected',3)
-        if a.command=='analyze' and a.profile!='baseline':raise Error('unsupported_profile','Only versioned baseline/1 is implemented; deep is not an alias',3)
+        if a.command=='analyze':engine.analysis_profile(a.profile)
         if any(c in str(p.path) for c in ('\"','\\','\n','\r')):raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
         deps=engine.dependencies(a.ghidra,a.java_home,full=True)
         with p.writer():
@@ -252,7 +259,7 @@ def execute(a):
             with p.db(False) as db:
                 db.execute('INSERT OR IGNORE INTO analyses(id,image_id,payload) VALUES(?,?,?)',(aid,image['image_id'],canonical(record).decode()))
                 db.execute('UPDATE images SET active_analysis=? WHERE id=?',(aid,image['image_id']))
-            return envelope(command,{'image_id':image['image_id'],'function_count':len(normalized['functions']),'job_id':job['job_id'],'decompile_summary':raw.get('decompile_summary'),'limitations':normalized['limitations']},aid,raw['status'],coverage('selected image analysis',len(normalized['functions']),raw.get('function_count_total_reported_by_engine'),raw['status']!='complete',reason='engine_or_facet_partial' if raw['status']!='complete' else None))
+            return envelope(command,{'image_id':image['image_id'],'function_count':len(normalized['functions']),'job_id':job['job_id'],'decompile_summary':raw.get('decompile_summary'),'analysis_profile':job['analysis_profile'],'limitations':normalized['limitations']},aid,raw['status'],coverage('selected image analysis',len(normalized['functions']),raw.get('function_count_total_reported_by_engine'),raw['status']!='complete',reason='engine_or_facet_partial' if raw['status']!='complete' else None))
     image=p.select(a.image,a.arch)
     snapshot,record=p.snapshot(image)
     aid=snapshot['analysis_id']

@@ -15,7 +15,8 @@ contains documentation only.
   tested macOS arm64 host.
 - Version/doctor, bounded Mach-O/app-main inspection, private project creation,
   explicit thin/universal slice import without autoanalysis, versioned baseline
-  analysis, function list/show, disassembly, cached pseudocode, references,
+  analysis and explicitly selected binary-derived parameter inference,
+  function list/show, disassembly, cached pseudocode, references,
   CFG JSON/DOT, project/job status and normalized exports.
 - Package-owned Java bridge, effective analyzer-option recording, real saved
   Program databases, immutable digest identities, SQLite committed snapshots,
@@ -60,4 +61,6 @@ collections exceed documented bounds despite successful pseudocode output.
 An opt-in research harness and [documented regression](decompiler-review.md)
 compare instruction evidence and binary-derived prototype inference on the
 owned calculator. They do not change production defaults or establish
-pseudocode behavioral equivalence.
+pseudocode behavioral equivalence. The alternate CLI profile is explicitly
+selected with `--profile parameter-inference`; baseline remains unchanged
+as the default. See [profile validation](parameter-inference.md).

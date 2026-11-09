@@ -250,8 +250,9 @@ class ExperimentTests(unittest.TestCase):
             self.assertIn("MacscopeBridge.java", hashes)
             if mode != "callee":
                 profile = (destination / "MacscopeProfile.java").read_text()
-                self.assertEqual('setAnalysisOption(currentProgram, "Decompiler Parameter ID", "true")'
-                                 in profile, mode == "paramid")
+                self.assertIn(experiment.PROFILE + mode, profile)
+                marker = experiment.PARAMETER_MARKER if mode == "paramid" else experiment.MARKER
+                self.assertNotIn(marker, profile)
         self.assertEqual(source.read_bytes(), before)
 
     def test_profile_adapter_rejects_drift_or_unknown_mode(self):
