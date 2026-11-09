@@ -5,6 +5,7 @@ from collections import Counter
 import json
 from pathlib import Path
 
+from compare_heldout_aggregates import BUILDS, PROFILES, ROUTINES, STATES
 from evaluate import CORE_ROUTINES
 from score_discovery import verified_captures
 from validate_decompiler_evidence import compare_results, index_functions, read_bytes, read_json, sha, write_new_json
@@ -102,6 +103,78 @@ def summarize(records):
     }
 
 
+def heldout_evidence(root, plan):
+    manifest = root / "frozen-captures.json"
+    report = root / "report.json"
+    behavior = read_json(report)
+    if (behavior["status"] not in ("passed", "partial")
+            or behavior["plan_sha256"] != sha(read_bytes(root / "frozen-plan.json"))
+            or behavior["captures_sha256"] != sha(read_bytes(manifest))):
+        raise ValueError("Held-out behavior report does not match its frozen plan and captures")
+    expected = {(f"{arch}-{opt}", state, profile) for arch, opt in BUILDS
+                for state in STATES for profile in PROFILES}
+    captures = {}
+    for row in read_json(manifest):
+        key = tuple(row[field] for field in ("variant", "symbols", "profile"))
+        if key in captures or key not in expected or row["file"] != "-".join(key) + ".json":
+            raise ValueError("Unexpected or duplicate held-out export")
+        raw = read_bytes(root / row["file"])
+        snapshot = json.loads(raw)["data"]
+        binary = plan["inputs"][key[0]][key[1]]
+        if (sha(raw) != row["sha256"] or snapshot["image"]["sha256"] != binary
+                or snapshot["identity"]["profile"] != key[2] + "/1"
+                or snapshot["identity"]["engine"]["native_decompiler_sha256"] != plan["native_sha256"]):
+            raise ValueError("Held-out export differs from its frozen identity")
+        captures[key] = (dict(row, case=key[0], input_sha256=binary, export_sha256=row["sha256"]), snapshot)
+    if captures.keys() != expected:
+        raise ValueError("Incomplete held-out export population")
+    rows = {}
+    for row in behavior["results"]:
+        key = tuple(row[field] for field in ("variant", "symbols", "profile"))
+        index = (*key, row["routine"])
+        provenance, snapshot = captures[key]
+        if (index in rows or row["sha256"] != provenance["export_sha256"]
+                or row["analysis_id"] != snapshot["analysis_id"]):
+            raise ValueError("Held-out verdict differs from its capture identity")
+        if row["status"] == "passed":
+            counts = row["results"]
+            if (counts["directed"] != 256 or counts["seeded"] != 10000 or counts["mismatches"]
+                    or counts["undefined_results"]):
+                raise ValueError("Held-out pass does not cover the declared domain")
+        rows[index] = row
+    if rows.keys() != {(*key, routine) for key in expected for routine in ROUTINES}:
+        raise ValueError("Incomplete held-out verdict population")
+    return captures, rows
+
+
+def compare_heldout(control, candidate):
+    control, candidate = control.resolve(), candidate.resolve()
+    plan_paths = [root / "frozen-plan.json" for root in (control, candidate)]
+    before_plan, after_plan = (read_json(path) for path in plan_paths)
+    fields = ("policy", "source", "inputs", "compiler_sha256", "sdk_version")
+    launcher = "compare_heldout_aggregates.py"
+    contract = [{name: digest for name, digest in plan["files_sha256"].items() if name != launcher}
+                for plan in (before_plan, after_plan)]
+    if (any(before_plan[key] != after_plan[key] for key in fields) or contract[0] != contract[1]
+            or after_plan["input_plan_sha256"] != sha(read_bytes(plan_paths[0]))):
+        raise ValueError("Held-out input or evaluator contract differs")
+    profiles = list((candidate / "projects").glob("*/jobs/*/sandbox.sb"))
+    denial = "(deny file-read-data (subpath " + json.dumps(str(control)) + "))"
+    if len(profiles) != 3 * len(BUILDS) * len(STATES) or any(denial not in p.read_text() for p in profiles):
+        raise ValueError("Candidate worker policy does not deny the original evaluator root")
+    old_captures, old = heldout_evidence(control, before_plan)
+    new_captures, new = heldout_evidence(candidate, after_plan)
+    pairs = [check_capture(old_captures[key], new_captures[key]) for key in old_captures]
+    changes = Counter()
+    for key, before in old.items():
+        after = new[key]
+        if before["entry"] != after["entry"]:
+            raise ValueError("Held-out evaluator entry differs between engines")
+        changes[before["status"] + " -> " + after["status"]] += 1
+    return {"captures": pairs, "verdicts": dict(changes), "sandbox_profiles_checked": len(profiles),
+            "reports_sha256": [sha(read_bytes(root / "report.json")) for root in (control, candidate)]}
+
+
 def run(args):
     pairs = {}
     controls = verified_captures(args.fixture_build_root, args.control_matrix)
@@ -128,7 +201,7 @@ def run(args):
             changes.append({"key": list(index), "before": verdict(left), "after": verdict(right),
                             "instruction_bytes": left["llvm_instruction_bytes"]})
     sides = {"control": before, "candidate": after}
-    return {
+    report = {
         "schema": "macscope-fixed-width-printer-behavior/1", "captures": list(pairs.values()),
         "result_sha256": {side: [sha(read_bytes(path)) for path in paths] for side, paths in
                           (("control", args.control_results), ("candidate", args.candidate_results))},
@@ -137,6 +210,9 @@ def run(args):
                for side, rows in sides.items()},
         "changed_verdicts": changes,
     }
+    if args.heldout_pair:
+        report["heldout"] = compare_heldout(*args.heldout_pair)
+    return report
 
 
 def main():
@@ -146,6 +222,7 @@ def main():
     for side in ("control", "candidate"):
         parser.add_argument("--" + side + "-results", nargs=3, metavar=("CORE", "AGGREGATE", "OPERATIONS"),
                             required=True, type=Path)
+    parser.add_argument("--heldout-pair", nargs=2, metavar=("CONTROL", "CANDIDATE"), type=Path)
     args = parser.parse_args()
     report = run(args)
     write_new_json(args.output, report)

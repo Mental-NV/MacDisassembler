@@ -29,6 +29,13 @@ class AggregateCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(Unsupported, "undefined_stack_value_consumed"):
             lowered("undefined4 uStack_4; return ZEXT816(uStack_4 + param_1);")
 
+    def test_preserves_predeclared_store_width_address_and_value(self):
+        for width in (16, 32, 64):
+            store = f"STORE_LE{width}((void *)(param_1 + 3), param_1);"
+            self.assertIn(store, lowered(store + " return ZEXT816(param_1);"))
+        with self.assertRaisesRegex(Unsupported, "unknown_identifier:STORE_LE128"):
+            lowered("STORE_LE128((void *)param_1, param_1); return ZEXT816(param_1);")
+
     def test_does_not_rewrite_a_missing_aggregate_signature_or_unknown_dependency(self):
         with self.assertRaisesRegex(Unsupported, "aggregate_abi_unverified"):
             lowered("return param_1;", header="long FUN_100(long param_1)")

@@ -1,0 +1,56 @@
+--- a/printc.cc
++++ b/printc.cc
+@@ -571,0 +572,4 @@
++
++/// Find an implied pointer cast over a same-width address plus an explicit
++/// byte displacement that does not preserve the scalar store's alignment.
++static const PcodeOp *byteOffsetStoreCast(const Varnode *pointer,int4 width)
+@@ -572,0 +577,20 @@
++{
++  if (!pointer->isImplied() || pointer->hasImpliedField() || pointer->isVolatile())
++    return (const PcodeOp *)0;
++  const PcodeOp *cast = pointer->getDef();
++  if (cast == (const PcodeOp *)0 || cast->code() != CPUI_CAST)
++    return (const PcodeOp *)0;
++  const Varnode *address = cast->getIn(0);
++  if (!address->isImplied() || address->hasImpliedField() || address->isVolatile()
++      || address->getSize() != pointer->getSize())
++    return (const PcodeOp *)0;
++  const PcodeOp *add = address->getDef();
++  if (add == (const PcodeOp *)0 || add->code() != CPUI_INT_ADD)
++    return (const PcodeOp *)0;
++  const Varnode *displacement = add->getIn(1);
++  if (add->getIn(0)->isConstant() || !displacement->isConstant()
++      || (displacement->getOffset() & (width - 1)) == 0)
++    return (const PcodeOp *)0;
++  return cast;
++}
++
+@@ -575,0 +600,27 @@
++  const Varnode *pointer = op->getIn(1);
++  const Varnode *value = op->getIn(2);
++  int4 width = value->getSize();
++  const AddrSpace *space = op->getIn(0)->getSpaceFromConst();
++  if (getName() == "c-language" && !option_nocasts && !value->isVolatile()
++      && space == glb->getDefaultDataSpace() && space->getType() == IPTR_PROCESSOR
++      && !space->isBigEndian() && space->getWordSize() == 1 && (width == 2 || width == 4 || width == 8)) {
++    const Datatype *type = pointer->getHighTypeReadFacing(op);
++    if (type->getMetatype() == TYPE_PTR) {
++      const Datatype *element = ((const TypePointer *)type)->getPtrTo();
++      type_metatype meta = element->getMetatype();
++      const PcodeOp *cast = byteOffsetStoreCast(pointer,width);
++      if (cast != (const PcodeOp *)0 && element->getSize() == width && !element->isEnumType()
++          && (meta == TYPE_INT || meta == TYPE_UINT || meta == TYPE_UNKNOWN)) {
++        const char *name = width == 2 ? "STORE_LE16" : (width == 4 ? "STORE_LE32" : "STORE_LE64");
++        pushOp(&function_call,op);
++        pushAtom(Atom(name,optoken,EmitMarkup::no_color,op));
++        pushOp(&comma,op);
++        pushOp(&typecast,op);
++        pushType(glb->types->getTypePointer(pointer->getSize(),glb->types->getTypeVoid(),1));
++        pushVn(cast->getIn(0),cast,mods);
++        recurse();
++        pushVn(value,op,mods);
++        return;
++      }
++    }
++  }

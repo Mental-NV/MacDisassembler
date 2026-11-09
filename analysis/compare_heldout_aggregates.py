@@ -21,15 +21,15 @@ from macscope.macho import thin
 ROUTINES = ("heldout_packet", "heldout_checked")
 BUILDS = tuple(product(("arm64", "x86_64"), ("O0", "O2")))
 STATES = ("sym", "stripped")
-STORE_SOURCE = "heldout_store.c"
-SOURCES = {"aggregate": "heldout_aggregate.c", "arithmetic": "heldout_arithmetic.c", "stores": STORE_SOURCE}
+STORE_SOURCES = {"stores": "heldout_store.c", "store-alias": "heldout_store_alias.c"}
+SOURCES = {"aggregate": "heldout_aggregate.c", "arithmetic": "heldout_arithmetic.c", **STORE_SOURCES}
 COMPAT = "aggregate_compat.h"
 FROZEN = (COMPAT, "aggregate_compat.py", "compare_heldout_aggregates.py",
           "compare_heldout_switch.py", "recovered_compare.py")
 
 
 def fixture_contract(source):
-    if source == STORE_SOURCE:
+    if source in STORE_SOURCES.values():
         return "heldout_store.h", "compare_heldout_store_harness.c"
     return "heldout_aggregate.h", "compare_heldout_aggregate_harness.c"
 
@@ -148,7 +148,7 @@ def evaluate(directory, routine, record, definitions, compiler, sdk, files, sour
     directory.mkdir()
     (directory / "candidate.c").write_text(lowered)
     flags = ["-fsanitize=address", f"-DRECOVERED={record['name']}", f"-DCHECKED={int(routine == ROUTINES[1])}"]
-    if source == STORE_SOURCE:
+    if source in STORE_SOURCES.values():
         _, parameters, _, _ = source_parts(record["pseudocode"], record["name"])
         pointer = "*" in parameters.split(",", 1)[0]
         flags += ["-fno-strict-aliasing", f"-DPOINTER_INPUT={int(pointer)}"]
