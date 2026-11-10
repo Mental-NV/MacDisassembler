@@ -684,7 +684,64 @@ def job_command(args, project, command):
     return envelope(command,redact(rows),status='partial' if gaps else 'complete',cov=cov)
 
 
+IMAGE_COVERAGE_FACETS = (
+    'address_references', 'computed_flow_sites', 'effective_analysis_options', 'exports', 'functions',
+    'imports', 'program_info_options', 'sections', 'strings', 'symbols',
+)
+FUNCTION_COVERAGE_FACETS = (
+    'address_spans', 'body_ranges', 'cfg', 'entry_labels', 'instructions', 'pseudocode',
+    'xrefs_from', 'xrefs_to_entry',
+)
+
+
+def facet_gap(facet):
+    if not isinstance(facet, dict):
+        return None
+    if facet.get('truncated'):
+        return 'limit'
+    if facet.get('error') or facet.get('status') in ('partial','error','failed','timeout','unsupported','unknown'):
+        return 'incomplete'
+    return None
+
+
+def analysis_coverage_reasons(snapshot):
+    if snapshot['status'] == 'complete':
+        return []
+    raw = snapshot['engine']
+    reasons = [reason for flag, reason in (
+        ('analysis_timed_out', 'analysis_timeout'), ('functions_truncated', 'discovery_limit'),
+        ('output_budget_reached', 'engine_output_limit'), ('strings_or_names_truncated', 'engine_text_limit'),
+    ) if raw.get(flag)]
+    image_facets = raw.get('coverage')
+    if isinstance(image_facets, dict):
+        for name in IMAGE_COVERAGE_FACETS:
+            gap = facet_gap(image_facets.get(name))
+            if gap and (name, gap) != ('functions', 'limit'):
+                reasons.append(f'image_{name}_{gap}')
+            elif gap and 'discovery_limit' not in reasons:
+                reasons.append('discovery_limit')
+    function_reasons = set()
+    for function in snapshot['functions']:
+        facets = function.get('coverage')
+        if not isinstance(facets, dict):
+            continue
+        for name in FUNCTION_COVERAGE_FACETS:
+            facet = facets.get(name)
+            gap = facet_gap(facet)
+            if gap and not (name == 'pseudocode' and facet.get('reason') == 'unresolved_control_flow'):
+                function_reasons.add(f'function_{name}_{gap}')
+    reasons.extend(sorted(function_reasons))
+    recovery = raw.get('boundary_recovery')
+    if isinstance(recovery, dict) and recovery.get('status') == 'partial':
+        reasons.append('boundary_recovery_incomplete')
+    if 'control_flow_review' in snapshot:
+        reasons.append('unresolved_control_flow')
+    reasons.extend(body_ownership.reasons(snapshot.get('body_ownership',{})))
+    return reasons or ['engine_or_facet_partial']
+
+
 def analysis_status(snapshot, record, pins):
+    view = flow_evidence.snapshot_view(snapshot)
     raw = snapshot['engine']
     analysis_identity = snapshot.get('identity')
     saved = analysis_identity.get('engine') if isinstance(analysis_identity, dict) else None
@@ -707,12 +764,12 @@ def analysis_status(snapshot, record, pins):
                            or facet.get('truncated') or facet.get('error')))
     total = raw.get('function_count_total_reported_by_engine')
     summary = raw.get('decompile_summary')
-    return {'status':snapshot['status'], 'analysis_id':snapshot['analysis_id'], 'job_id':record.get('job_id'),
+    return {'status':view['status'], 'analysis_id':snapshot['analysis_id'], 'job_id':record.get('job_id'),
             'function_count':len(snapshot['functions']),
             'function_total':total if type(total) is int and total >= 0 else None,
             'decompile_summary':summary if isinstance(summary, dict) else None,
             'analysis_profile':snapshot.get('analysis_profile'),
-            'coverage_gaps':gaps, 'versions':versions,
+            'coverage_gaps':gaps, 'coverage_reasons':analysis_coverage_reasons(view), 'versions':versions,
             'freshness':{'status':freshness,'scope':'packaged_worker','changed':changed,'missing':missing}}
 
 
@@ -788,20 +845,16 @@ def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=Fa
             'analysis_profile': snapshot['analysis_profile'], 'limitations': snapshot['limitations']}
     if resumed_from is not None:
         data.update(resumed_from=resumed_from,reused_restart=reused)
-    reasons = ['engine_or_facet_partial'] if snapshot['engine'].get('status',snapshot['status']) != 'complete' else []
     recovery = snapshot['engine'].get('boundary_recovery')
     if recovery is not None:
         data['boundary_recovery'] = recovery
-        if recovery['status'] == 'partial':
-            reasons.append('boundary_recovery_incomplete')
     if 'manual_boundaries' in snapshot['engine']:
         data['manual_boundaries'] = snapshot['engine']['manual_boundaries']
     if 'control_flow_review' in view:
         data['control_flow_review'] = view['control_flow_review']
-        reasons.append('unresolved_control_flow')
     if 'body_ownership' in view:
         data['body_ownership'] = view['body_ownership']
-        reasons.extend(body_ownership.reasons(view['body_ownership']))
+    reasons = analysis_coverage_reasons(view)
     return envelope(command,data,snapshot['analysis_id'],view['status'],
                     coverage('selected image analysis',len(snapshot['functions']),
                              snapshot['engine'].get('function_count_total_reported_by_engine'),bool(reasons),
@@ -1788,8 +1841,7 @@ def execute_command(a, address_selection=None):
     if a.command=='export':
         if a.include_annotations:
             snapshot=dict(snapshot,annotations=redact({'revision':revision,'records':annotations_rows}))
-        reasons = ['unresolved_control_flow'] if 'control_flow_review' in snapshot else []
-        reasons.extend(body_ownership.reasons(snapshot.get('body_ownership',{})))
+        reasons = analysis_coverage_reasons(snapshot)
         reason = ';'.join(reasons) or None
         return envelope(command,snapshot,aid,snapshot['status'],coverage('committed normalized image export',len(functions),snapshot['engine'].get('function_count_total_reported_by_engine'),snapshot['status']!='complete',reason=reason),['Private recovered code/strings may be sensitive. Absolute host paths and volatile job timings are omitted.'])
     if a.command=='functions' and a.action=='list':

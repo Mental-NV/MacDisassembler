@@ -497,6 +497,9 @@ collections exceed documented bounds despite successful pseudocode output.
   All 32 normalized exports matched the prior wheel and all 2,263
   native pseudocode requests completed. The live doctor probe and four
   fresh queries with offline receipt replay passed.
+- [x] Report the [saved causes of partial coverage](cli.md#project-and-job-status)
+  consistently in analysis, export and status. All 32 owned matrix
+  snapshots reopened offline and retained their saved export payloads.
 - [x] Run the [dSYM-assisted diagnostic](phase1-findings.md#dsym-assisted-diagnostic)
   on the same eight stripped inputs. Ghidra imported all eight matched
   companions and decompiled all 120 controlled entries in the separately

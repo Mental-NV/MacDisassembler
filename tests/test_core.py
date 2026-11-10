@@ -1591,6 +1591,24 @@ class CliTests(TemporaryCase):
         self.assertNotIn('control_flow_gaps', target)
         self.assertEqual(target['decompile_status'], 'complete')
 
+    def test_analysis_and_export_report_all_saved_coverage_reasons(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        snapshot.update(status='partial', analysis_profile={'name':'baseline'})
+        snapshot['engine']['status'] = 'partial'
+        for function in snapshot['functions'][:2]:
+            function['coverage'] = {'xrefs_from': {'status':'partial', 'truncated':True}}
+        snapshot['functions'][2]['blocks'][0]['flow'] = 'COMPUTED_JUMP'
+        reasons = ['function_xrefs_from_limit', 'unresolved_control_flow']
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            exported = cli.execute(self.args('export'))
+            summary = cli.execute(self.args('status'))['data']['images'][0]['analysis']
+        analyzed = cli.analysis_response('analyze', snapshot, 'owned-job')
+        for result in (analyzed, exported):
+            self.assertEqual(result['status'], 'partial')
+            self.assertEqual(result['coverage']['truncation_reason'], ';'.join(reasons))
+        self.assertEqual(summary['coverage_reasons'], reasons)
+        self.assertNotIn('control_flow_gaps', snapshot['functions'][2])
+
     def test_resolved_switch_and_indirect_call_do_not_imply_a_missing_jump(self):
         snapshot = copy.deepcopy(self.snapshot)
         target = snapshot['functions'][2]

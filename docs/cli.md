@@ -1428,6 +1428,20 @@ queries remain available while the snapshot passes its own integrity checks.
 Status checks run without Ghidra or Java. Program checks can read the full
 saved project trees.
 
+`analyze` and `export` report saved coverage limits in the response's
+`truncation_reason`. `status` lists the same reasons for each checked
+analysis under `coverage_reasons`. The report distinguishes a bounded
+function facet, such as `function_xrefs_from_limit`, from unresolved
+control flow. Older partial snapshots with insufficient detail use
+`engine_or_facet_partial`.
+
+An offline check reopened 32 owned matrix snapshots. It reported 16
+cases with an outgoing-reference limit, eight with both that limit
+and unresolved control flow, and three with unresolved control flow
+alone. Five cases reported complete coverage. The exported snapshot
+payloads matched the saved exports. The report SHA-256 is
+`b404637eb3f8efb5ae8457e5bfae0c9161049c54d367bb67e795dddb49041652`.
+
 The installed CLI reported seven saved functions per slice after owned
 arm64 and x86_64 import, analysis and fresh decompilation. It reported an
 archived 44-function analysis as partial and stale, and surfaced distinct
