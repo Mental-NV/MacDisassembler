@@ -658,44 +658,60 @@ remaining group members while the child PID is still reserved, then
 reaps the launcher. Timeout, interruption, and failure preserve prior
 committed results.
 
-The macOS seatbelt profile denies network access. It restricts user-home
-reads to the private project, bridge, exact engine/JDK paths, and
-the listed ancestor directories. Filesystem writes by path are confined to
-the project, with `/dev/null` available to the launcher. HOME, Java user
-state, cwd, and temporary files are private to the workspace. The worker
-inherits a small explicit environment.
+The macOS seatbelt profile denies network access and restricts user-home
+reads to the private project, bridge, exact engine/JDK paths, and listed
+ancestor directories. Each worker gets a newly created writable job
+directory with its own HOME, Java settings, working directory, and
+temporary files. The launcher also uses `/dev/null`. Saved inputs,
+snapshots, the index, and previous jobs are outside the write scope.
+Program copies with symbolic links fail before a worker launches.
 
-In a local canary check, the worker could read its project, bridge, Ghidra,
-and JDK files and write its temporary files. It could neither write to a
-scratch sibling directly or through a symlink nor connect to a loopback
-listener. An unrelated user-home read was denied. Non-home reads remain
-broadly available. The worker could write through a hard link already
-placed inside the project. The policy remains for trusted owned inputs.
-Missing or broken isolation fails closed. Engine commands require the
-explicit experimental flag.
+The installed canary check allowed reads of staged inputs and writes
+to the current job. It denied writes to the index, a saved snapshot, an
+input, a prior Program, and the shared workspace home. The kernel also
+denied writes through a hard link staged in the input directory and
+through a symlink aimed at an outside file. Creating a new hard link
+from outside the job and connecting to a loopback listener were denied.
+Non-home reads remain broadly available. The policy is for trusted owned
+inputs. Missing or broken isolation fails closed.
 
-The write policy change gives new analyses a different isolation identity.
-Earlier committed snapshots and published query receipts remain readable.
-Restarting an unfinished job requires its exact recorded policy. An older
-job with a mismatched policy returns `job_resume_engine` before launch.
+Every job records a digest of its exact path-specific policy. Restart
+validates the cancelled job against that original path. The replacement
+worker gets a new private path and policy digest. An import publication
+journal binds the policy to the job that produced the Program. Earlier
+committed snapshots and published query receipts remain readable.
+An unfinished job carrying an older policy returns `job_resume_engine`
+before launch.
 
-The installed-wheel matrix covered both analysis profiles in four scopes.
-It used symbol-bearing arm64 and stripped x86_64 with default Ghidra 12.2,
+The installed-wheel matrix covered both profiles in four scopes.
+It used symbol-bearing arm64 and stripped x86_64 with stock Ghidra 12.2,
 and stripped arm64 and symbol-bearing x86_64 with the experimental tree.
-All eight scopes imported, analyzed, and reproduced the cached C in a
-fresh query. The saved Program and export digests matched before and
-after each query, and all eight receipts replayed. A prior published
-receipt replayed under the new wheel. On a copy with that receipt
-removed, a simulated unfinished job carrying the old policy was
-rejected before a worker launched.
+All eight scopes imported, analyzed, and reproduced their cached C in
+fresh queries. Saved Programs and exports retained their hashes. All
+eight receipts replayed. A prior published receipt also replayed. On a
+copy with the receipt removed, a simulated unfinished job using the old
+policy was rejected before launch.
 
-The local matrix report in
-`/private/tmp/macscope-worker-isolation.X9QyEf/matrix/report.json`
-has SHA-256 `1258b6d9d617325fc90db3ec6c0c2ca056995adebb9ed8dc45fdfd60f931a3c6`.
-The installed canary and hard-link reports in the same trial directory
-have SHA-256 digests
-`b057a7bd67921efad8ee6ae1471ee3e6e4be0ef86c158a6bf768314a1b8b4f67`
-and `9eec5bf40bb7afe8df63fee12a6e1fe8e79cb0ecd5647e40b828eb05a8252bdd`.
+A separate live trial cancelled and restarted import, analysis, and
+fresh decompilation, then replayed each receipt. Import restarted from
+the staged bytes after removal of the scratch original. The cancelled
+analysis and query preserved the previous export. A repeated baseline
+analysis produced the same analysis ID and byte-identical export in a
+different job. A final wheel reproduced the archived forwarded-return
+query and rejected symlink aliases for both an imported Program and
+an earlier analysis job before starting the worker.
+
+| Local report | SHA-256 |
+| --- | --- |
+| `canaries/report.json` | `d0872264aca79c01fc49238884295d4a97c6a70fe8dc89b42f4f364b73cc71b3` |
+| `matrix/report.json` | `f9ed662dc4945045084a2573f628068b95aef35fcf2e213838658b9267387496` |
+| `restart/report.json` | `ed0d16685dc8c2d3b0891b32d5dc1737171b03c9d22af22576f72ed95250be01` |
+| `repeat/report.json` | `ca918e4e59bf5642269db799a0accb139adff91ff3118123cf296ca0de4e4af1` |
+| `final-check/report.json` | `ba81b9eba2326e3e58e80cbfb4edae7e94cfaf2f2865c0e3cf108056383a73cb` |
+
+The reports are under `/private/tmp/macscope-job-isolation.RNU3U6`.
+The previous workspace-wide policy was measured separately in
+`/private/tmp/macscope-worker-isolation.X9QyEf/matrix/report.json`.
 
 No source/dSYM discovery, dependency execution, arbitrary user scripts,
 network symbol fetches, input execution, remote model calls, or automatic

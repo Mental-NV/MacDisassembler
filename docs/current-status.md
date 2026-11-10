@@ -34,10 +34,12 @@ contains documentation only.
 ## Phase-2 boundaries still open
 
 Engine operations are **trusted-owned-input-only experimental**, with an
-explicit opt-in. The worker denies network access, restricts user-home reads,
-and confines filesystem write paths to the private project and `/dev/null`.
-A staged hard link inside the project can still refer outside it. Hard
-process-memory and disk quotas are unavailable. Isolation errors fail closed.
+explicit opt-in. The worker denies network access, restricts user-home
+reads, and confines write paths to its own newly created job directory
+and `/dev/null`. The shared index, saved inputs, and earlier jobs are
+outside that write scope. Non-home reads remain broadly available.
+Hard process-memory and disk quotas are unavailable. Isolation errors
+fail closed.
 
 Public queries default to completed snapshots. Explicit `decompile --fresh`
 uses the saved Program and the read-only/noanalysis worker. Polished terminal
@@ -239,8 +241,11 @@ collections exceed documented bounds despite successful pseudocode output.
   and a byte-identical export from an earlier schema 1.0 workspace.
 - [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)
   for corrupt data, missing schema, and a lock held by another connection.
-- [x] Verify [worker write-path confinement](cli.md#limits-and-safety-boundaries)
-  with owned canaries and installed full-headless queries.
+- [x] Verify [per-job write confinement](cli.md#limits-and-safety-boundaries)
+  with owned canaries and eight installed full-headless scopes. A
+  worker could not modify an earlier Program or the shared index.
+  Live import, analysis, and fresh-query restarts each used a new
+  job-specific policy and replayed their receipts.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.
