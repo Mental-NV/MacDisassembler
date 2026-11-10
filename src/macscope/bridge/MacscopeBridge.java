@@ -22,6 +22,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.TreeSet;
 
 import com.google.gson.Gson;
@@ -61,6 +63,7 @@ import ghidra.program.model.data.AbstractIntegerDataType;
 import ghidra.program.model.data.BooleanDataType;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.EndianSettingsDefinition;
+import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.data.StringDataInstance;
 import ghidra.program.model.data.TerminatedStringDataType;
 import ghidra.program.model.data.VoidDataType;
@@ -71,6 +74,8 @@ import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
+import ghidra.program.model.listing.Parameter;
+import ghidra.program.model.listing.ParameterImpl;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.mem.MemoryBlockSourceInfo;
@@ -87,7 +92,7 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.7.0";
+    static final String VERSION = "1.8.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final String DEEP_PROFILE = "macscope-binary-only-deep/1";
@@ -705,11 +710,11 @@ public class MacscopeBridge extends HeadlessScript {
         if (content.length > 65536) throw new IllegalArgumentException("Type hint request exceeds its bound");
         JsonObject request = JsonParser.parseString(new String(content, StandardCharsets.UTF_8)).getAsJsonObject();
         JsonArray hints = request.getAsJsonArray("hints");
-        if (!"macscope-return-hints/1".equals(request.get("schema").getAsString()) ||
+        if (!"macscope-type-hints/2".equals(request.get("schema").getAsString()) ||
             hints.size() < 1 || hints.size() > 128) {
             throw new IllegalArgumentException("Invalid type hint request");
         }
-        int transaction = currentProgram.startTransaction("Macscope temporary return-type hints");
+        int transaction = currentProgram.startTransaction("Macscope temporary type hints");
         try {
             JsonArray applied = new JsonArray();
             for (JsonElement element : hints) {
@@ -717,12 +722,20 @@ public class MacscopeBridge extends HeadlessScript {
                 JsonObject hint = element.getAsJsonObject();
                 Function function = functionAt(hint.get("entry_va").getAsString());
                 if (function.isExternal() || function.isThunk()) throw new IllegalArgumentException("Invalid type hint function");
-                String name = hint.get("return_type").getAsString();
-                String previous = function.getReturnType().getDisplayName();
-                function.setReturnType(returnType(name), SourceType.USER_DEFINED);
                 JsonObject row = hint.deepCopy();
-                put(row, "previous_type", previous);
-                put(row, "resolved_type", function.getReturnType().getDisplayName());
+                if (hint.keySet().equals(Set.of("entry_va", "revision", "return_type"))) {
+                    DataType type = hintType(hint.get("return_type").getAsString());
+                    put(row, "previous_type", function.getReturnType().getDisplayName());
+                    function.setReturnType(type, SourceType.USER_DEFINED);
+                    if (!function.getReturn().getFormalDataType().isEquivalent(type)) {
+                        throw new IllegalStateException("Accepted return type was not applied");
+                    }
+                    put(row, "resolved_type", function.getReturnType().getDisplayName());
+                } else if (hint.keySet().equals(Set.of("entry_va", "revision", "parameter_types"))) {
+                    applyParameterHint(function, hint.getAsJsonArray("parameter_types"), row);
+                } else {
+                    throw new IllegalArgumentException("Invalid type hint fields");
+                }
                 applied.add(row);
             }
             root.add("applied_type_hints", applied);
@@ -732,15 +745,73 @@ public class MacscopeBridge extends HeadlessScript {
         }
     }
 
-    DataType returnType(String name) {
-        if (name.equals("void")) return VoidDataType.dataType;
-        if (name.equals("bool")) return BooleanDataType.dataType;
-        if (!name.matches("u?int(8|16|32|64)_t")) throw new IllegalArgumentException("Unsupported return type");
-        boolean unsigned = name.startsWith("u");
-        int bytes = Integer.parseInt(name.substring(unsigned ? 4 : 3, name.length()-2))/8;
-        return unsigned
-            ? AbstractIntegerDataType.getUnsignedDataType(bytes, currentProgram.getDataTypeManager())
-            : AbstractIntegerDataType.getSignedDataType(bytes, currentProgram.getDataTypeManager());
+    void applyParameterHint(Function function, JsonArray names, JsonObject row) throws Exception {
+        if (names.size() > 16 || function.hasCustomVariableStorage()) {
+            throw new IllegalArgumentException("Parameter hints require at most 16 types and dynamic storage");
+        }
+        List<ParameterImpl> parameters = new ArrayList<>();
+        for (JsonElement name : names) {
+            String requested = name.getAsString();
+            if ("void".equals(requested)) throw new IllegalArgumentException("A formal parameter cannot have type void");
+            parameters.add(new ParameterImpl(null, hintType(requested), currentProgram, SourceType.USER_DEFINED));
+        }
+        String convention = function.getCallingConventionName();
+        boolean variadic = function.hasVarArgs();
+        DataType returnType = function.getReturn().getFormalDataType();
+        row.add("previous_parameter_types", typeNames(formalTypes(function)));
+        function.replaceParameters(parameters, Function.FunctionUpdateType.DYNAMIC_STORAGE_FORMAL_PARAMS,
+            true, SourceType.USER_DEFINED);
+        List<DataType> applied = formalTypes(function);
+        if (applied.size() != parameters.size() || !Objects.equals(convention, function.getCallingConventionName()) ||
+            variadic != function.hasVarArgs() || !function.getReturn().getFormalDataType().isEquivalent(returnType)) {
+            throw new IllegalStateException("Accepted parameter list changed the return type or calling convention");
+        }
+        for (int i = 0; i < applied.size(); i++) {
+            if (!applied.get(i).isEquivalent(parameters.get(i).getFormalDataType())) {
+                throw new IllegalStateException("Accepted formal parameter type was not applied");
+            }
+        }
+        row.add("resolved_parameter_types", typeNames(applied));
+        put(row, "calling_convention", convention);
+        row.addProperty("variadic", variadic);
+    }
+
+    List<DataType> formalTypes(Function function) {
+        List<DataType> types = new ArrayList<>();
+        for (Parameter parameter : function.getParameters()) {
+            if (!parameter.isAutoParameter()) types.add(parameter.getFormalDataType());
+        }
+        return types;
+    }
+
+    JsonArray typeNames(List<DataType> types) {
+        JsonArray names = new JsonArray();
+        for (DataType type : types) names.add(type.getDisplayName());
+        return names;
+    }
+
+    DataType hintType(String name) {
+        if (!name.matches("(void|bool|u?int(8|16|32|64)_t)\\*{0,2}")) {
+            throw new IllegalArgumentException("Unsupported hint type");
+        }
+        int pointer = name.indexOf('*');
+        String base = pointer < 0 ? name : name.substring(0, pointer);
+        var manager = currentProgram.getDataTypeManager();
+        DataType type;
+        if (base.equals("void")) {
+            type = VoidDataType.dataType;
+        } else if (base.equals("bool")) {
+            type = BooleanDataType.dataType;
+        } else {
+            boolean unsigned = base.startsWith("u");
+            int bytes = Integer.parseInt(base.substring(unsigned ? 4 : 3, base.length()-2))/8;
+            type = unsigned ? AbstractIntegerDataType.getUnsignedDataType(bytes, manager)
+                : AbstractIntegerDataType.getSignedDataType(bytes, manager);
+        }
+        for (int i = base.length(); i < name.length(); i++) {
+            type = new PointerDataType(type, manager);
+        }
+        return type;
     }
 
     JsonObject function(Function f, BasicBlockModel model, DecompInterface decomp, int timeout) {

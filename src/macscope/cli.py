@@ -148,7 +148,7 @@ def parser():
         if c=='decompile':
             pagination(s);budgets(s)
             s.add_argument('--fresh',action='store_true',help='Reopen the saved Program and decompile one function')
-            s.add_argument('--with-type-hints',action='store_true',help='Apply accepted return hints in the fresh query copy')
+            s.add_argument('--with-type-hints',action='store_true',help='Apply accepted type hints in the fresh query copy')
             s.add_argument('--recover-dispatch-return',action='store_true',
                            help='Use verified x86_64 dispatch return evidence in a fresh query')
             s.add_argument('--recover-direct-signatures',action='store_true',
@@ -200,7 +200,12 @@ def parser():
         else:
             s.add_argument('--accept',action='store_true')
             s.add_argument('--author',default='local')
-        if action=='set':s.add_argument('--return-type',required=True)
+        if action=='set':
+            hints=s.add_mutually_exclusive_group(required=True)
+            hints.add_argument('--return-type')
+            hints.add_argument('--parameters',help='Comma-separated fixed parameter types, or void for zero parameters')
+        if action=='clear':
+            s.add_argument('--parameters',action='store_true',help='Clear the parameter list hint')
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl','html'))
     s.add_argument('--include-annotations',action='store_true')
     s=sub.add_parser('diff');common(s);pagination(s)
@@ -405,8 +410,14 @@ def revise_annotation(args, project, command):
     elif args.command == 'type':
         if not args.accept:
             raise Error('type_hint_acceptance','Pass --accept to change a user-supplied type hint',2)
-        kind = 'return_type'
-        value = annotations.return_type(args.return_type) if args.action == 'set' else None
+        if args.action == 'set':
+            if args.parameters is None:
+                kind, value = 'return_type', annotations.return_type(args.return_type)
+            else:
+                kind, value = 'parameter_types', annotations.encode_parameters(args.parameters)
+        else:
+            kind = 'parameter_types' if args.parameters else 'return_type'
+            value = None
     else:
         kind = 'comment'
         value = annotations.valid_text(args.text,'comment',4096,multiline=True) if args.action == 'set' else None
@@ -420,18 +431,18 @@ def revise_annotation(args, project, command):
             function = select_function(annotations.with_labels(snapshot['functions'],rows),args)
             entry = function['engine_entry']
         except Error as error:
-            if kind != 'return_type' or value is not None or not args.address or error.code != 'function_selector':
+            if kind not in annotations.TYPE_HINT_KINDS or value is not None or not args.address or error.code != 'function_selector':
                 raise
             entry = hex(int(args.address,16))
-            if not any(row['kind']=='return_type' and row['engine_entry']==entry for row in rows):
+            if not any(row['kind']==kind and row['engine_entry']==entry for row in rows):
                 raise
             function = None
-        if kind == 'return_type' and value is not None:
+        if kind in annotations.TYPE_HINT_KINDS and value is not None:
             if function['entry_va'] is None or function['is_external'] or function['is_thunk']:
-                raise Error('type_hint_function','Return hints require a non-thunk function in the image',3)
-            entries = {row['engine_entry'] for row in rows if row['kind']=='return_type'}
-            if len(entries)>=annotations.MAX_TYPE_HINTS and function['engine_entry'] not in entries:
-                raise Error('type_hint_limit','Image return-type hint limit reached',7)
+                raise Error('type_hint_function','Type hints require a non-thunk function in the image',3)
+            scopes = {(row['engine_entry'],row['kind']) for row in rows if row['kind'] in annotations.TYPE_HINT_KINDS}
+            if len(scopes)>=annotations.MAX_TYPE_HINTS and (entry,kind) not in scopes:
+                raise Error('type_hint_limit','Image type hint limit reached',7)
         prior = rows if getattr(args,'action',None) == 'remove' else ()
         instruction = annotations.instruction_at(function,getattr(args,'instruction',None),prior=prior)
         row,changed = annotations.revise(project,image['image_id'],snapshot['analysis_id'],
@@ -1118,14 +1129,14 @@ def execute(a):
     if a.command in ('comment','type','annotations'):
         function = select_function(functions,a) if any((a.address,a.function_id,a.name)) else None
         entry = function['engine_entry'] if function else None
-        kind = {'comment':'comment','type':'return_type'}.get(a.command)
+        kinds = {'comment':('comment',),'type':annotations.TYPE_HINT_KINDS}.get(a.command)
         rows = [row for row in annotations_rows
                 if (entry is None or row['engine_entry'] == entry)
-                and (kind is None or row['kind'] == kind)]
+                and (kinds is None or row['kind'] in kinds)]
         rows,cov = page(rows,a,aid,p.project_id,{'annotation_revision':revision,'entry':entry,'command':command},
                         order='annotation-revision/v1')
         cov['scope'] = {'annotations':'image annotation revisions','comment':'current image comments',
-                        'type':'accepted image return-type hints'}[a.command]
+                        'type':'accepted image type hints'}[a.command]
         return envelope(command,rows,aid,cov=cov)
     if a.command == 'search':
         view = dict(snapshot,functions=functions)

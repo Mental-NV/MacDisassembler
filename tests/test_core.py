@@ -997,6 +997,30 @@ class CliTests(TemporaryCase):
         self.assertEqual(cli.execute(self.args('type','list'))['data'],[])
         self.assertEqual(self.workspace.snapshot(self.workspace.select())[0],self.snapshot)
 
+    def test_parameter_list_hints_are_bounded_and_compose_with_the_return_hint(self):
+        selector = ('--name', 'unique')
+        prefix = ('type', 'set', *selector)
+        self.error('type_hint_acceptance', cli.execute, self.args(*prefix, '--parameters', 'uint8_t*'))
+        for value, code in (('void,uint32_t', 'type_hint_parameters'),
+                            ('uint8_t***', 'type_hint_type'),
+                            (','.join(['uint32_t'] * 17), 'type_hint_parameters')):
+            self.error(code, cli.execute, self.args(*prefix, '--parameters', value, '--accept'))
+        params = cli.execute(self.args(*prefix, '--parameters', 'uint8_t*, bool', '--accept'))['data']['revision']
+        result = cli.execute(self.args(*prefix, '--parameters', 'uint8_t*,bool', '--accept'))['data']
+        self.assertFalse(result['changed'])
+        returns = cli.execute(self.args(*prefix, '--return-type', 'void**', '--accept'))['data']['revision']
+        rows = cli.execute(self.args('type', 'list', *selector))['data']
+        self.assertEqual(rows, [params, returns])
+        self.assertEqual(cli.annotations.type_hints(rows, self.snapshot['functions']), [
+            {'entry_va': '0x100000020', 'return_type': 'void**', 'revision': returns['revision']},
+            {'entry_va': '0x100000020', 'parameter_types': ['uint8_t*', 'bool'], 'revision': params['revision']},
+        ])
+        cli.execute(self.args('type', 'clear', '--parameters', *selector, '--accept'))
+        self.assertEqual(cli.execute(self.args('type', 'list', *selector))['data'], [returns])
+        zero = cli.execute(self.args(*prefix, '--parameters', 'void', '--accept'))['data']['revision']
+        self.assertEqual(zero['value'], '[]')
+        self.assertEqual(self.workspace.snapshot(self.workspace.select())[0], self.snapshot)
+
     def test_unresolved_computed_jump_surfaces_without_rewriting_saved_evidence(self):
         snapshot = copy.deepcopy(self.snapshot)
         target = snapshot['functions'][2]

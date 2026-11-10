@@ -1,5 +1,6 @@
 """Append-only user labels and comments, separate from engine snapshots."""
 from datetime import datetime, timezone
+import json
 import re
 import sqlite3
 
@@ -8,7 +9,9 @@ from .errors import Error
 
 MAX_REVISIONS = 10000
 MAX_TYPE_HINTS = 128
-RETURN_TYPES = {"void","bool",*(f"{sign}int{width}_t" for sign in ("","u") for width in (8,16,32,64))}
+MAX_PARAMETERS = 16
+TYPE_HINT_KINDS = ("return_type", "parameter_types")
+TYPE_NAME = re.compile(r"(?:void|bool|u?int(?:8|16|32|64)_t)\*{0,2}")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS annotation_revisions (
@@ -139,9 +142,35 @@ def instruction_at(function, requested, *, prior=()):
 
 
 def return_type(value):
-    if value not in RETURN_TYPES:
-        raise Error("type_hint_type", "Use void, bool, or a fixed-width signed or unsigned integer type", 2)
+    if not isinstance(value, str) or not TYPE_NAME.fullmatch(value):
+        raise Error("type_hint_type", "Use void, bool, or a fixed-width integer type with up to two pointer levels", 2)
     return value
+
+
+def parameter_types(value):
+    if not isinstance(value, str) or len(value) > 512:
+        raise Error("type_hint_parameters", "Invalid parameter-type list", 2)
+    try:
+        types = json.loads(value)
+    except ValueError as error:
+        raise Error("type_hint_parameters", "Invalid parameter-type list", 2) from error
+    if not isinstance(types, list) or len(types) > MAX_PARAMETERS:
+        raise Error("type_hint_parameters", "Use at most 16 fixed parameter types", 2)
+    for name in types:
+        if return_type(name) == "void":
+            raise Error("type_hint_parameters", "Use void only for an empty parameter list", 2)
+    if json.dumps(types, separators=(",", ":")) != value:
+        raise Error("type_hint_parameters", "Parameter types must use the canonical list format", 2)
+    return types
+
+
+def encode_parameters(value):
+    if len(value) > 512:
+        raise Error("type_hint_parameters", "Invalid parameter-type list", 2)
+    types = [] if value.strip() in ("", "void") else [name.strip() for name in value.split(",")]
+    encoded = json.dumps(types, separators=(",", ":"))
+    parameter_types(encoded)
+    return encoded
 
 
 def type_hints(rows, functions):
@@ -149,14 +178,16 @@ def type_hints(rows, functions):
                  if f["entry_va"] is not None and not f["is_external"] and not f["is_thunk"]}
     hints = []
     for row in rows:
-        if row["kind"] != "return_type":
+        kind = row["kind"]
+        if kind not in TYPE_HINT_KINDS:
             continue
         entry = row["engine_entry"]
         if entry not in available:
             raise Error("type_hint_stale", "An accepted type hint has no matching function in this analysis", 3)
-        hints.append({"entry_va":entry,"return_type":return_type(row["value"]),"revision":row["revision"]})
+        value = return_type(row["value"]) if kind == "return_type" else parameter_types(row["value"])
+        hints.append({"entry_va":entry,kind:value,"revision":row["revision"]})
     if not hints:
-        raise Error("type_hints_missing", "No accepted return-type hints for the selected image", 3)
+        raise Error("type_hints_missing", "No accepted type hints for the selected image", 3)
     if len(hints)>MAX_TYPE_HINTS:
-        raise Error("type_hint_limit", "Image return-type hint limit reached", 7)
-    return sorted(hints,key=lambda hint:int(hint["entry_va"],16))
+        raise Error("type_hint_limit", "Image type hint limit reached", 7)
+    return sorted(hints,key=lambda hint:(int(hint["entry_va"],16),"parameter_types" in hint))

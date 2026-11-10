@@ -276,15 +276,23 @@ histories, invalid targets and malformed files are rejected before any
 revision is written. Importing type-hint revisions requires the explicit
 `--accept-type-hints` flag. The transfer file is limited to 64 MiB.
 
-`type set --return-type TYPE --accept` records a user-supplied return type
-for a selected function. Supported types are `void`, `bool`, and the signed
-and unsigned fixed-width integer typedefs from 8 to 64 bits. Invalid types
-leave existing revisions intact. Use `type list` to inspect current hints
-and `type clear --accept` to remove one.
+### Accepted type hints
+
+`type set --return-type TYPE --accept` records a user-supplied return type.
+`type set --parameters TYPES --accept` records a complete list of up to 16
+fixed parameter types. Give a comma-separated list or `void` for zero
+fixed parameters. A function can have both hints. Supported types include
+`bool`, signed and unsigned fixed-width integers from 8 to 64 bits, and up
+to two pointer levels over those types or `void`. Bare `void` is also a
+return type. Invalid input preserves the existing revisions. Use
+`type list` to inspect active hints, `type clear --accept` to clear a
+return hint, or `type clear --parameters --accept` to clear a parameter list.
 
 ```sh
 macscope type set --name _calc_add --return-type uint64_t --accept \
   --project workspaces/calculator --json
+macscope type set --name _owned_advance --parameters 'uint32_t*,uint32_t' --accept \
+  --project workspaces/parameter-fixture --json
 macscope decompile --name _calc_add --fresh --with-type-hints \
   --project workspaces/calculator --experimental-trusted-input --json
 ```
@@ -293,8 +301,18 @@ The explicit hint view applies accepted types to the private Program copy
 inside a rolled-back Ghidra transaction. It uses a distinct identity and
 reports applied revisions and resolved types. The hint view always starts a
 fresh worker and leaves the unassisted cached analysis available separately.
-The owned arm64 and x86_64 tests verified changed hinted output and unchanged
-original Programs and snapshots. This first hint workflow covers return types.
+Parameter hints require dynamic Ghidra storage and preserve the saved
+calling convention and variadic flag. An unknown calling convention stays
+explicit in the fresh output.
+
+The installed CLI verified a pointer return and two parameters, a
+nine-parameter function with a stack argument, and an empty parameter list
+on both slices of the [owned fixture](../analysis/heldout_parameter_hints.c).
+It also verified two pointer levels as a separate user-supplied hypothesis.
+Program digests and unassisted exports matched after the queries. A
+cancelled arm64 query restarted with its original accepted list after a
+later clear and replayed the saved receipt. The validation report SHA-256 is
+`7d02cc3692d50511d128122efc0fe19c6dba1870969efdccff4a209634a2fa61`.
 
 ## Input preflight
 
@@ -842,7 +860,7 @@ available. If Ghidra finished and the import journal was written, the CLI can
 verify the saved Program and finish publishing it without running Ghidra again.
 
 For a fresh decompile, the restart opens the original saved Program and
-uses the recorded function, label and accepted return hints, even if
+uses the recorded function, label and accepted type hints, even if
 a later analysis or annotation revision is current. Signature recovery
 rechecks the original slice and snapshot against the recorded request digest.
 The restart returns the stored result if the original or restarted query
@@ -1194,7 +1212,7 @@ internal failure, 130 interrupt. A bounded collection page can have partial
 coverage while the page request itself exits0; use `next_cursor`.
 
 Remaining capabilities include richer Objective-C and Swift views,
-compound type hints and manual function corrections. Additional release
+aggregate type hints and manual function boundary corrections. Additional release
 requirements include stronger isolation,
 hard RSS/disk quotas, schema migrations, signed packaging, x86_64 host
 workers and expanded fuzzing. The [progress checklist](current-status.md)

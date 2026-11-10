@@ -123,6 +123,18 @@ class AnnotationTransferTests(TemporaryCase):
         self.assertEqual([row["value"] for row in self.query(self.destination, "annotations", "history")["data"]],
                          ["Different label"])
 
+    def test_parameter_transfer_requires_acceptance_and_preserves_a_clear_revision(self):
+        self.query(self.source, "type", "set", "--parameters", "void*,uint64_t", "--accept", *self.selector)
+        self.query(self.source, "type", "clear", "--parameters", "--accept", *self.selector)
+        self.query(self.source, "type", "set", "--parameters", "void", "--accept", *self.selector)
+        bundle = self.query(self.source, "annotations", "export")
+        path = self.save(bundle)
+        self.error("type_hint_acceptance", self.query, self.destination, "annotations", "import", path)
+        self.assertEqual(self.query(self.destination, "annotations", "history")["data"], [])
+        imported = self.query(self.destination, "annotations", "import", path, "--accept-type-hints")
+        self.assertEqual(imported["data"]["appended_revisions"], 3)
+        self.assertEqual(self.query(self.destination, "annotations", "export")["data"], bundle["data"])
+
     def test_invalid_revision_chain_is_rejected(self):
         self.query(self.source, "rename", "Source label", *self.selector)
         bundle = self.query(self.source, "annotations", "export")

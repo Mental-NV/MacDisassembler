@@ -99,7 +99,7 @@ def validate(rows):
             raise Error("annotation_transfer_format", "Duplicate annotation revision provenance")
         sources.add(source)
         kind, entry, instruction = row["kind"], row["engine_entry"], row["instruction"]
-        if (kind not in ("name", "comment", "return_type") or not isinstance(entry, str)
+        if (kind not in ("name", "comment", *annotations.TYPE_HINT_KINDS) or not isinstance(entry, str)
                 or (instruction is not None and (kind != "comment" or not isinstance(instruction, str)
                     or not re.fullmatch(r"0x(?:0|[1-9a-f][0-9a-f]{0,15})", instruction)))):
             raise Error("annotation_transfer_format", "Invalid annotation scope")
@@ -121,6 +121,8 @@ def validate(rows):
         if value is not None:
             if kind == "return_type":
                 annotations.return_type(value)
+            elif kind == "parameter_types":
+                annotations.parameter_types(value)
             else:
                 annotations.valid_text(value, kind, 256 if kind == "name" else 4096,
                                        multiline=kind == "comment")
@@ -145,20 +147,20 @@ def apply(project, image, snapshot, bundle, accept_type_hints):
             return 0
         if any(row["source_project_id"] == project.project_id for row in suffix):
             raise Error("annotation_transfer_conflict", "Incoming revisions claim missing destination history", 8)
-        if not accept_type_hints and any(row["kind"] == "return_type" for row in suffix):
+        if not accept_type_hints and any(row["kind"] in annotations.TYPE_HINT_KINDS for row in suffix):
             raise Error("type_hint_acceptance", "Pass --accept-type-hints to import type hint revisions", 2)
         functions = {f["engine_entry"]: f for f in snapshot["functions"]}
-        hints = [row for row in active if row["kind"] == "return_type"]
+        hints = [row for row in active if row["kind"] in annotations.TYPE_HINT_KINDS]
         if len(hints) > annotations.MAX_TYPE_HINTS:
-            raise Error("type_hint_limit", "Image return-type hint limit reached", 7)
+            raise Error("type_hint_limit", "Image type hint limit reached", 7)
         for row in active:
             function = functions.get(row["engine_entry"])
             if function is None:
                 raise Error("annotation_transfer_target", "An active annotation has no matching function", 3)
-            if row["kind"] == "return_type" and (
+            if row["kind"] in annotations.TYPE_HINT_KINDS and (
                 function["entry_va"] is None or function["is_external"] or function["is_thunk"]
             ):
-                raise Error("type_hint_function", "Return hints require a non-thunk function in the image", 3)
+                raise Error("type_hint_function", "Type hints require a non-thunk function in the image", 3)
             annotations.instruction_at(function, row["instruction"])
         db.execute(annotations.SCHEMA)
         db.execute(annotations.INDEX)

@@ -116,7 +116,12 @@ collections exceed documented bounds despite successful pseudocode output.
   between compatible workspaces, with validated identity and atomic import.
 - [x] Apply explicitly accepted scalar return hints in fresh Ghidra queries.
   The owned arm64/x86_64 tests verified separate provenance and unchanged
-  unassisted snapshots. Parameter and compound hints remain open.
+  unassisted snapshots.
+- [x] Apply [fixed parameter lists and pointer type hints](cli.md#accepted-type-hints)
+  in fresh full-Ghidra queries on owned arm64 and x86_64 slices. Verify
+  zero and nine parameters, pointer return and parameter types, annotation
+  transfer, and restart from the original hint revisions after a later
+  clear. The saved Programs and unassisted exports matched afterward.
 - [x] Inventory physical bundle images and resources with hashes and
   resumable pages.
 - [x] Import explicit embedded images and resolve bounded in-bundle framework

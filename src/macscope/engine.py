@@ -25,7 +25,7 @@ from .macho import read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
-BRIDGE_VERSION = '1.7.0'
+BRIDGE_VERSION = '1.8.0'
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
     'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
@@ -358,9 +358,9 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         shutil.copytree(source, engine_dir, symlinks=True)
         if any(p.is_symlink() for p in engine_dir.rglob('*')):
             raise Error('analysis_program_integrity', 'Saved Program contains a symbolic link')
+    if (hints is not None or signature_plan is not None) and tree_digest(engine_dir) != active['analysis_program_sha256']:
+        raise Error('analysis_program_integrity', 'Copied Program differs from the saved query input')
     if signature_plan is not None:
-        if tree_digest(engine_dir) != active['analysis_program_sha256']:
-            raise Error('analysis_program_integrity', 'Copied Program differs from the saved signature query input')
         recovery_request = job/(recovery_stem + '-request.json')
         recovery_report = job/(recovery_stem + '-result.json')
         write_json(recovery_request, signature_plan, mode=0o400)
@@ -390,7 +390,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         argv.append(entry)
     if hints is not None:
         request = job/'type-hints.json'
-        write_json(request, {'schema':'macscope-return-hints/1','hints':hints})
+        write_json(request, {'schema':'macscope-type-hints/2','hints':hints}, mode=0o400)
         argv.append(str(request))
     argv += ['-max-cpu', '1', '-analysisTimeoutPerFile', str(args.timeout), '-log',
              str(job/'engine.log'), '-scriptlog', str(job/'script.log')]
@@ -464,14 +464,16 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if not isinstance(applied,list) or any(not isinstance(row,dict) for row in applied):
             raise Error('type_hint_result_mismatch','Worker returned malformed type-hint provenance',10)
         if hints is not None:
-            received = [{key:row.get(key) for key in ('entry_va','return_type','revision')} for row in applied]
+            hint_fields = ('entry_va','return_type','parameter_types','revision')
+            received = [{key:row[key] for key in hint_fields if key in row} for row in applied]
             if received != hints:
                 raise Error('type_hint_result_mismatch','Worker did not apply the exact accepted hints',10)
         elif applied:
             raise Error('type_hint_result_mismatch','Worker applied unrequested type hints',10)
-        if signature_plan is not None:
+        if hints is not None or signature_plan is not None:
             if any(tree_digest(path) != active['analysis_program_sha256'] for path in (source, engine_dir)):
-                raise Error('analysis_program_integrity', 'Signature recovery changed a saved Program on disk', 10)
+                raise Error('analysis_program_integrity', 'Fresh query changed a Program on disk', 10)
+        if signature_plan is not None:
             report = None
             if signature_plan['requests'] or recovery_report.exists():
                 try:
