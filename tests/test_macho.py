@@ -210,6 +210,34 @@ class ThinMachOTests(ErrorAssertions):
         result = macho.thin(image(commands=[command(0x12345678)]))
         self.assertEqual(["0x12345678"], result["load_commands"])
 
+    def test_dylinker_and_sub_library_strings_stay_inside_their_commands(self):
+        for kind in (0xE, 0xF, 0x12, 0x13, 0x14, 0x15, 0x27):
+            with self.subTest(kind=hex(kind)):
+                valid = command(kind, struct.pack("<I", 12) + b"abc\0")
+                self.assertEqual(macho.thin(image(commands=[valid]))["load_commands"], [hex(kind)])
+                for malformed in (command(kind), change32(valid, 8, 8),
+                                  change32(valid, 8, 16), change32(valid, 8, 0xFFFFFFFF),
+                                  valid[:-1] + b"d"):
+                    # Following bytes must not serve as a terminator or as the string.
+                    self.assert_error("command_string", macho.thin,
+                                      image(commands=[malformed, command(0x7777)], payload=b"x\0"))
+
+    def test_dynamic_linker_identification_is_unique(self):
+        load, identity = (command(kind, struct.pack("<I", 12) + b"abc\0") for kind in (0xE, 0xF))
+        for duplicate in (load, identity):
+            self.assert_error("dylinker_command", macho.thin, image(commands=[load, duplicate]))
+        environment = command(0x27, struct.pack("<I", 12) + b"a=b\0")
+        self.assertEqual(len(macho.thin(image(commands=[load, environment, environment]))["load_commands"]), 3)
+
+    def test_linker_options_rejected_for_linked_images(self):
+        options = command(0x2D, struct.pack("<I", 1) + b"-lX\0")
+        for kind in (2, 6, 8):
+            with self.subTest(kind=kind):
+                self.assert_error("linker_option_filetype", macho.thin,
+                                  image(filetype=kind, commands=[options]))
+        self.assert_error("unsupported_filetype", macho.thin, image(filetype=1, commands=[options]),
+                          exit_code=3)
+
     def test_uuid_and_truncated_uuid(self):
         uuid = bytes(range(16))
         self.assertEqual(uuid.hex(), macho.thin(image(commands=[command(0x1B, uuid)]))["uuid"])

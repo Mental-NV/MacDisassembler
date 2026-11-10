@@ -6,6 +6,13 @@ from .errors import Error
 
 DYLIBS = {0xC: "load", 0xD: "id", 0x80000018: "weak", 0x8000001F: "reexport",
           0x20: "lazy", 0x80000023: "upward"}
+STRING_COMMANDS = {
+    0xE: "LC_LOAD_DYLINKER", 0xF: "LC_ID_DYLINKER",
+    0x12: "LC_SUB_FRAMEWORK", 0x13: "LC_SUB_UMBRELLA",
+    0x14: "LC_SUB_CLIENT", 0x15: "LC_SUB_LIBRARY",
+    0x8000001C: "LC_RPATH", 0x27: "LC_DYLD_ENVIRONMENT",
+}
+DYLINKER_COMMANDS = (0xE, 0xF)
 LINKEDIT = {0x1D: "code_signature", 0x26: "function_starts", 0x29: "data_in_code",
             0x80000033: "export_trie", 0x80000034: "chained_fixups"}
 DYLD_STREAMS = ("rebase", "bind", "weak_bind", "lazy_bind", "export_trie")
@@ -255,6 +262,7 @@ def details(data, commands, segments, arch):
                 "dylibs": [], "rpaths": [], "linkedit": [], "dyld_streams": []}
     extents = {}
     symbol_groups = None
+    dylinker_seen = False
     for cmd, cursor, size in commands:
         if cmd in (0x80000028, 0x5):
             if metadata["entry_point"] is not None:
@@ -272,11 +280,21 @@ def details(data, commands, segments, arch):
             metadata["source_version"] = source_version(data, cursor, size)
         elif cmd in DYLIBS:
             metadata["dylibs"].append(dylib(data,cmd,cursor,size))
-        elif cmd == 0x8000001C:
+        elif cmd in STRING_COMMANDS:
             if size < 12:
-                raise Error("rpath_bounds", "Truncated LC_RPATH")
-            offset = struct.unpack_from("<I",data,cursor+8)[0]
-            metadata["rpaths"].append(command_string(data,cursor,size,offset,12))
+                code = "rpath_bounds" if cmd == 0x8000001C else "command_string"
+                raise Error(code, f"Truncated {STRING_COMMANDS[cmd]}")
+            offset, = struct.unpack_from("<I", data, cursor + 8)
+            value = command_string(data, cursor, size, offset, 12)
+            if cmd == 0x8000001C:
+                metadata["rpaths"].append(value)
+            if cmd in DYLINKER_COMMANDS:
+                if dylinker_seen:
+                    raise Error("dylinker_command", "Multiple dynamic linker identification commands")
+                dylinker_seen = True
+        elif cmd == 0x2D:
+            # Preflight accepts linked images. This command belongs to MH_OBJECT files.
+            raise Error("linker_option_filetype", "LC_LINKER_OPTION requires an MH_OBJECT file")
         elif cmd in LINKEDIT:
             if size < 16:
                 raise Error("linkedit_bounds", "Truncated linkedit command")

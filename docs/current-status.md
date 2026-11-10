@@ -567,6 +567,10 @@ collections exceed documented bounds despite successful pseudocode output.
   Three import controls staged no inputs and created no worker jobs.
   Both valid owned slices passed full headless import, analysis, exact
   instruction-byte checks and fresh decompilation.
+- [x] Verify [load-command string preflight](cli.md#load-command-string-preflight).
+  The test wheel rejected 80 previously accepted owned mutations. Five
+  public import controls stopped before staging, and intact arm64 and
+  x86_64 fixtures completed the full headless path.
 - [x] Bound [section records across each Mach-O slice](cli.md#limits-and-safety-boundaries).
   Exact-limit thin and universal fixtures passed. An excess failed before
   staging, including in an unselected slice. An owned Calendar bundle

@@ -2162,6 +2162,31 @@ requested architecture. The original universal fixture completed full
 Ghidra import, analysis, disassembly, and fresh decompilation on both
 architectures. Selected disassembly matched the original slice bytes.
 
+### Load-command string preflight
+
+`inspect` and `import` bound strings in the dynamic-linker, dyld
+environment and sub-library commands to their own load command. They
+reuse the existing dylib and rpath string limit. Malformed strings
+return `command_string`, duplicate dynamic-linker identification
+returns `dylinker_command`, and a linker-option command in a linked
+image returns `linker_option_filetype`. Apple defines linker options
+for relocatable object files. [Mach-O load-command definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+
+A separately installed test wheel rejected 80 owned mutations that
+the earlier CLI accepted. All 20 original thin and universal build
+artifacts produced byte-identical inspection output. The seeded test
+classified 8,192 command-string mutations against their declared
+bounds, accepting 934 and rejecting 7,258 with a typed error. Five
+public import controls left the staged inputs, jobs and engine
+directories empty, including a universal input with a malformed
+unselected slice.
+
+The intact arm64 and x86_64 calculator tools completed full Ghidra
+import and analysis. All 39 selected instructions matched the original
+slice bytes and both fresh pseudocode queries matched their saved
+results. The private validation report SHA-256 is
+`a0ba00d185151554914834856347301b1c2b2957964e0324a5a533178712e331`.
+
 ## Envelopes, errors and explicit omissions
 
 Workspace opens validate the manifest structure, schema version, and
