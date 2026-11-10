@@ -82,6 +82,12 @@ decision. Reuse recorded observations for gestures already covered.
   app put its class slot and framework bind beyond the first 10,000 records.
   The pinned handoff resolved both, withheld an invalid class slot and
   reproduced the report without starting another worker.
+- [x] **Include exact fixup slots in the pinned Calendar handoff.**
+  A `fixup` lead matched the standalone class rebase on both owned
+  architectures and the arm64 framework bind. The mixed handoff
+  retained focused code and direct calls, reported an invalid slot,
+  and replayed byte for byte with Ghidra unavailable. HTML and the
+  evidence diff retained the declared slot data.
 - [x] **Include focused results in the pinned Calendar handoff.**
   The installed CLI captured three focused results from an owned padded
   Calendar app and its framework before either had a whole-image snapshot.

@@ -114,7 +114,7 @@ def lead_facts(row, images):
         provenance["engine"] = projection(pin["engine"], ("bridge_version", "ghidra_version",
                                                           "bridge_sha256", "ghidra_tree_sha256"))
     provenance.update(projection(lead, ("class_slot", "query_job")))
-    if lead["kind"] in ("address", "function_id"):
+    if lead["kind"] in ("address", "function_id", "fixup"):
         provenance["selector_value"] = lead["value"]
     facets = {}
     if function is not None:
@@ -160,6 +160,15 @@ def lead_facts(row, images):
                                              addresses=("callsite", "target_entry_va"))
             facets["selected_calls"] = measured(logical, complete(selected))
             provenance["selected_call_locations"] = identity(coords)
+    if "fixup" in row:
+        fixup = row["fixup"]
+        coordinates = ("va", "slice_file_offset", "container_file_offset")
+        records = fixup["records"]
+        logical = [{key: value for key, value in item.items() if key not in coordinates} for item in records]
+        facets["fixup"] = measured({"format": fixup["format"], "records": sorted(logical, key=canonical)},
+                                   complete(fixup))
+        provenance["fixup_locations"] = identity(sorted([projection(item, coordinates) for item in records],
+                                                         key=canonical))
     if query := row["query"]:
         if "pseudocode" in query:
             facets["query_pseudocode"] = code(query)
@@ -193,8 +202,21 @@ def read_handoff(path, side):
         facts = {}
         for row in data["leads"]:
             lead = row["lead"]
+            observed = row["function"] is not None
+            if lead["kind"] == "fixup" and observed:
+                raise ValueError("A fixup lead cannot report a function")
+            if "fixup" in row:
+                fixup = row["fixup"]
+                records = fixup["records"]
+                if (lead["kind"] != "fixup" or images[lead["image_id"]]["status"] != "available"
+                        or not isinstance(fixup["format"], str) or not isinstance(records, list)
+                        or len(records) > evidence.MAX_MATCHES or any(
+                            not isinstance(item, dict) or item.get("va") != lead["value"]
+                            or item.get("kind") not in ("bind", "rebase") for item in records)):
+                    raise ValueError("Invalid exact fixup evidence")
+                observed = len(records) == 1
             if (row["status"] not in ("resolved", "partial", "unresolved")
-                    or (row["status"] == "unresolved") != (row["function"] is None)
+                    or (row["status"] != "unresolved") != observed
                     or not isinstance(row["gaps"], list) or any(not isinstance(gap, str) for gap in row["gaps"])):
                 raise ValueError("Invalid handoff lead")
             facts[lead["id"]] = lead_facts(row, images)
@@ -206,7 +228,7 @@ def read_handoff(path, side):
 
 
 def selector(lead):
-    value = lead["value"] if lead["kind"] not in ("address", "function_id") else None
+    value = lead["value"] if lead["kind"] not in ("address", "function_id", "fixup") else None
     return lead["kind"], value, lead.get("class_name")
 
 
@@ -215,7 +237,7 @@ def compare_lead(key, left, right):
     if left is None or right is None:
         return dict(row, status="lead_added" if left is None else "lead_removed")
     a, b = left["selection"], right["selection"]
-    if not left["has_function"] or not right["has_function"]:
+    if "unresolved" in (a["status"], b["status"]):
         return dict(row, status="unresolved")
     for reason, x, y in (("architecture_changed", a["arch"], b["arch"]),
                          ("bundle_role_changed", a["bundle_role"], b["bundle_role"]),

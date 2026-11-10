@@ -942,7 +942,8 @@ class CliTests(TemporaryCase):
             function = {'function_id':storage.identity([image, entry]), 'entry_va':entry,
                         'instructions':instructions,
                         'origin':{'extent':{'length':sum(len(row['bytes']) // 2 for row in instructions)}}}
-            return {'lead':{'id':lead, 'image_id':image}, 'function':function, 'status':'resolved', 'gaps':[]}
+            return {'lead':{'id':lead, 'image_id':image, 'kind':'address'},
+                    'function':function, 'status':'resolved', 'gaps':[]}
 
         def ins(address, data, flow='UNCONDITIONAL_CALL'):
             return {'addr':address, 'bytes':data, 'flow':flow}
@@ -953,10 +954,11 @@ class CliTests(TemporaryCase):
         alias = selected('arm_alias', 'arm', '0x1010', [])
         intel = selected('intel_caller', 'intel', '0x1000', [ins('0x1000', 'e80b000000')])
         other = selected('intel_target', 'intel', '0x1010', [])
-        missing = {'lead':{'id':'missing', 'image_id':'intel'}, 'function':None}
+        missing = {'lead':{'id':'missing', 'image_id':'intel', 'kind':'address'}, 'function':None}
+        fixup = {'lead':{'id':'slot', 'image_id':'arm', 'kind':'fixup'}, 'function':None}
         report = {'images':[{'image_id':key, 'arch':arch, evidence.IMPORT_PIN:'pin'}
                             for key, arch in [('arm','arm64'), ('intel','x86_64')]],
-                  'leads':[arm, first, alias, intel, other, missing]}
+                  'leads':[arm, first, alias, intel, other, missing, fixup]}
         evidence.add_focused_calls(report)
         arm_link, = arm['selected_calls']['links']
         self.assertEqual(arm_link, {'callsite':'0x1000', 'call_bytes':'04000094', 'target_entry_va':'0x1010',

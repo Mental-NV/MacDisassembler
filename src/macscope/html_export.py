@@ -168,6 +168,8 @@ def render_handoff(result):
                         ("lead", "matches", "match_references", "candidates")})
         if row["function"] is not None:
             report.function(index, row["function"])
+        if "fixup" in row:
+            report.evidence("Exact dyld fixup", row["fixup"])
         if "declared_imports" in row:
             report.evidence("Declared imports", row["declared_imports"])
         if "selected_calls" in row:

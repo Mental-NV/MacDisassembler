@@ -3,7 +3,7 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from macscope import cli, dyld, engine, import_state, macho
+from macscope import cli, dyld, engine, evidence, handoff_diff, import_state, macho, storage
 from macscope.errors import Error
 from test_core import TemporaryCase
 from test_macho import X86_64, command, image, universal
@@ -67,6 +67,47 @@ def legacy_fixture(*, rebase=b"", bind=b"", weak=b"", lazy=b""):
     data.extend(bytes(PAYLOAD-len(data))+b"".join(parts))
     struct.pack_into("<Q",data,START,BASE+0x80)
     return bytes(data)
+
+
+class FixupHandoffTests(TemporaryCase):
+    def test_import_pin_can_replay_an_exact_slot_and_compare_data_only_leads(self):
+        project = self.project()
+        binary = fixture()
+        source = macho.inspect_bytes(binary)
+        image = dict(source["slices"][0], artifact_sha256=source["artifact_sha256"],
+                     input_name="owned", engine_baseline_sha256="b" * 64)
+        import_state.stage_inputs(project, image, binary)
+        with project.db(False) as db:
+            db.execute("INSERT INTO images (id,arch,metadata,imported) VALUES (?,?,?,1)",
+                       (image["image_id"], image["arch"], storage.canonical(image).decode()))
+        pin = {"image_id":image["image_id"], "arch":image["arch"],
+               "artifact_sha256":image["artifact_sha256"], "slice_sha256":image["sha256"],
+               evidence.IMPORT_PIN:image["engine_baseline_sha256"]}
+        lead = {"id":"selected_slot", "kind":"fixup", "value":hex(BASE + START), "image_id":image["image_id"]}
+        absent = dict(lead, id="empty_slot", value=hex(BASE + START + 16))
+        manifest = {"schema":evidence.LEADS_SCHEMA, "images":[pin], "leads":[lead, absent]}
+        path = self.root / "leads.json"
+        path.write_bytes(storage.canonical(manifest))
+        args = cli.parser().parse_args(["evidence", "--project", str(project.path), "--leads", str(path)])
+        with patch.object(engine, "dependencies", side_effect=AssertionError("unexpected engine probe")), \
+             patch.object(dyld, "MAX_FIXUPS", 1):
+            result = cli.execute(args)
+        selected, empty = result["data"]["leads"]
+        self.assertEqual(selected["status"], "resolved")
+        self.assertIsNone(selected["function"])
+        self.assertEqual(selected["fixup"]["records"][0]["target_va"], hex(BASE + 0x80))
+        self.assertEqual(empty["reason"], "lead_not_found")
+        self.assertEqual(result["status"], "partial")
+        report = self.root / "evidence.json"
+        report.write_bytes(storage.canonical(result))
+        _, facts = handoff_diff.read_handoff(report, "LEFT")
+        self.assertFalse(facts["selected_slot"]["has_function"])
+        self.assertEqual(handoff_diff.compare_lead("selected_slot", facts["selected_slot"],
+                                                   facts["selected_slot"])["status"], "unchanged_observations")
+        self.assertEqual(facts["selected_slot"]["facets"]["fixup"]["coverage"], "complete")
+
+        lead["query_job"] = "a" * 32
+        self.error("evidence_lead", evidence.validate_manifest, manifest)
 
 
 class ChainedFixupsTests(unittest.TestCase):

@@ -1684,10 +1684,10 @@ the receipt error.
 To include a focused result before whole-image analysis, copy
 `data.origin.extent.program_sha256` from `decompile --from-import` into
 the image pin as `import_program_sha256` in place of `analysis_id`.
-Keep the image, architecture, artifact and slice digests. Each lead for
-that pin needs the focused `data.origin.job_id` in `query_job`, plus either
-the exact unslid `address` or an `objc_selector` whose implementation
-matches the receipt. An analyzed pin and an import pin can select
+Keep the image, architecture, artifact and slice digests. Each function
+lead for that pin needs the focused `data.origin.job_id` in `query_job`,
+plus either the exact unslid `address` or an `objc_selector` whose
+implementation matches the receipt. An analyzed pin and an import pin can select
 different images in the same handoff.
 
 The handoff checks the receipt against the producing job, the pinned
@@ -1698,6 +1698,27 @@ verified selected instruction can establish a call through a stub to a
 pinned provider. A provider pinned to an import needs its own verified
 focused lead at the export entry. Replaying a saved import receipt does
 not require the original app bundle.
+
+A `fixup` lead selects one exact unslid dyld slot by its `value`.
+It works with either pin and needs no query job.
+
+```json
+{"id":"class-slot","image_id":"<image ID>","kind":"fixup","value":"0x100017980"}
+```
+
+The handoff decodes the slot from the digest-verified slice, using the
+same targeted lookup as `fixups --address`. It retains the declared
+rebase or bind, its offsets, and any coverage gaps. A bind records the
+library and symbol declaration. A rebase records the encoded target.
+Neither establishes which indirect call executes at runtime. Missing,
+ambiguous, or invalid slots keep a typed outcome. Fixup leads appear in
+HTML and their declarations and locations are tracked in evidence diffs.
+
+The installed CLI matched an owned Calendar class rebase on arm64 and
+x86_64 and the arm64 framework bind. A mixed arm64 handoff included
+both slots and focused receipts and replayed byte for byte with Ghidra
+unavailable. A data-only handoff completed, and a change from a rebase
+to a bind appeared in the evidence diff.
 
 Add `--link-focused` to follow direct calls between the selected focused
 receipts in one pinned image. The CLI decodes arm64 `BL` or x86_64

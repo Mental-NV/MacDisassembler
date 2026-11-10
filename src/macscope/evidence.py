@@ -2,9 +2,9 @@
 from collections import defaultdict
 import re
 
-from . import address_xrefs, body_ownership, calls, flow_evidence, focused, import_links, jobs, metadata, objc, search
+from . import address_xrefs, body_ownership, calls, dyld, flow_evidence, focused, import_links, jobs, metadata, objc, search
 from .errors import Error
-from .macho import read_regular
+from .macho import read_regular, thin
 from .schema import validate_envelope
 from .storage import canonical, identity, is_digest, strict_json
 
@@ -23,7 +23,7 @@ IMAGE_FIELDS = {"image_id", "arch", "artifact_sha256", "slice_sha256", "analysis
 IMPORT_PIN = "import_program_sha256"
 IMPORT_FIELDS = (IMAGE_FIELDS - {"analysis_id"}) | {IMPORT_PIN}
 LEAD_FIELDS = {"id", "image_id", "kind", "value"}
-KINDS = {"address", "function_id", "name", "objc_selector", "string"}
+KINDS = {"address", "function_id", "name", "objc_selector", "string", "fixup"}
 FUNCTION_FIELDS = (
     "function_id", "entry_va", "engine_entry", "address_space", "names", "signature", "body_ranges",
     "is_external", "is_thunk", "thunk_target", "instructions", "instruction_bytes_sha256",
@@ -69,18 +69,19 @@ def validate_manifest(manifest):
                 or not isinstance(lead["kind"], str) or lead["kind"] not in KINDS or not lead_text(lead["value"])):
             raise Error("evidence_lead", "Invalid lead ID, image or selector", 2)
         kind, value = lead["kind"], lead["value"]
-        if (kind == "address" and not metadata.VA.fullmatch(value)
+        if (kind in ("address", "fixup") and not metadata.VA.fullmatch(value)
                 or kind == "function_id" and not is_digest(value)
                 or "class_name" in lead and (kind != "objc_selector" or not lead_text(lead["class_name"]))
                 or "class_slot" in lead and (kind != "objc_selector" or not isinstance(lead["class_slot"], str)
                                               or not metadata.VA.fullmatch(lead["class_slot"]))
-                or "query_job" in lead and (not isinstance(lead["query_job"], str)
+                or "query_job" in lead and (kind == "fixup" or not isinstance(lead["query_job"], str)
                                            or not jobs.JOB_ID.fullmatch(lead["query_job"]))):
             raise Error("evidence_lead", "Invalid unslid address, function ID, class or query job", 2)
-        if kind == "address":
+        if kind in ("address", "fixup"):
             lead["value"] = hex(int(value, 16))
-        if IMPORT_PIN in pins[lead["image_id"]] and (kind not in ("address", "objc_selector") or "query_job" not in lead):
-            raise Error("evidence_import_lead", "Import pins require an exact address or Objective-C selector and a focused query job", 2)
+        if (IMPORT_PIN in pins[lead["image_id"]] and kind != "fixup"
+                and (kind not in ("address", "objc_selector") or "query_job" not in lead)):
+            raise Error("evidence_import_lead", "Import pins require a fixup slot or a focused query job with an exact function selector", 2)
         if "class_slot" in lead:
             lead["class_slot"] = hex(int(lead["class_slot"], 16))
         lead_ids.add(lead["id"])
@@ -272,6 +273,27 @@ def unresolved(lead, reason):
             "matches": [], "match_references": [], "function": None, "query": None}
 
 
+def fixup_lead(binary, image, parsed, lead):
+    try:
+        info, records, gaps = dyld.fixups(binary, image, parsed=parsed, address=int(lead["value"], 16))
+    except Error as error:
+        return unresolved(lead, error.code)
+    if len(records) > MAX_MATCHES:
+        gaps = [*gaps, "fixup_match_limit"]
+    status = "unresolved"
+    if not records:
+        reason = "lead_resolution_incomplete" if gaps else "lead_not_found"
+    elif len(records) > 1:
+        reason = "lead_ambiguous"
+    else:
+        reason = None
+        status = "partial" if gaps else "resolved"
+    gaps = sorted(set(gaps))
+    return dict(unresolved(lead, reason), status=status, gaps=gaps,
+                fixup={"status": "partial" if gaps else "complete",
+                       "format": info["format"], "records": records[:MAX_MATCHES]})
+
+
 def focused_query(project, image, binary, entry, job_id):
     _, record = jobs.get(project, job_id)
     if jobs.focused_record(record) is None:
@@ -326,7 +348,7 @@ def add_focused_calls(report):
     imported = {pin["image_id"]: pin["arch"] for pin in report["images"] if IMPORT_PIN in pin}
     for row in report["leads"]:
         image_id = row["lead"]["image_id"]
-        if image_id in imported:
+        if image_id in imported and row["lead"]["kind"] != "fixup":
             grouped[image_id].append(row)
 
     remaining = MAX_EDGES
@@ -395,12 +417,19 @@ def export(project, manifest, *, link_imports=False, link_focused=False):
         selector_rows, selector_error = ([], []), None
         selectors = [lead for lead in leads if lead["kind"] == "objc_selector"]
         scoped_selectors = {}
-        binary = None
-        if selectors or link_imports or from_import:
+        binary = parsed_fixups = None
+        fixup_error = None
+        wants_fixups = any(lead["kind"] == "fixup" for lead in leads)
+        if selectors or link_imports or from_import or wants_fixups:
             try:
                 binary = metadata.verified_slice(project, image)
             except Error as error:
-                selector_error = linkage_error = error.code
+                selector_error = linkage_error = fixup_error = error.code
+        if wants_fixups and binary is not None:
+            try:
+                parsed_fixups = thin(binary)
+            except Error as error:
+                fixup_error = error.code
         if binary is not None and any("class_slot" not in lead for lead in selectors):
             try:
                 selector_rows = objc.inventory(binary, image, "methods")
@@ -422,7 +451,10 @@ def export(project, manifest, *, link_imports=False, link_focused=False):
         focused_functions = {}
         for lead in leads:
             methods, error = scoped_selectors.get(lead.get("class_slot"), (selector_rows, selector_error))
-            if lead["kind"] == "objc_selector" and error:
+            if lead["kind"] == "fixup":
+                row = (unresolved(lead, fixup_error) if fixup_error
+                       else fixup_lead(binary, image, parsed_fixups, lead))
+            elif lead["kind"] == "objc_selector" and error:
                 row = unresolved(lead, error)
             elif from_import:
                 row = (focused_lead(project, snapshot, binary, lead, methods) if binary is not None
