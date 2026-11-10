@@ -172,7 +172,16 @@ def thin(data, *, allow_arm64e=False, include_section_linkage=False):
     return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,
             'flags': hex(flags), 'uuid': uuid, 'segments': segments, 'sections': sections,
             'load_commands': commands, 'warnings': warnings,
-            'loader': details(data,command_records,segments)}
+            'loader': details(data,command_records,segments,arch)}
+
+
+def with_entry_container_offset(image):
+    entry = image["loader"].get("entry_point")
+    if entry is None:
+        return image
+    offset = entry["slice_file_offset"]
+    location = hex(int(image["offset"], 16) + int(offset, 16)) if offset is not None else None
+    return dict(image, loader=dict(image["loader"], entry_point=dict(entry, container_file_offset=location)))
 
 
 def inspect_bytes(data, *, allow_arm64e=False):
@@ -208,6 +217,7 @@ def inspect_bytes(data, *, allow_arm64e=False):
             slices.append(dict(meta, offset=hex(off), size=hex(size), sha256=hashlib.sha256(data[off:off+size]).hexdigest()))
     else:
         slices.append(dict(thin(data, allow_arm64e=allow_arm64e), offset='0x0', size=hex(len(data)), sha256=digest))
+    slices = [with_entry_container_offset(s) for s in slices]
     for s in slices:
         s['image_id'] = hashlib.sha256((digest+':'+str(s['cpu_type'])+':'+str(s['cpu_subtype'])+':'+s['offset']+':'+s['size']+':'+s['sha256']).encode()).hexdigest()
     limitations = ['Bounded preflight is not authoritative Ghidra loading.',

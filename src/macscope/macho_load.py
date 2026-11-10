@@ -11,6 +11,8 @@ LINKEDIT = {0x1D: "code_signature", 0x26: "function_starts", 0x29: "data_in_code
 DYLD_STREAMS = ("rebase", "bind", "weak_bind", "lazy_bind", "export_trie")
 MAX_TABLE_ROWS = 10000
 MAX_START_TABLE_BYTES = 1024 * 1024
+THREAD_ENTRY = {"arm64": (6, 68, 32), "x86_64": (4, 42, 16)}
+MAX_THREAD_STATES = 32
 
 
 def bounded(off, size, total, label):
@@ -109,21 +111,82 @@ def data_in_code(data, extent):
     return {"status": "complete" if count==len(rows) else "partial", "records": rows, "total": count}
 
 
-def details(data, commands, segments):
+def map_entry(record, va, text, segments):
+    record.update(va=hex(va) if va is not None else None, rva=None, slice_file_offset=None)
+    if va is None:
+        return dict(record, status="unavailable", reason="Preferred image base unavailable")
+    if text is not None and va >= int(text["va"], 16):
+        record["rva"] = hex(va - int(text["va"], 16))
+    containing = [segment for segment in segments
+                  if 0 <= va - int(segment["va"], 16) < int(segment["size"], 16)]
+    if len(containing) != 1:
+        return dict(record, status="unavailable", reason="Entry has no unique segment mapping")
+    segment = containing[0]
+    delta = va - int(segment["va"], 16)
+    if not segment["protections"] & 4 or delta >= int(segment["file_size"], 16):
+        return dict(record, status="unavailable", reason="Entry is outside executable file-backed bytes")
+    return dict(record, status="complete", slice_file_offset=hex(int(segment["file_offset"], 16) + delta))
+
+
+def main_entry(data, cursor, size, text, segments):
+    if size != 24:
+        raise Error("entry_command", "Invalid LC_MAIN command size")
+    offset, stack = struct.unpack_from("<2Q", data, cursor + 8)
+    va = int(text["va"], 16) + offset if text else None
+    if va is not None and va >= 2**64:
+        raise Error("entry_command", "LC_MAIN address exceeds the image address space")
+    return map_entry({"source": "LC_MAIN", "declared_entry_offset": hex(offset), "stack_size": hex(stack)},
+                     va, text, segments)
+
+
+def thread_entry(data, cursor, size, arch, text, segments):
+    at, end = cursor + 8, cursor + size
+    states, pcs = [], []
+    layout = THREAD_ENTRY.get(arch)
+    while at < end:
+        if states and end - at == 4 and not any(data[at:end]):
+            break  # A 32-bit auxiliary state can leave one alignment word.
+        if end - at < 8:
+            raise Error("entry_thread_bounds", "Truncated LC_UNIXTHREAD state header")
+        if len(states) == MAX_THREAD_STATES:
+            raise Error("entry_thread_limit", "LC_UNIXTHREAD state count exceeds its limit", 7)
+        flavor, count = struct.unpack_from("<II", data, at)
+        payload = at + 8
+        if not count or count * 4 > end - payload:
+            raise Error("entry_thread_bounds", "Invalid LC_UNIXTHREAD state extent")
+        state = {"flavor": flavor, "word_count": count, "slice_file_offset": hex(payload)}
+        states.append(state)
+        if layout is not None and flavor == layout[0]:
+            _, expected, register = layout
+            if count != expected:
+                raise Error("entry_thread_bounds", "Unexpected LC_UNIXTHREAD general register state size")
+            pc_offset = payload + register * 8
+            pcs.append((len(states), struct.unpack_from("<Q", data, pc_offset)[0]))
+            state["pc_slice_file_offset"] = hex(pc_offset)
+        at = payload + count * 4
+    if not states:
+        raise Error("entry_thread_bounds", "Missing LC_UNIXTHREAD state")
+    if len(pcs) > 1:
+        raise Error("entry_command", "Duplicate LC_UNIXTHREAD general register state")
+    record = {"source": "LC_UNIXTHREAD", "stack_size": None, "thread_states": states}
+    if not pcs or pcs[0][0] != 1:
+        return dict(record, status="unsupported", reason="Initial LC_UNIXTHREAD state layout is unsupported",
+                    va=None, rva=None, slice_file_offset=None)
+    return map_entry(record, pcs[0][1], text, segments)
+
+
+def details(data, commands, segments, arch):
     text_segments = [s for s in segments if s["name"] == "__TEXT" and s["file_offset"] == "0x0"]
     text = text_segments[0] if len(text_segments) == 1 else None
     metadata = {"preferred_image_base": text["va"] if text else None, "entry_point": None,
                 "dylibs": [], "rpaths": [], "linkedit": [], "dyld_streams": []}
     extents = {}
     for cmd, cursor, size in commands:
-        if cmd == 0x80000028:
-            if size != 24 or metadata["entry_point"] is not None:
-                raise Error("entry_command", "Invalid or duplicate LC_MAIN command")
-            entry, stack = struct.unpack_from("<2Q",data,cursor+8)
-            bounded(entry,1,len(data),"LC_MAIN entry")
-            va = hex(int(text["va"],16)+entry) if text and entry<int(text["file_size"],16) else None
-            metadata["entry_point"] = {"source": "LC_MAIN", "slice_file_offset": hex(entry),
-                                       "va": va, "stack_size": hex(stack)}
+        if cmd in (0x80000028, 0x5):
+            if metadata["entry_point"] is not None:
+                raise Error("entry_command", "Multiple Mach-O process entry commands")
+            metadata["entry_point"] = (main_entry(data, cursor, size, text, segments) if cmd == 0x80000028
+                                       else thread_entry(data, cursor, size, arch, text, segments))
         elif cmd in DYLIBS:
             metadata["dylibs"].append(dylib(data,cmd,cursor,size))
         elif cmd == 0x8000001C:

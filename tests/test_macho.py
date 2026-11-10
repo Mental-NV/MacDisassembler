@@ -37,6 +37,17 @@ def command(kind, payload=b"", *, size=None):
     return struct.pack("<2I", kind, 8 + len(payload) if size is None else size) + payload
 
 
+def entry_segment(name, va, file_offset, file_size, protections=5):
+    return command(0x19, struct.pack("<16s4Q4I", name, va, 4096, file_offset,
+                                     file_size, 7, protections, 0, 0))
+
+
+def thread_state(flavor, count, pc_index, va):
+    payload = bytearray(4 * count)
+    struct.pack_into("<Q", payload, 8 * pc_index, va)
+    return struct.pack("<II", flavor, count) + payload
+
+
 def segment_image(*, file_offset=184, section_size=4, section_address=0x100000100,
                   section_flags=0, alignment=2, reloc_offset=0, reloc_count=0,
                   segment_address=0x100000000, segment_size=0x1000,
@@ -207,6 +218,61 @@ class ThinMachOTests(ErrorAssertions):
         malformed = data[:160]+b"\x80"*4+data[164:]
         self.assertEqual(macho.thin(malformed)["loader"]["function_starts"]["status"], "malformed")
         self.assert_error("entry_command",macho.thin,image(commands=[main,main],payload=bytes(100)))
+
+    def test_unixthread_uses_architecture_register_and_universal_offsets(self):
+        base, offset = 0x100000000, 0x200
+        text = entry_segment(b"__TEXT", base, 0, 1024)
+        thins = []
+        for cpu, flavor, count, index in ((ARM64, 6, 68, 32), (X86_64, 4, 42, 16)):
+            state = thread_state(flavor, count, index, base + offset)
+            data = image(cpu=cpu, commands=[text, command(5, state)], payload=bytes(1024))
+            thins.append(data)
+            entry = macho.thin(data)["loader"]["entry_point"]
+            self.assertEqual((entry["source"], entry["status"], entry["va"], entry["rva"]),
+                             ("LC_UNIXTHREAD", "complete", hex(base+offset), hex(offset)))
+            self.assertEqual(entry["slice_file_offset"], hex(offset))
+            state_at = int(entry["thread_states"][0]["pc_slice_file_offset"], 16)
+            self.assertEqual(struct.unpack_from("<Q", data, state_at)[0], base + offset)
+        for fat in (False, True):
+            slices = macho.inspect_bytes(universal(thins, fat64=fat))["slices"]
+            for row in slices:
+                entry = row["loader"]["entry_point"]
+                self.assertEqual(int(entry["container_file_offset"], 16), int(row["offset"], 16) + offset)
+
+    def test_invalid_or_unsupported_unixthread_layouts(self):
+        state = thread_state(6, 68, 32, 0x100000200)
+        unix = command(5, state)
+        main = command(0x80000028, struct.pack("<2Q", 0, 0))
+        self.assert_error("entry_command", macho.thin, image(commands=[unix, main]))
+        self.assert_error("entry_command", macho.thin, image(commands=[command(5, state * 2)]))
+        for invalid in (b"", state[:-8], struct.pack("<4I", 6, 2, 0, 0)):
+            self.assert_error("entry_thread_bounds", macho.thin, image(commands=[command(5, invalid)]))
+        unknown = struct.pack("<4I", 99, 2, 0, 0)
+        padded = command(5, state + struct.pack("<4I", 99, 1, 5, 0))
+        parsed = macho.thin(image(commands=[padded]))["loader"]["entry_point"]
+        self.assertEqual([record["word_count"] for record in parsed["thread_states"]], [68, 1])
+        for binary in (image(commands=[command(5, unknown + state)]),
+                       image(subtype=2, commands=[unix])):
+            record = macho.thin(binary, allow_arm64e=True)["loader"]["entry_point"]
+            self.assertEqual(record["status"], "unsupported")
+            self.assertIsNone(record["va"])
+        self.assertIsNone(macho.thin(image(commands=[command(4, state)]))["loader"]["entry_point"])
+
+    def test_main_uses_virtual_base_and_requires_unique_executable_backing(self):
+        base = 0x100000000
+        text = entry_segment(b"__TEXT", base, 0, 256)
+        main = command(0x80000028, struct.pack("<2Q", 0x4000, 0x1000))
+        hot = entry_segment(b"__HOT", base + 0x4000, 256, 16)
+        binary = image(commands=[text, hot, main], payload=bytes(128))
+        entry = macho.thin(binary)["loader"]["entry_point"]
+        self.assertEqual((entry["va"], entry["rva"], entry["slice_file_offset"], entry["stack_size"]),
+                         ("0x100004000", "0x4000", "0x100", "0x1000"))
+        for segments in ([text], [text, hot, hot],
+                         [text, entry_segment(b"__HOT", base + 0x4000, 256, 16, 3)],
+                         [text, entry_segment(b"__HOT", base + 0x4000, 256, 0)]):
+            entry = macho.thin(image(commands=[*segments, main], payload=bytes(128)))["loader"]["entry_point"]
+            self.assertEqual(entry["status"], "unavailable")
+            self.assertIsNone(entry["slice_file_offset"])
 
     def test_library_and_rpath_strings_are_bounded_and_keep_new_dylib_flags(self):
         def string_command(kind, fixed, value):

@@ -3,7 +3,7 @@ import hashlib
 import re
 
 from .errors import Error
-from .macho import read_regular, thin
+from .macho import read_regular, thin, with_entry_container_offset
 
 
 PREFLIGHT_LISTS = ("segments", "sections")
@@ -24,8 +24,11 @@ def verified_slice(project, image):
 
 
 def headers(project, image):
-    if "loader" not in image or "flags" not in image:
+    entry = image.get("loader", {}).get("entry_point") or {}
+    has_entry = any(cmd in image.get("load_commands", ()) for cmd in ("0x80000028", "0x5"))
+    if "loader" not in image or "flags" not in image or (has_entry and "status" not in entry):
         image = dict(image, **thin(verified_slice(project,image)))
+    image = with_entry_container_offset(image)
     return {key: image[key] for key in HEADER_FIELDS if key in image}
 
 
@@ -33,9 +36,9 @@ def loader_gaps(images):
     gaps = []
     for image in images:
         loader = image.get("loader", {})
-        for name in ("function_starts","data_in_code"):
+        for name in ("entry_point","function_starts","data_in_code"):
             record = loader.get(name)
-            if record and record["status"] != "complete":
+            if record and record.get("status", "complete") != "complete":
                 gaps.append(f"{image['arch']} {name}: {record['status']}")
     return gaps
 

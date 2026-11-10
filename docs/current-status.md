@@ -131,6 +131,11 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Record entry offsets, dylib dependencies, rpaths and linkedit extents,
   and decode bounded function-start and data-in-code tables. The owned
   16-binary comparison checked 708 function starts and 56 dylib paths.
+- [x] Verify [modern and legacy process entry points](cli.md#mach-o-process-entry-points)
+  on owned arm64 and x86_64 universal executables. Apple tools matched
+  all four entry locations and full headless Ghidra matched the function
+  entries and bytes. Older imported headers recovered the fields from
+  their verified slice.
 - [x] Decode ordinary 64-bit chained bind and rebase pointers from immutable
   slices. The 16 owned inputs matched Apple tool output for 3,890 fixups.
 - [x] Decode ordinary pointer operations in legacy dyld streams. Four

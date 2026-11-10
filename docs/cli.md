@@ -383,11 +383,37 @@ arm64e. An all-slices import requires every slice to support engine import.
 `headers`, `segments`, and `sections` query imported Mach-O metadata and
 work before analysis. Older imports can recover the added header and segment
 fields from their digest-verified slice. The `loader` record includes
-`LC_MAIN`, the preferred image base, dylib paths and versions, rpaths,
+process entry information, the preferred image base, dylib paths and versions, rpaths,
 symbol table ranges, linkedit payload ranges, function starts, and
 data-in-code entries. An incomplete decoded table makes the header result
 partial. Dyld stream, export trie, chained fixup and signature ranges are
 recorded as extents.
+
+### Mach-O process entry points
+
+`inspect` and `headers` decode `LC_MAIN` and legacy `LC_UNIXTHREAD`.
+`LC_MAIN` retains the declared image-relative offset and stack size.
+`LC_UNIXTHREAD` reads the initial PC from the supported arm64 or x86_64
+general-register state and records the register's file location. The
+entry record includes its declared VA, available RVA, and slice and
+container offsets when it maps to unique executable file-backed bytes.
+Unsupported thread layouts or unmapped entries report partial coverage.
+Conflicting entry commands and malformed register state extents return
+typed errors. [Apple load command definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h) [Apple dyld entry checks](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOAnalyzer.cpp)
+
+The [owned fixture](../analysis/heldout_legacy_entry.S) builds with
+`xcrun clang -arch ARCH -c`. Link it with `xcrun ld -arch ARCH -static
+-e _owned_start` for `LC_UNIXTHREAD`, or use `xcrun clang -arch ARCH
+-nostdlib -lSystem -Wl,-e,_owned_start` for `LC_MAIN`. Both commands
+take the resulting object file.
+
+The installed CLI matched all four arm64 and x86_64 entry locations
+against Apple `otool` and `nm` on two owned universal binaries. Full
+headless Ghidra found each function at the same VA and reported the exact
+entry bytes. The trial also covered unsupported and malformed legacy
+commands and read-only header recovery from an older workspace. The
+validation report SHA-256 is
+`9d5c21b57be14cfa8b9254451d5b8a02e62ef6aaac556e4ec9e5734a5ce453b1`.
 
 ### Mach-O symbol declarations and indirect slots
 
