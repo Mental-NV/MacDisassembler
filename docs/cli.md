@@ -108,6 +108,7 @@ macscope calls --name _calc_add --direction callers --depth 2 --project workspac
 macscope status --project workspaces/calculator --json
 macscope jobs list --project workspaces/calculator --json
 macscope headers --project workspaces/calculator --json
+macscope unwind --project workspaces/calculator --json
 macscope sections --project workspaces/calculator --name-contains text --json
 macscope imports --project workspaces/calculator --json
 macscope exports --source dyld --project workspaces/calculator --json
@@ -376,6 +377,40 @@ coordinates, six- and twelve-byte stubs, eight-byte pointer slots and
 source-bound cursors. The legacy variants returned identical file-backed
 records after full headless analysis. The report SHA-256 is
 `f30df15634fa6bde4427e57242d06dbc75471cd26578ff87fca87c9aeed0e851`.
+
+### Compact unwind lookup ranges
+
+`unwind --project P [--arch ARCH] [--limit N] [--cursor TOKEN]` reads
+`__TEXT,__unwind_info` from the digest-verified imported slice. It works
+before analysis. Regular and compressed pages expose the raw encoding,
+range start and exclusive end, available VA and file coordinates,
+personality slot offsets, and LSDA offsets. The next entry or the linker
+sentinel determines the lookup range end. One encoding can cover more
+than one function. [Compact unwind format](https://github.com/llvm/llvm-project/blob/main/libunwind/include/mach-o/compact_unwind_encoding.h) [Linker index and sentinel](https://github.com/llvm/llvm-project/blob/main/lld/MachO/UnwindInfoSection.cpp)
+
+The result reports the `__eh_frame` extent and, where available, the
+declared file offset of a referenced DWARF FDE. DWARF frame instructions
+receive partial coverage. Unsupported versions, pages, encodings and
+table limits also produce explicit coverage gaps. Invalid offsets,
+overlapping arrays or inconsistent indices produce
+`compact_unwind_malformed`. The decoder caps the compact section at
+16 MiB, the index at 4,096 pages, and output at 10,000 ranges.
+
+The [owned C++ fixture](../analysis/heldout_unwind_exceptions.cpp) can be
+built for either architecture with `xcrun clang++ -arch ARCH -O1`. Link
+the [DWARF assembly fixture](../analysis/heldout_unwind_dwarf.s) into the
+x86_64 build to reproduce the mixed compact and DWARF case. Compare the
+result with `xcrun llvm-objdump --macho --unwind-info` and
+`xcrun dwarfdump --eh-frame`.
+
+The installed CLI matched 1,261 lookup ranges across five owned arm64
+and x86_64 variants, including a regular page and a 1,249-range table
+with two compressed pages and common encodings. It also verified
+personality and LSDA records, thin and universal offsets, and a DWARF FDE
+reference. Two additional variants without a compact section reported
+partial coverage. Both C++ slices reproduced the query after full
+headless analysis. The report SHA-256 is
+`b20f6d336673d29451ddedd3c9046147c8a4239e414e10f1c7842241ce793ba4`.
 
 ### Dyld exports and fixups
 

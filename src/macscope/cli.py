@@ -16,7 +16,7 @@ from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import html_export, macho_symbols, string_evidence
+from . import html_export, macho_symbols, macho_unwind, string_evidence
 from .schema import validate_envelope, validate_function
 
 
@@ -103,6 +103,7 @@ def parser():
             s.add_argument('--ghidra')
             s.add_argument('--java-home')
     s=sub.add_parser('headers');project(s);common(s)
+    s=sub.add_parser('unwind');project(s);common(s);pagination(s)
     s=sub.add_parser('fixups');common(s);pagination(s)
     source=s.add_mutually_exclusive_group(required=True)
     source.add_argument('--project')
@@ -802,6 +803,18 @@ def file_symbols(args, project, image):
     return envelope('symbols',rows,status='partial' if gaps else 'complete',cov=cov,diagnostics=gaps)
 
 
+def file_unwind(args, project, image):
+    info, records, gaps = macho_unwind.inventory(metadata.verified_slice(project,image),int(image['offset'],16))
+    records = [dict(row,image_id=image['image_id'],arch=image['arch']) for row in records]
+    rows,cov = page(records,args,image['image_id'],project.project_id,{},order='compact-unwind-rva/v1')
+    cov['scope'] = 'selected image compact unwind lookup ranges'
+    if gaps:
+        reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+        cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+    data = dict(info,image_id=image['image_id'],arch=image['arch'],records=rows)
+    return envelope('unwind',data,status='partial' if gaps else 'complete',cov=cov,diagnostics=gaps)
+
+
 def fixup_collection(args, image, data, binding, *, parsed=None, artifact=None):
     info,records,gaps = dyld.fixups(data,image,parsed=parsed)
     records = [row for row in records if args.kind == 'all' or row['kind'] == args.kind]
@@ -1035,6 +1048,8 @@ def execute(a):
         return envelope(command,data,status='partial' if gaps else 'complete',
                         cov=coverage('selected image headers',partial=bool(gaps),
                                      reason='loader_metadata_incomplete' if gaps else None),diagnostics=gaps)
+    if a.command=='unwind':
+        return file_unwind(a,p,image)
     if a.command=='swift':
         return swift_collection(a,p,image)
     if a.command=='bytes':
