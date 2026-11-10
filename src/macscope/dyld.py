@@ -209,16 +209,19 @@ def decode_chained(data, image, parsed, extent):
     return result, records, sorted(set(unsupported))
 
 
-def fixups(data, image, *, parsed=None):
+def fixups(data, image, *, parsed=None, weak_definitions=False):
     if parsed is None:
         parsed = thin(data)
     loader = parsed["loader"]
-    extents = [row for row in loader["linkedit"] if row["kind"]=="chained_fixups"]
-    if len(extents)>1:
-        raise Error("fixup_layout", "Ambiguous chained fixup payload")
-    if extents:
-        return decode_chained(data,image,parsed,extents[0])
+    if not weak_definitions:
+        extents = [row for row in loader["linkedit"] if row["kind"]=="chained_fixups"]
+        if len(extents)>1:
+            raise Error("fixup_layout", "Ambiguous chained fixup payload")
+        if extents:
+            return decode_chained(data,image,parsed,extents[0])
     streams = [row for row in loader["dyld_streams"] if row["kind"]!="export_trie" and row["size"]!="0x0"]
+    if weak_definitions:
+        streams = [row for row in streams if row["kind"] == "weak_bind"]
     if streams:
-        return decode_legacy(data,image,parsed,streams,MAX_FIXUPS)
+        return decode_legacy(data,image,parsed,streams,MAX_FIXUPS,weak_definitions=weak_definitions)
     return {"format":"none"}, [], []

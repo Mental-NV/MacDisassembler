@@ -1,4 +1,4 @@
-"""Read ordinary pointer operations from legacy dyld opcode streams."""
+"""Read ordinary pointer operations and weak bind declarations from legacy dyld streams."""
 import struct
 
 from .errors import Error
@@ -7,6 +7,7 @@ from .macho_load import bounded, uleb
 
 MAX_STREAM_BYTES = 1024 * 1024
 POINTER_BYTES = 8
+NON_WEAK_DEFINITION = 0x8
 SPECIAL_LIBRARIES = {0: "self", -1: "main_executable", -2: "flat_lookup", -3: "weak_lookup"}
 
 
@@ -127,13 +128,14 @@ def rebase_rows(stream, segments, image_offset):
     raise ValueError("Missing dyld rebase DONE")
 
 
-def bind_rows(stream, stream_name, segments, image_offset, libraries):
+def bind_rows(stream, stream_name, segments, image_offset, libraries, *, weak_definitions=False):
     lazy = stream_name=="lazy_bind"
     initial_ordinal = -3 if stream_name=="weak_bind" else None
     segment,offset,ordinal,symbol,addend,flags = None,0,initial_ordinal,None,0,0
     pointer_type = 1
     terminated = False
     while stream.position < stream.end:
+        opcode_offset = stream.position
         code = stream.byte()
         opcode, immediate = code&0xF0,code&0xF
         count = skip = 0
@@ -154,6 +156,13 @@ def bind_rows(stream, stream_name, segments, image_offset, libraries):
             ordinal = immediate-16 if immediate else 0
         elif opcode==0x40:
             symbol,flags = stream.symbol(),immediate
+            if weak_definitions and flags & NON_WEAK_DEFINITION:
+                yield {
+                    "kind": "non_weak_definition", "stream": stream_name,
+                    "symbol": symbol, "symbol_flags": hex(flags),
+                    "slice_file_offset": hex(opcode_offset),
+                    "container_file_offset": hex(image_offset + opcode_offset),
+                }
         elif opcode==0x50:
             pointer_type = immediate
         elif opcode==0x60:
@@ -187,7 +196,7 @@ def bind_rows(stream, stream_name, segments, image_offset, libraries):
         raise ValueError("Missing dyld bind DONE")
 
 
-def decode_legacy(data, image, parsed, streams, max_fixups):
+def decode_legacy(data, image, parsed, streams, max_fixups, *, weak_definitions=False):
     result = {"format":"legacy", "streams":[stream["kind"] for stream in streams]}
     if len(result["streams"])!=len(set(result["streams"])):
         raise Error("fixup_layout", "Ambiguous legacy dyld streams")
@@ -195,6 +204,7 @@ def decode_legacy(data, image, parsed, streams, max_fixups):
     segments = parsed["segments"]
     image_offset = int(image["offset"],16)
     records, gaps = [], []
+    scanned = 0
     for extent in streams:
         name = extent["kind"]
         offset,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
@@ -203,12 +213,14 @@ def decode_legacy(data, image, parsed, streams, max_fixups):
             continue
         stream = Stream(data,offset,size)
         rows = (rebase_rows(stream,segments,image_offset) if name=="rebase"
-                else bind_rows(stream,name,segments,image_offset,libraries))
+                else bind_rows(stream,name,segments,image_offset,libraries,weak_definitions=weak_definitions))
         try:
             for row in rows:
-                if len(records)==max_fixups:
+                if scanned==max_fixups:
                     return result,records,[*gaps,"fixup_limit"]
-                records.append(row)
+                scanned += 1
+                if not weak_definitions or row["kind"] == "non_weak_definition":
+                    records.append(row)
         except UnsupportedOperation as error:
             gaps.append(name+"_"+str(error))
         except ValueError as error:

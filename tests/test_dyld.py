@@ -6,7 +6,7 @@ from unittest.mock import patch
 from macscope import cli, dyld, engine, import_state, macho
 from macscope.errors import Error
 from test_core import TemporaryCase
-from test_macho import command, image, universal
+from test_macho import X86_64, command, image, universal
 
 
 BASE = 0x100000000
@@ -193,7 +193,7 @@ class Arm64eFixupsTests(TemporaryCase):
         self.assertEqual((restored, original), (image_data, raw))
 
 
-class LegacyFixupsTests(unittest.TestCase):
+class LegacyFixupsTests(TemporaryCase):
     def decode(self, **streams):
         data = legacy_fixture(**streams)
         return dyld.fixups(data,{"offset":"0x1000"})
@@ -231,3 +231,36 @@ class LegacyFixupsTests(unittest.TestCase):
         _,rows,gaps = self.decode(bind=b"\xd0\0")
         self.assertEqual(rows,[])
         self.assertEqual(gaps,["bind_opcode_0xd0"])
+
+    def test_weak_bind_declarations_use_opcode_offsets_and_a_separate_cursor(self):
+        weak_bind = b"\x70\x80\x02\x40_coalesced\0\x90"
+        weak = b"\x48_override\0" + weak_bind + b"\x48_second\0\0"
+        path = self.root / "owned-universal"
+        path.write_bytes(universal(images=[legacy_fixture(weak=weak), image(cpu=X86_64)]))
+        args = ["fixups", "--input", str(path), "--arch", "arm64"]
+        definitions = [*args, "--kind", "non-weak-definition", "--limit", "1"]
+        first = cli.execute(cli.parser().parse_args(definitions))
+        row, = first["data"]["records"]
+        self.assertEqual(row, {
+            "kind": "non_weak_definition", "stream": "weak_bind", "symbol": "_override",
+            "symbol_flags": "0x8", "slice_file_offset": hex(PAYLOAD),
+            "container_file_offset": hex(path.read_bytes().index(weak)),
+        })
+        cursor = first["coverage"]["next_cursor"]
+        second = cli.execute(cli.parser().parse_args([*definitions, "--cursor", cursor]))
+        self.assertEqual(second["data"]["records"][0]["symbol"], "_second")
+        pointer_rows = cli.execute(cli.parser().parse_args(args))["data"]["records"]
+        self.assertEqual([(row["kind"], row["symbol"]) for row in pointer_rows], [("bind", "_coalesced")])
+        self.error("stale_cursor", cli.execute, cli.parser().parse_args([*args, "--cursor", cursor]))
+
+    def test_weak_bind_declaration_scan_is_bounded_and_scope_specific(self):
+        weak = b"\x70\x80\x02\x40_coalesced\0\xc0\x03\0\x48_override\0\0"
+        data = legacy_fixture(weak=weak, bind=b"\xd0\0")
+        with patch.object(dyld, "MAX_FIXUPS", 2):
+            _, rows, gaps = dyld.fixups(data, {"offset": "0x0"}, weak_definitions=True)
+        self.assertEqual((rows, gaps), ([], ["fixup_limit"]))
+        _, rows, gaps = dyld.fixups(data, {"offset": "0x0"}, weak_definitions=True)
+        self.assertEqual([row["symbol"] for row in rows], ["_override"])
+        self.assertEqual(gaps, [])
+        malformed = legacy_fixture(weak=b"\x48_unterminated")
+        self.error("legacy_fixup_stream", dyld.fixups, malformed, {"offset": "0x0"}, weak_definitions=True)

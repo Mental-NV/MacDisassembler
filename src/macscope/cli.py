@@ -111,7 +111,8 @@ def parser():
     source.add_argument('--input',help='Read an owned Mach-O directly without starting Ghidra')
     s.add_argument('--image')
     s.add_argument('--arch',choices=('arm64','arm64e','x86_64'))
-    s.add_argument('--kind',choices=('all','bind','rebase'),default='all')
+    s.add_argument('--kind',choices=('all','bind','rebase','non-weak-definition'),default='all',
+                   help='Use non-weak-definition for declarations in the legacy weak-bind stream')
     s=sub.add_parser('objc');ss=s.add_subparsers(dest='action',required=True)
     for c in ('classes','methods','selectors'):
         s=ss.add_parser(c);project(s);common(s);pagination(s);s.add_argument('--name-contains')
@@ -831,10 +832,15 @@ def file_unwind(args, project, image):
 
 
 def fixup_collection(args, image, data, binding, *, parsed=None, artifact=None):
-    info,records,gaps = dyld.fixups(data,image,parsed=parsed)
-    records = [row for row in records if args.kind == 'all' or row['kind'] == args.kind]
-    records.sort(key=lambda row:int(row['va'],16))
-    rows,cov = page(records,args,image['image_id'],binding,{'kind':args.kind},order='fixup-address/v1')
+    definitions = args.kind == 'non-weak-definition'
+    info,records,gaps = dyld.fixups(data,image,parsed=parsed,weak_definitions=definitions)
+    if definitions:
+        order = 'weak-bind-opcode-offset/v1'
+    else:
+        records = [row for row in records if args.kind == 'all' or row['kind'] == args.kind]
+        records.sort(key=lambda row:int(row['va'],16))
+        order = 'fixup-address/v1'
+    rows,cov = page(records,args,image['image_id'],binding,{'kind':args.kind},order=order)
     cov['scope'] = 'selected image dyld fixups: '+args.kind
     if gaps:
         reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]

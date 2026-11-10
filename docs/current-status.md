@@ -145,6 +145,11 @@ collections exceed documented bounds despite successful pseudocode output.
   slices. The 16 owned inputs matched Apple tool output for 3,890 fixups.
 - [x] Decode ordinary pointer operations in legacy dyld streams. Four
   separately linked owned binaries matched Apple tooling on 1,086 fixups.
+- [x] Report [strong definitions in legacy weak-bind streams](cli.md#strong-definitions-in-legacy-weak-bind-streams).
+  The installed CLI matched LLVM on four declarations and two weak pointer
+  binds from owned arm64 and x86_64 binaries. Universal project queries
+  reproduced after full headless analysis, and 12,000 seeded mutations
+  exercised the bounded stream decoder.
 - [x] Query bounded modern and legacy export tries from the immutable
   slice. Apple and LLVM comparisons verified 406 exports on owned images.
 - [x] Decode arm64e userland chained fixups through data-only file queries.

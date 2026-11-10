@@ -618,6 +618,33 @@ Four separately linked owned tools and AppKit binaries using
 binds and 38 lazy binds. Synthetic tests cover weak binds and a backward
 address delta emitted by the linker.
 
+#### Strong definitions in legacy weak-bind streams
+
+Use `fixups --kind non-weak-definition` with `--input` or `--project` to
+list strong symbol definitions advertised for weak-symbol coalescing.
+Each record includes the symbol, the encoded flags, and the slice and
+container file offsets of its `BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM`
+opcode. The query scans the legacy weak-bind stream within the decoder
+bounds and paginates by opcode offset. The `all` filter lists address-based
+fixups. [Apple Mach-O flags](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h) · [LLVM weak-bind decoder](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Object/MachOObjectFile.cpp)
+
+For each architecture, an owned executable linked with `-no_fixup_chains`
+overrode two weak definitions from an owned dylib and referenced a third.
+Apple LLVM's `llvm-objdump --macho --weak-bind` matched all four strong
+definitions and both weak pointer binds. The installed CLI reproduced the
+declarations on thin files and universal slices, including paginated
+queries and project queries before and after native full-Ghidra analysis.
+The validation report SHA-256 is
+`e58ab2a52d1b07f0113f22e83af0796444a36eb6d7026d86e9e511b3aa8260f8`.
+
+Across 12,000 seeded weak-bind stream mutations, the decoder returned
+2,560 typed errors, 986 partial results and 8,454 complete scans. Every
+returned declaration pointed to its encoded opcode inside the stream.
+The mutation report SHA-256 is
+`156dd4823e53ce64440b5469549193bcec677d1dcdbdcbb884564334073e6d9b`.
+
+#### Objective-C and Swift metadata
+
 `objc classes`, `objc methods`, and `objc selectors` read static declarations
 and selector references from the immutable slice. Class records include the
 metadata address and a local or external superclass reference. Method
