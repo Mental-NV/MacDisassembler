@@ -636,6 +636,29 @@ contents matched afterward. A 257 MiB resource made the unfiltered scan
 partial, and the text-only scan completed. The validation report SHA-256 is
 `de71ca38df8dc852b1125234ba6e2f5605900d9eade1b73c6b5e17024790502f`.
 
+#### Decode a selected localization table
+
+```sh
+macscope resources strings 'Owned Calendar.app' \
+  --file Contents/Resources/Calendar/en.lproj/Calendar.strings \
+  --key OwnedCalendar.RangePreferences --json
+```
+
+The command reads one physical `.strings` file. Each report includes the
+bundle-relative path, byte size, SHA-256, format and decoded key-value
+records. Omit `--key` to page through all keys in sorted order. A cursor
+binds to the exact file digest, path and key filter. An absent exact key
+returns a complete result with zero records.
+
+Supported inputs are UTF-8 and BOM-marked UTF-16 OpenStep strings tables
+and flat XML and binary property lists with string keys and values.
+OpenStep escapes include ASCII octal and `\Uhhhh` Unicode code units.
+Duplicate keys, malformed files and unsupported encodings return typed
+errors. The reader caps input at 1 MiB, decoded text at 1,048,576
+characters and tables at 16,384 keys. It uses no external parser or
+archive loader. Treat a shared resource key and binary string as a lead
+for checking references and handler behavior.
+
 ## Persistence, identity and freshness
 
 `headers`, `segments`, and `sections` query imported Mach-O metadata and

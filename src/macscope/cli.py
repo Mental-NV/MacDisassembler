@@ -18,7 +18,7 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, identity, is_digest, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, string_evidence, terminal
+from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -96,6 +96,10 @@ def parser():
                    help='Match a filename extension without the dot, or file for extensionless resources')
     s.add_argument('--under',dest='resource_directory',metavar='DIRECTORY',
                    help='Start at an exact physical bundle-relative directory')
+    s=ss.add_parser('strings',help='Decode one physical bundle-relative .strings resource')
+    s.add_argument('path');common(s,('text','json'));pagination(s)
+    s.add_argument('--file',required=True,help='Exact bundle-relative .strings file')
+    s.add_argument('--key',help='Select one exact localization key')
     s=sub.add_parser('project');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('create');s.add_argument('path');common(s)
     s=sub.add_parser('import');s.add_argument('input');s.add_argument('--project',required=True);s.add_argument('--arch',choices=('arm64','x86_64','all'));common(s);budgets(s)
@@ -1459,6 +1463,14 @@ def execute_command(a, address_selection=None):
         return envelope(command,data,status='partial' if gaps else 'complete',
                         cov=coverage('Mach-O preflight',len(data['slices']),len(data['slices']),bool(gaps),
                                      reason=';'.join(reasons) or None),diagnostics=gaps)
+    if a.command=='resources' and a.action=='strings':
+        source,values=resource_strings.read(a.path,a.file)
+        records=[{'key':key,'value':values[key]} for key in sorted(values) if a.key is None or key==a.key]
+        binding=identity(source)
+        rows,cov=page(records,a,binding,identity(os.path.abspath(a.path)),{'key':a.key},
+                      order='resource-string-key/v1')
+        cov['scope']='localization keys in selected .strings file'
+        return envelope(command,dict(source,key_filter=a.key,records=rows),cov=cov)
     if a.command in ('bundle','resources'):
         resource_list = a.command == 'resources'
         kind = 'resources' if resource_list else a.kind

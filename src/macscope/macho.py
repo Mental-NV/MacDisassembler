@@ -64,21 +64,25 @@ def read_regular(path, maximum=MAX_INPUT):
         if directory is not None:
             os.close(directory)
     try:
-        s = os.fstat(fd)
-        if not stat.S_ISREG(s.st_mode) or s.st_size > maximum:
-            raise Error('input_limit', 'Not a regular file or input exceeds byte limit')
-        data = bytearray()
-        while len(data) <= maximum:
-            chunk = os.read(fd, min(1024 * 1024, maximum + 1 - len(data)))
-            if not chunk:
-                break
-            data.extend(chunk)
-        after = os.fstat(fd)
-        if len(data) > maximum or (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-            raise Error('input_changed', 'Input changed while reading or exceeds limit')
-        return bytes(data)
+        return read_regular_fd(fd, maximum)
     finally:
         os.close(fd)
+
+
+def read_regular_fd(fd, maximum):
+    s = os.fstat(fd)
+    if not stat.S_ISREG(s.st_mode) or s.st_size > maximum:
+        raise Error('input_limit', 'Not a regular file or input exceeds byte limit')
+    data = bytearray()
+    while len(data) <= maximum:
+        chunk = os.read(fd, min(1024 * 1024, maximum + 1 - len(data)))
+        if not chunk:
+            break
+        data.extend(chunk)
+    after = os.fstat(fd)
+    if len(data) > maximum or (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise Error('input_changed', 'Input changed while reading or exceeds limit')
+    return bytes(data)
 
 
 def resolve_input(path):

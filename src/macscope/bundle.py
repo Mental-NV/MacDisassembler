@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 import stat
 
 from .errors import Error
-from .macho import MAX_INPUT, debug_companion_path, open_directory, resolve_input
+from .macho import MAX_INPUT, debug_companion_path, open_directory, read_regular_fd, resolve_input
 
 
 MAX_ENTRIES = 10000
@@ -33,6 +33,15 @@ def looks_like_image(header):
 
 def fingerprint(info):
     return info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def exact_path(requested, depth, code, message):
+    relative = PurePosixPath(requested)
+    if (not relative.parts or relative.is_absolute() or relative.as_posix() != requested
+            or ".." in relative.parts or "\0" in requested or len(relative.parts) > depth
+            or len(os.fsencode(requested)) > 4096):
+        raise Error(code, message, 2)
+    return relative
 
 
 @contextmanager
@@ -69,11 +78,8 @@ def inventory(path, kind, *, resource_type=None, resource_directory=None):
     if path.suffix.lower() != ".app":
         raise Error("bundle_required", "Select a macOS .app bundle", 2)
     if resource_directory is not None:
-        relative = PurePosixPath(resource_directory)
-        if (not relative.parts or relative.is_absolute() or relative.as_posix() != resource_directory
-                or ".." in relative.parts or "\0" in resource_directory or len(relative.parts) > MAX_DEPTH
-                or len(os.fsencode(resource_directory)) > 4096):
-            raise Error("resource_directory", "Select an exact bundle-relative resource directory", 2)
+        relative = exact_path(resource_directory, MAX_DEPTH, "resource_directory",
+                              "Select an exact bundle-relative resource directory")
     executable = resolve_input(path)
     main = executable.relative_to(path).as_posix()
     companion = debug_companion_path(executable).relative_to(path).as_posix()
@@ -199,13 +205,37 @@ def inventory(path, kind, *, resource_type=None, resource_directory=None):
     return result, sorted(gaps)
 
 
+def read_resource(path, relative, maximum):
+    path = Path(os.path.abspath(path))
+    if path.suffix.lower() != ".app":
+        raise Error("bundle_required", "Select a macOS .app bundle", 2)
+    resolve_input(path)
+    gaps = set()
+    try:
+        with ExitStack() as opened:
+            root = open_directory(path)
+            opened.callback(os.close, root)
+            with resource_scope(root, relative.parent, gaps) as parent:
+                info = os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode) or info.st_dev != os.fstat(root).st_dev:
+                    raise Error("resource_file", "Select a physical regular file within the bundle filesystem", 5)
+                fd = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                opened.callback(os.close, fd)
+                if fingerprint(os.fstat(fd)) != fingerprint(info):
+                    raise Error("resource_changed", "Resource file changed before reading", 5)
+                data = read_regular_fd(fd, maximum)
+                if fingerprint(os.stat(relative.name, dir_fd=parent, follow_symlinks=False)) != fingerprint(info):
+                    raise Error("resource_changed", "Resource file changed during reading", 5)
+    except OSError as error:
+        raise Error("resource_file", "Resource file is missing, unreadable or changed during selection", 5) from error
+    if gaps:
+        raise Error("resource_changed", "Resource directory changed during reading", 5)
+    return data
+
+
 def physical_image(root, requested):
     """Resolve relative framework links through directory descriptors anchored at the bundle."""
-    relative = PurePosixPath(requested)
-    if (not relative.parts or relative.is_absolute() or relative.as_posix() != requested
-            or ".." in relative.parts or "\0" in requested or len(os.fsencode(requested)) > 4096
-            or len(relative.parts) > MAX_DEPTH + 1):
-        raise Error("bundle_image_path", "Select an exact bundle-relative image path", 2)
+    relative = exact_path(requested, MAX_DEPTH + 1, "bundle_image_path", "Select an exact bundle-relative image path")
     remaining = deque(relative.parts)
     directories = []
     physical = []

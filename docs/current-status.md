@@ -113,6 +113,14 @@ decision. Reuse recorded observations for gestures already covered.
   limit before Calendar. Scoped hashes matched file bytes, cursors survived
   edits outside the selection, and a replaced directory returned partial
   coverage. The installed query ran with Ghidra unavailable.
+- [x] **Read labels from an exact owned Calendar localization file.**
+  [`resources strings`](cli.md#decode-a-selected-localization-table) matched
+  `plutil` on five text and plist variants and matched their inventory
+  digests. The selected key matched a fresh Ghidra string and an incoming
+  reference in the digest-matched owned main executable. The installed CLI
+  replayed the evidence offline, preserved digest-bound pages, and rejected
+  duplicates, oversized input and a symlink. Of 1,200 seeded mutations,
+  468 produced a typed failure and 732 produced a flat string table.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

@@ -172,6 +172,42 @@ class BundleInventoryTests(unittest.TestCase):
         self.assertEqual(result["diagnostics"], ["bundle_changed"])
         self.assertEqual([row["relative_path"] for row in result["data"]], ["Contents/Resources/Greeting.txt"])
 
+    def test_exact_resource_strings_has_digest_bound_pages_and_protects_files(self):
+        resource = self.assets / "Week.strings"
+        raw = b'"week"="Week"; "month"="Month";'
+        resource.write_bytes(raw)
+        words = ["resources", "strings", str(self.app), "--file", "Contents/Resources/Week.strings"]
+
+        def run(*args):
+            return cli.execute(cli.parser().parse_args([*words, *args]))
+
+        with patch.object(engine, "dependencies", side_effect=AssertionError("localization query probed Ghidra")):
+            first = run("--limit", "1")
+            cursor = first["coverage"]["next_cursor"]
+            self.assertIsNotNone(cursor)
+            self.assertEqual(first["data"]["sha256"], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(first["data"]["records"], [{"key": "month", "value": "Month"}])
+            self.assertEqual(run("--cursor", cursor)["data"]["records"], [{"key": "week", "value": "Week"}])
+            self.assertEqual(run("--key", "absent")["coverage"]["known_total"], 0)
+        with self.assertRaises(Error) as caught:
+            run("--key", "week", "--cursor", cursor)
+        self.assertEqual(caught.exception.code, "stale_cursor")
+        resource.write_bytes(raw + b'\n')
+        with self.assertRaises(Error) as caught:
+            run("--cursor", cursor)
+        self.assertEqual(caught.exception.code, "stale_cursor")
+        with self.assertRaises(Error) as caught:
+            run("--force", "--output", str(resource))
+        self.assertEqual(caught.exception.code, "output_input_conflict")
+        self.assertEqual(resource.read_bytes(), raw + b'\n')
+        outside = self.root / "Outside.strings"
+        outside.write_bytes(raw)
+        resource.unlink()
+        resource.symlink_to(outside)
+        with self.assertRaises(Error) as caught:
+            run()
+        self.assertEqual(caught.exception.code, "resource_file")
+
     def test_inventory_lists_symlinks_and_special_files_without_following_them(self):
         outside = self.root / "outside"
         outside.mkdir()
