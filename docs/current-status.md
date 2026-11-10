@@ -94,6 +94,10 @@ collections exceed documented bounds despite successful pseudocode output.
   with resumable pages and scoped coverage.
 - [x] Traverse saved call references with depth/edge bounds and explicit
   unresolved targets.
+- [x] Query [references at arbitrary addresses](cli.md#implemented-commands)
+  from a bounded image capture. All 32 owned thin address queries matched
+  exact Ghidra queries and reproduced on universal slices. The installed
+  CLI preserved unresolved computed targets and reported the capture cap.
 - [x] Store user labels and function/instruction comments with reversible
   revisions, search and separate opt-in export.
 - [x] Round-trip full annotation history and accepted return-type hints

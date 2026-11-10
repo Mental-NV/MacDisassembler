@@ -53,6 +53,7 @@ import ghidra.program.model.block.CodeBlock;
 import ghidra.program.model.block.CodeBlockIterator;
 import ghidra.program.model.block.CodeBlockReference;
 import ghidra.program.model.block.CodeBlockReferenceIterator;
+import ghidra.program.model.listing.CodeUnit;
 import ghidra.program.model.data.AbstractIntegerDataType;
 import ghidra.program.model.data.BooleanDataType;
 import ghidra.program.model.data.DataType;
@@ -79,12 +80,13 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.4.0";
+    static final String VERSION = "1.5.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final int MAX_INSTRUCTIONS = 2000, MAX_BLOCKS = 500, MAX_EDGES = 500;
     static final int MAX_XREFS = 200, MAX_RANGES = 512, MAX_SECTIONS = 2048;
     static final int MAX_SYMBOLS = 10000, MAX_STRINGS = 5000, MAX_SCAN = 100000;
+    static final int MAX_IMAGE_REFS = 16000, MAX_COMPUTED_SITES = 10000;
     static final int MAX_OPTIONS = 4096, MAX_TEXT = 4096, MAX_PSEUDOCODE = 1048576;
     static final int MAX_SPANS_PER_FUNCTION = 1024, MAX_SPANS_PER_JOB = 40000;
     static final String BOUNDARY_POLICY = "macscope-linker-fallthrough-join/1";
@@ -147,6 +149,11 @@ public class MacscopeBridge extends HeadlessScript {
         limits.addProperty("edges_per_function", MAX_EDGES);
         limits.addProperty("xrefs_per_direction_per_function", MAX_XREFS);
         limits.addProperty("reference_source_addresses_per_function", MAX_INSTRUCTIONS);
+        if (mode.equals("analyze")) {
+            limits.addProperty("image_reference_records", MAX_IMAGE_REFS);
+            limits.addProperty("computed_flow_sites", MAX_COMPUTED_SITES);
+            limits.addProperty("computed_flow_instruction_scan", MAX_SCAN);
+        }
         limits.addProperty("body_ranges_per_function", MAX_RANGES);
         limits.addProperty("sections", MAX_SECTIONS);
         limits.addProperty("symbols_per_category", MAX_SYMBOLS);
@@ -180,6 +187,7 @@ public class MacscopeBridge extends HeadlessScript {
             }
             else coverage.add("functions", facet(0, 0, false, null,
                 mode.equals("import") ? "not_requested" : "failed"));
+            if (!fatal && mode.equals("analyze")) imageReferences();
         } catch (Exception e) {
             fatal = true;
             errors.add(error(e));
@@ -763,6 +771,77 @@ public class MacscopeBridge extends HeadlessScript {
         put(result, "source", r.getSource().toString()); result.addProperty("operand_index", r.getOperandIndex());
         result.addProperty("is_primary", r.isPrimary()); result.addProperty("is_external", r.isExternalReference());
         result.addProperty("from_external", r.getFromAddress().isExternalAddress()); return result;
+    }
+
+    void imageReferences() {
+        JsonArray references = new JsonArray(), computed = new JsonArray();
+        String refError = null, instructionError = null;
+        boolean refTruncated = false, instructionTruncated = false;
+        int sourcesSeen = 0, sourcesTotal = -1;
+        try {
+            var manager = currentProgram.getReferenceManager();
+            sourcesTotal = manager.getReferenceSourceCount();
+            // Ghidra stores external entry points under a special source outside the forward iterator.
+            AddressIterator entries = currentProgram.getSymbolTable().getExternalEntryPointIterator();
+            while (references.size() < MAX_IMAGE_REFS && entries.hasNext()) {
+                monitor.checkCancelled();
+                Reference entry = manager.getReference(Address.EXT_FROM_ADDRESS, entries.next(), CodeUnit.MNEMONIC);
+                if (entry == null || !entry.isEntryPointReference() || !append(references, reference(entry), false)) {
+                    refTruncated = true;
+                    break;
+                }
+                sourcesSeen = 1;
+            }
+            refTruncated |= entries.hasNext();
+            Address start = Address.EXT_FROM_ADDRESS;
+            for (var space : currentProgram.getAddressFactory().getAllAddressSpaces()) {
+                Address first = space.getMinAddress();
+                if (first.compareTo(start) < 0) start = first;
+            }
+            ReferenceIterator refs = manager.getReferenceIterator(start);
+            Address previous = null;
+            while (references.size() < MAX_IMAGE_REFS && refs.hasNext()) {
+                monitor.checkCancelled();
+                Reference ref = refs.next();
+                if (ref.isEntryPointReference()) continue;
+                if (!append(references, reference(ref), false)) {
+                    refTruncated = true;
+                    break;
+                }
+                if (!ref.getFromAddress().equals(previous)) sourcesSeen++;
+                previous = ref.getFromAddress();
+            }
+            refTruncated |= refs.hasNext() || sourcesSeen != sourcesTotal;
+        } catch (Exception e) { refError = error(e); }
+        int scanned = 0;
+        try {
+            InstructionIterator it = currentProgram.getListing().getInstructions(true);
+            while (scanned < MAX_SCAN && computed.size() < MAX_COMPUTED_SITES && it.hasNext()) {
+                monitor.checkCancelled();
+                Instruction ins = it.next();
+                scanned++;
+                var flow = ins.getFlowType();
+                if (flow.isComputed() && (flow.isCall() || flow.isJump())) {
+                    JsonObject site = new JsonObject();
+                    put(site, "addr", address(ins.getAddress()));
+                    put(site, "flow", flow.toString());
+                    if (!append(computed, site, false)) {
+                        instructionTruncated = true;
+                        break;
+                    }
+                }
+            }
+            instructionTruncated |= it.hasNext();
+        } catch (Exception e) { instructionError = error(e); }
+        root.add("address_references", references);
+        root.add("computed_flow_sites", computed);
+        JsonObject refs = facet(references.size(), -1, refTruncated, refError, "complete");
+        refs.addProperty("source_addresses_captured", sourcesSeen);
+        if (sourcesTotal >= 0) refs.addProperty("source_addresses_total", sourcesTotal);
+        coverage.add("address_references", refs);
+        JsonObject sites = facet(computed.size(), -1, instructionTruncated, instructionError, "complete");
+        sites.addProperty("instructions_scanned", scanned);
+        coverage.add("computed_flow_sites", sites);
     }
 
     void decompile(Function f, DecompInterface decomp, int timeout, JsonObject item, JsonObject cov) {

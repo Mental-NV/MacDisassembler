@@ -14,7 +14,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotation_transfer, annotations, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
+from . import address_xrefs, annotation_transfer, annotations, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from .schema import validate_envelope, validate_function
 
 
@@ -149,7 +149,12 @@ def parser():
                            help='Recover an observed integer result forwarded through a direct call')
             s.add_argument('--recover-switch-table',action='store_true',
                            help='Recover a verified guarded switch in a fresh query')
-        if c=='xrefs':s.add_argument('--direction',choices=('to','from','both'),default='both')
+        if c=='xrefs':
+            selections.add_argument('--to',dest='xref_to',metavar='VA',help='Show references to this unslid address')
+            selections.add_argument('--from',dest='xref_from',metavar='VA',help='Show references from this unslid address')
+            s.add_argument('--direction',choices=('to','from','both'),help='Direction for function selectors (default both)')
+            s.add_argument('--limit',type=int,help='Page size for address selectors (default 100)')
+            s.add_argument('--cursor',help='Continue an address query')
     s=sub.add_parser('search');project(s);common(s);pagination(s)
     s.add_argument('query')
     s.add_argument('--in',dest='search_scope',choices=(*search.SCOPES,'all'),default='all')
@@ -214,6 +219,10 @@ def normalize(raw, image, deps, manifest):
     if 'boundary_recovery' in manifest:
         analysis_key['boundary_recovery'] = manifest['boundary_recovery']
     aid=identity(analysis_key)
+    raw = dict(raw)
+    for key in (address_xrefs.REFERENCES,address_xrefs.COMPUTED):
+        if key in raw:
+            raw[key] = sorted(raw[key],key=canonical)
     def location(value):
         loc={'image_id':image['image_id'],'arch':image['arch'],'address_space':value.partition(':')[0] if not value.startswith('0x') else 'ram','va':None,'rva':None,'slice_file_offset':None,'container_file_offset':None}
         if value.startswith('0x'):
@@ -486,6 +495,8 @@ def analyze_image(project, image, args, deps, command, *, resumed_from=None):
     aid=normalized['analysis_id']
     out=project.path/'snapshots'/(aid+'.json')
     payload=canonical(normalized)+b'\n'
+    if len(payload)>MAX_SNAPSHOT_BYTES and address_xrefs.omit_for_snapshot_budget(normalized):
+        payload=canonical(normalized)+b'\n'
     if len(payload)>MAX_SNAPSHOT_BYTES:
         raise Error('snapshot_limit','Normalized snapshot exceeds its read limit; analyze fewer functions',7)
     if out.exists():
@@ -825,6 +836,18 @@ def swift_collection(args, project, image):
 
 def execute(a):
     limits(a)
+    xref_address = None
+    if a.command == 'xrefs':
+        target, source = getattr(a,'xref_to',None), getattr(a,'xref_from',None)
+        if target is not None or source is not None:
+            if a.direction is not None:
+                raise Error('xref_scope','Use --direction with a function selector',2)
+            direction = 'to' if target is not None else 'from'
+            xref_address = hex(metadata.hex_address(target if target is not None else source,'Unslid virtual address'))
+        else:
+            if getattr(a,'limit',None) is not None or getattr(a,'cursor',None) is not None:
+                raise Error('xref_scope','Pagination requires --to or --from',2)
+            a.direction = a.direction or 'both'
     va_range = getattr(a,'va_range',None) if a.command == 'disasm' else None
     if va_range is not None:
         va_range = disassembly.parse_range(va_range)
@@ -856,7 +879,7 @@ def execute(a):
     term = search.pattern(a.query) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
-        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.4.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
+        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.5.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='doctor':
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
         deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'forwarded_return_recovery':forwarded_returns.POLICY,'switch_table_recovery':switch_tables.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
@@ -947,6 +970,18 @@ def execute(a):
     if a.command in metadata.ENGINE_LISTS:
         return metadata_collection(a,p,image,snapshot)
     aid=snapshot['analysis_id']
+    if xref_address is not None:
+        refs,gaps = address_xrefs.match(snapshot,xref_address,direction)
+        paging = argparse.Namespace(limit=a.limit or 100,cursor=a.cursor)
+        rows,cov = page(refs,paging,aid,p.project_id,{'address':xref_address,'direction':direction},
+                        order='xref-address/v1')
+        cov['scope'] = 'recorded references at selected address'
+        if gaps:
+            reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+            cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+        data = {'image_id':image['image_id'],'arch':image['arch'],'address_space':'ram',
+                'address':xref_address,'direction':direction,'references':rows,'gaps':gaps}
+        return envelope(command,data,aid,'partial' if gaps else 'complete',cov)
     if va_range is not None:
         data = disassembly.query(snapshot,image,*va_range)
         partial = bool(data['gaps'])

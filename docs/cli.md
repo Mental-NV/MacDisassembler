@@ -65,6 +65,7 @@ macscope decompile --project workspaces/calculator --name _calc_add --fresh \
   --experimental-trusted-input --json
 macscope decompile --project workspaces/calculator --all --limit 1000 --json
 macscope xrefs --project workspaces/calculator --name _calc_add --direction both --json
+macscope xrefs --project workspaces/calculator --to 0x100000510 --json
 macscope cfg --project workspaces/calculator --name _calc_add --format dot
 macscope search calc_add --in all --project workspaces/calculator --json
 macscope calls --name _calc_add --direction callers --depth 2 --project workspaces/calculator --json
@@ -146,6 +147,42 @@ the record identifies a function. Pseudocode addresses identify the function
 entry. Use `--limit` and `--cursor` to page through the hits. A partial source
 facet yields partial coverage even when there are no matches. Search uses
 the saved evidence and requires no engine startup.
+
+`xrefs --to 0xVA` and `xrefs --from 0xVA` select a single unslid address.
+They read the committed image-wide reference capture, which includes data
+and Ghidra external-entry markers alongside code references. Each row keeps
+Ghidra's reference type, source and operand index where available. Targets
+reported for computed control flow are labeled `indirect_or_inferred`.
+When a saved computed call or jump has no reported target, `--from` emits
+its instruction evidence with a null target. These rows describe static
+Ghidra evidence.
+
+Use `--limit` and `--cursor` to page an address query. When the saved
+capture is complete, an empty list means Ghidra recorded no references
+in that direction at the address. Older snapshots and capped captures
+reuse available function samples and return partial coverage. The
+function-selector form retains `--direction to|from|both`. Both forms
+use committed evidence without starting a worker.
+
+The installed wheel checked 32 address queries on owned arm64 and x86_64
+executables against separate exact queries on read-only Ghidra Program
+copies. All 34 returned reference records matched, including references
+from a data pointer and external-entry markers. LLVM confirmed the direct
+and indirect call sites. Reanalysis reproduced each snapshot. All 32
+queries also matched on the corresponding universal slices.
+
+On the stripped x86_64 O0 calculator, the image capture included every
+reference sampled by the function views. The stock unresolved switch
+still reported a null jump target. A separate owned fixture reached the
+16,000-record cap and returned paged evidence with partial coverage and an
+unknown total.
+
+| Report | SHA-256 |
+| --- | --- |
+| Exact-address and legacy-snapshot checks | `7d9b615c7cfcd4365e86dfc04d806c35d344759f90dc7a74c78e5df4705825e7` |
+| Universal slice parity | `47ebc7a7216aeee32b8826d0089b167c00cd81a69951f767ebcf32da274ed51f` |
+| Reference capture limit | `3daedd252d12e970ab676bd5858b21757cb547a57fc5f198bb35b5d9eb2c97c5` |
+| Stripped calculator reanalysis | `7e6518ece15b1ed34ac650164d04732214f6904035ee687611f0d4760a8ecfb5` |
 
 `calls` follows recorded direct call references breadth-first, by function
 entry, with `--direction callers|callees|both` and `--depth 1..8`. The default
@@ -713,6 +750,8 @@ Defaults: one worker; 300s total wall deadline; 15s per decompilation;
 Fixed bridge bounds include 2000 instructions/function, 500 blocks and
 500 edges/function, 200 references/direction/function, 10000 symbols/category,
 5000 strings, 100000 defined-data entries scanned, and 64MiB result output.
+Address cross-reference capture retains up to 16000 references per image
+and up to 10000 computed control-flow sites from 100000 scanned instructions.
 Every cut facet has explicit partial coverage; some totals are unknown.
 
 The worker launcher log is sampled at 8MiB and combined job storage at
