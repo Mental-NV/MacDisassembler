@@ -2236,6 +2236,61 @@ both fresh queries reproduced their saved pseudocode. The validation
 report SHA-256 is
 `b4b50f5be8228266a20243c913700d0d45640e0456378aa99f2a6ed90a7da89b`.
 
+### Owned per-job isolation experiment
+
+The [research runner](../analysis/verify_job_isolation.py) exercises
+the ordinary owned-input CLI operations in disposable projects with a
+stricter macOS worker profile. It uses the local Ghidra 12.2 and JDK
+25.0.5.0.3. The prototype applies only inside the research process.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 \
+  analysis/verify_job_isolation.py --fixture-build-root build/review-v2 \
+  --output-dir /private/tmp/new-owned-isolation \
+  --experimental-trusted-input
+```
+
+For each DebugAnalysis symbol-bearing calculator tool, the runner
+calls `project create`, `import --arch`, and
+`decompile --from-import --address` for the linker-confirmed
+`calc_add` entry. Both imports and focused workers initialized.
+The arm64 query returned 20 instructions with complete extent
+coverage. The x86_64 query returned 19 and kept the
+`linker_extent_bytes_undecoded` status. Both produced pseudocode,
+preserved their saved Programs and replayed through `jobs resume`
+with engine calls disabled.
+
+The import worker could read its exact staged slice. The focused
+worker could read the Program copy within its own job. Both profiles
+permit job data, the pinned Ghidra, JDK and bridge trees, specific
+macOS runtime reads, launcher utilities and 12 exact Homebrew library
+files. The report records the read paths and library digests. The
+tested runtime needs a read of the root directory itself, `/dev/fd`
+for launcher pipes, and the JDK subprocess helper. No broad read
+permission for `/private/tmp` or the project is required.
+
+The focus profile denies writes to the copied Program database files.
+Ghidra still needs writable metadata and directories in the disposable
+project even with `-readOnly`. Broader write denials stopped it before
+decompilation. The supervisor verifies the original and copied Program
+digests after the query.
+
+Separate canaries checked that the focused worker could read and write
+within its job and could not read the staged slice, a sibling job,
+the project index, unrelated non-home data or calculator source. They
+also verified denial of outside writes, a database append, a loopback
+connection and execution of a readable staged script canary. Each
+architecture returned exit 7 on a one-second wall deadline, left no
+receipt for that attempt, and cleared its recorded process group.
+
+The positive and negative reports have SHA-256
+`2597551c1eb712531a5382441367d80107dad2f7184f2fb01553b134030d8476`
+and
+`8fec1fd9a00efa390b953dd8a145761bb2a2b6c2d697c454bd51dea860c47d67`.
+This is one pinned macOS host and runtime. File metadata, other IPC,
+hard process-memory and disk quotas, and hostile-input containment
+remain outside the demonstrated guarantees.
+
 ## Envelopes, errors and explicit omissions
 
 Workspace opens validate the manifest structure, schema version, and

@@ -205,14 +205,21 @@ query uses a read-only copy of the resulting Program and publishes a
 receipt for offline replay. The public owned-fixture gate remains in
 effect for ordinary commands.
 
-The owned-fixture prototype can verify startup, reject mismatched
-digests, entries, engine identities and reused approvals before
-launch, probe network, read, write and execution restrictions, and
-verify receipt replay with the engine unavailable. This work uses
-per-process restrictions and the existing local dependencies.
-Enabling the new live route and authorizing its exact Weekend request
-are separate decisions. Any change to host security settings, software
-installation or persistent access would need separate approval.
+The [owned-fixture isolation prototype](cli.md#owned-per-job-isolation-experiment)
+passed import, focused capture, and offline replay on both
+architectures using existing local dependencies and per-process
+restrictions. Canaries verified the read, write, network and execution
+limits. One-second timeout attempts cleared their worker groups.
+Ghidra needs writable metadata in the disposable project. The
+prototype protects the Program database files and verifies the copy.
+
+The next owned checkpoint is the trusted launcher and one-shot
+approval binding. Test that wrong digests, architectures, entries,
+extents and engine identities, or a reused approval, fail before a
+worker launches. Enabling the new live route and authorizing the
+exact Weekend request are separate decisions. Any change to host
+security settings, software installation or persistent access would
+need separate approval.
 
 ## Implemented
 
@@ -609,6 +616,10 @@ collections exceed documented bounds despite successful pseudocode output.
   before engine work. All 29 owned malformed or oversized import controls
   stopped before staging. An intact Program imported by the prior wheel
   completed analysis and fresh decompilation with the new wheel.
+- [x] Verify [a narrower per-job isolation prototype](cli.md#owned-per-job-isolation-experiment)
+  on owned arm64 and x86_64 calculator tools. Both focused receipts
+  replayed, both timeout groups cleared, and the access canaries
+  verified the stricter profile.
 - [x] Validate [chained-fixup layouts](cli.md#chained-fixup-layout-preflight)
   before engine work. Thirty-one import controls stopped before staging.
   Data-only results matched on 24 intact slices, and both owned calculator
