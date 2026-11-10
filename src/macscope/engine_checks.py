@@ -7,6 +7,7 @@ import zipfile
 import zlib
 
 from .errors import Error
+from .host_platform import checked_host, elf_digest
 from .macho import inspect_bytes, read_regular
 
 
@@ -58,8 +59,14 @@ def check_class_files(path, names):
         raise Error("incompatible_ghidra_jar", f"Invalid or incompatible Ghidra component: {path}", 4) from error
 
 
-def native_digest(path, file_type, code):
+def native_digest(path, file_type, code, host=None):
+    host = checked_host(host)
     data = read_dependency(path, 128 * 1024 * 1024)
+    if host.native_format == "elf":
+        try:
+            return elf_digest(data, shared_library=file_type == 6)
+        except Error as error:
+            raise Error(code, f"Expected a native ELF64 x86_64 component: {path}", 4) from error
     try:
         parsed = inspect_bytes(data)
     except Error as error:
@@ -70,13 +77,14 @@ def native_digest(path, file_type, code):
     return parsed["artifact_sha256"]
 
 
-def layout(ghidra, java, bridge):
+def layout(ghidra, java, bridge, host=None):
+    host = checked_host(host)
     launchers = {ghidra / "support/analyzeHeadless": b"ghidra.app.util.headless.AnalyzeHeadless",
                  ghidra / "support/launch.sh": b"LaunchSupport"}
     application = ghidra / "Ghidra/application.properties"
     launch_properties = ghidra / "support/launch.properties"
-    native = ghidra / NATIVE
-    java_bin, javac, jvm = java / "bin/java", java / "bin/javac", java / "lib/server/libjvm.dylib"
+    native = ghidra / host.native_path
+    java_bin, javac, jvm = java / "bin/java", java / "bin/javac", java / host.jvm_path
     required = (*launchers, application, launch_properties, native, java_bin, javac, jvm, java / "lib/modules",
                 *(ghidra / path for path in JARS), *(bridge / name for name in SCRIPTS))
     for path in required:
@@ -98,24 +106,26 @@ def layout(ghidra, java, bridge):
         raise Error("ghidra_java_override", "Ghidra launch properties select a different Java home", 4)
     for path, classes in JARS.items():
         check_class_files(ghidra / path, classes)
-    native_digest(javac, 2, "incompatible_jdk_native")
-    return {"native_decompiler_sha256": native_digest(native, 2, "incompatible_native_decompiler"),
-            "java_sha256": native_digest(java_bin, 2, "incompatible_jdk_native"),
-            "jvm_sha256": native_digest(jvm, 6, "incompatible_jdk_native"),
+    native_digest(javac, 2, "incompatible_jdk_native", host)
+    return {"native_decompiler_sha256": native_digest(native, 2, "incompatible_native_decompiler", host),
+            "java_sha256": native_digest(java_bin, 2, "incompatible_jdk_native", host),
+            "jvm_sha256": native_digest(jvm, 6, "incompatible_jdk_native", host),
             "application_properties_sha256": hashlib.sha256(app).hexdigest()}
 
 
-def java_version_matches(output):
+def java_version_matches(output, host=None):
+    host = checked_host(host)
     release = re.search(r'^openjdk version "([^"\r\n]+)"', output, re.M)
     build = re.search(r"^OpenJDK Runtime Environment[^\r\n]*\(build ([^\r\n)]+)\)$", output, re.M)
-    return bool(release and release[1] in ("25.0.5", JAVA_BUILD) and build and build[1] == JAVA_BUILD)
+    return bool(release and release[1] in host.java_releases and build and build[1] == host.java_build)
 
 
-def verify_runtime(runtime, expected_home):
+def verify_runtime(runtime, expected_home, host=None):
+    host = checked_host(host)
     try:
         valid = (isinstance(runtime, dict) and isinstance(runtime.get("home"), str)
                  and Path(runtime["home"]).resolve() == Path(expected_home)
-                 and runtime.get("version") == JAVA_BUILD and runtime.get("arch") == "aarch64")
+                 and runtime.get("version") == host.java_build and runtime.get("arch") == host.java_arch)
     except (OSError, RuntimeError, ValueError):
         valid = False
     if not valid:

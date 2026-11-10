@@ -17,7 +17,7 @@ import time
 import uuid
 from copy import deepcopy
 from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, manual_boundaries, scalar_signatures, switch_tables, worker_lifecycle
-from . import focused, loader_mapping
+from . import focused, host_platform, linux_isolation, loader_mapping
 from .annotations import MAX_TYPE_HINTS, structure_definitions
 from .errors import Error
 from .storage import canonical, identity, is_digest, strict_json, write_json
@@ -224,13 +224,68 @@ def copy_program(source, destination, expected_digest, integrity_error):
         raise Error(integrity_error, 'Could not copy and verify the saved Program') from error
 
 
+def host_capabilities():
+    """No dependency reads or subprocesses; report actual host support honestly."""
+    host = host_platform.select_host()
+    isolation = (linux_isolation.capability() if host.system == 'Linux' else
+                 {'backend': 'macos-seatbelt', 'engine_execution': True,
+                  'status': 'experimental-trusted-owned-input-only'})
+    return {'host': host.metadata(), 'isolation': isolation,
+            'capabilities': {'static_macho': True, 'cached_queries': True,
+                             'engine_operations': isolation['engine_execution'],
+                             'swift_demangling': host.system == 'Darwin',
+                             'automatic_dependency_install': False,
+                             'hard_process_memory_limit': False},
+            'verification': {'dependencies': 'not_checked', 'worker_probe': 'not_run'}}
+
+
+def dependency_paths(ghidra, java, host):
+    g = ghidra or os.environ.get('MACSCOPE_GHIDRA')
+    j = java or os.environ.get('MACSCOPE_JAVA_HOME')
+    if host.system == 'Darwin':
+        g, j = g or GHIDRA, j or JAVA
+    elif not g or not j:
+        raise Error('dependency_configuration',
+                    'Linux static preflight requires explicit --ghidra and --java-home '
+                    'or MACSCOPE_GHIDRA and MACSCOPE_JAVA_HOME; no installation is automatic', 4)
+    return Path(g).resolve(), Path(j).resolve()
+
+
+def static_dependencies(ghidra=None, java=None, full=False):
+    """Inspect file layout/hashes without executing Java, Ghidra or native code.
+
+    This is deliberately a report, not an engine dependency record. It cannot
+    authorize a worker or be mistaken for a verified runtime version.
+    """
+    host = host_platform.select_host()
+    g, j = dependency_paths(ghidra, java, host)
+    result = host_capabilities()
+    result['static_runtime'] = {
+        'ghidra_version': engine_checks.GHIDRA_VERSION,
+        'ghidra_path': str(g), 'java_home': str(j),
+        **engine_checks.layout(g, j, BRIDGE, host), 'bridge_sha256': bridge_digest(),
+        'jdk_version': None, 'required_jdk_build': host.java_build,
+        'jdk_version_status': 'not_executed',
+    }
+    if full:
+        result['static_runtime']['ghidra_tree_sha256'] = tree_digest(g)
+    result['verification'].update(dependencies='static_layout_only',
+                                  auxiliary_libraries='not_checked', worker_probe='not_run')
+    return result
+
+
+def require_worker_host():
+    selected = host_platform.select_host()
+    if selected.system == 'Linux':
+        linux_isolation.require_worker()
+    return selected
+
+
 def dependencies(ghidra=None, java=None, full=False):
-    g = Path(ghidra or os.environ.get('MACSCOPE_GHIDRA', GHIDRA)).resolve()
-    j = Path(java or os.environ.get('MACSCOPE_JAVA_HOME', JAVA)).resolve()
+    selected = require_worker_host()
+    g, j = dependency_paths(ghidra, java, selected)
     host = platform.machine()
-    if platform.system() != 'Darwin' or host != 'arm64':
-        raise Error('unsupported_host', 'This experimental engine pin is tested only on macOS arm64', 4)
-    hashes = engine_checks.layout(g,j,BRIDGE)
+    hashes = engine_checks.layout(g,j,BRIDGE,selected)
     try:
         v = subprocess.run([str(j/'bin/java'), '-version'], capture_output=True, timeout=10, env={'PATH':'/usr/bin:/bin','JAVA_HOME':str(j)}, check=False)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -633,6 +688,9 @@ def validate_bridge_shape(result, max_functions, *, full_functions):
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
         import_request=None, query_request=None, resumed_from=None, boundary_request=None, signature_plan=None,
         manual_request=None, from_import=False):
+    # Recheck at the worker boundary, including callers supplying old dependency
+    # dictionaries. Static reports and cached records never authorize a host.
+    require_worker_host()
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:

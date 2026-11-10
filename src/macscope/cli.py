@@ -86,7 +86,10 @@ def parser():
             s.add_argument('--ghidra')
             s.add_argument('--java-home')
             s.add_argument('--full-digest',action='store_true')
-            s.add_argument('--verify-worker',action='store_true',help='Run a full headless probe on a generated Mach-O')
+            checks=s.add_mutually_exclusive_group()
+            checks.add_argument('--verify-worker',action='store_true',help='Run a full headless probe on a generated Mach-O')
+            checks.add_argument('--host-only',action='store_true',help='Report host capabilities without reading dependencies or starting processes')
+            checks.add_argument('--static',dest='static_runtime',action='store_true',help='Check native dependency files without executing Java or Ghidra')
             s.add_argument('--experimental-trusted-input',action='store_true')
     s=sub.add_parser('inspect');s.add_argument('input');common(s)
     s=sub.add_parser('bundle');ss=s.add_subparsers(dest='action',required=True)
@@ -1613,7 +1616,7 @@ def execute_command(a, address_selection=None):
     term = search.pattern(a.query,regex=a.regex) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
-        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':engine.BRIDGE_VERSION,'backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
+        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':engine.BRIDGE_VERSION,'backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','required_jdk_scope':'macOS arm64; use doctor --host-only for host-specific readiness','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='diff':
         if a.scope=='evidence':
             data,rows,binding = handoff_diff.compare(a.left,a.right)
@@ -1627,6 +1630,10 @@ def execute_command(a, address_selection=None):
             cov.update(status='partial',truncation_reason=';'.join(reasons))
         return envelope(command,dict(data,records=records),status='partial' if data['gaps'] else 'complete',cov=cov)
     if a.command=='doctor':
+        if a.host_only:
+            return envelope(command,engine.host_capabilities())
+        if a.static_runtime:
+            return envelope(command,engine.static_dependencies(a.ghidra,a.java_home,full=a.full_digest))
         if a.verify_worker and not a.experimental_trusted_input:
             raise Error('isolation_required','The headless doctor probe requires --experimental-trusted-input',3)
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest or a.verify_worker)

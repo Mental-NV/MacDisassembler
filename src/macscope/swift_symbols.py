@@ -1,6 +1,7 @@
 """Swift symbol-table candidates and an explicit native demangler."""
 import hashlib
 from pathlib import Path
+import platform
 import re
 import struct
 import subprocess
@@ -86,6 +87,9 @@ def demangle(names):
         return [], None
     if len(names)>1000 or any(not demangleable(name) for name in names):
         raise Error("swift_mangling","Expected bounded Swift symbol text without symbolic references",2)
+    if platform.system() != 'Darwin':
+        raise Error("demangler_unsupported_host",
+                    "Native Swift demangling is available only on macOS; raw Swift symbols remain available",4)
     output = invoke(["/usr/bin/xcrun","--find","swift-demangle"]).strip()
     path = Path(output)
     if not path.is_absolute() or path.name!="swift-demangle" or not path.is_file():

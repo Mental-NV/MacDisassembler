@@ -44,7 +44,7 @@ class SwiftEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tool = Path(directory)/"swift-demangle"
             tool.write_bytes(b"fixture executable")
-            with patch.object(swift_symbols,"invoke",
+            with patch.object(swift_symbols.platform,"system",return_value="Darwin"), patch.object(swift_symbols,"invoke",
                               side_effect=[str(tool)+"\n","LLVM 21\n","Test.probe() -> Swift.Int\n$sbad\n"]) as run:
                 rows,tool_info = swift_symbols.demangle(["_$s4Test5probeSiyF","_$sbad"])
         self.assertEqual(tool_info["tool"],"swift-demangle")

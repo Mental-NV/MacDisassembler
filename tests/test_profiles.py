@@ -201,6 +201,12 @@ class ProfileTests(unittest.TestCase):
 
 class ProfileRunnerTests(unittest.TestCase):
     def setUp(self):
+        # These mocked launcher tests exercise the existing macOS backend even
+        # when the Python regression suite runs on a Linux host.
+        for patcher in (mock.patch.object(engine.platform, 'system', return_value='Darwin'),
+                        mock.patch.object(engine.platform, 'machine', return_value='arm64')):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         temp = tempfile.TemporaryDirectory(dir="/private/tmp" if Path("/private/tmp").exists() else None)
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
