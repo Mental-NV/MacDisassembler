@@ -106,7 +106,16 @@ public class MacscopeBaseline extends HeadlessScript {
         jsonKV("decompile_timeout_secs", Integer.toString(decompileTimeoutSecs), true);
 
         out.println("\"analysis_timeout_occurred\": " + analysisTimeoutOccurred() + ",");
-        jsonKV("blind_profile", program.getOptions(Program.PROGRAM_INFO).getString("Macscope Blind Profile", "absent"), true);
+        Options info = program.getOptions(Program.PROGRAM_INFO);
+        String profile = info.getString("Macscope Blind Profile", "absent");
+        jsonKV("blind_profile", profile, true);
+        if ("dsym-assisted-v1".equals(profile)) {
+            out.println("\"dsym\": {");
+            jsonKV("sha256", info.getString("Macscope dSYM SHA-256", ""), true);
+            out.println("\"compilation_units\":" + info.getInt("Macscope dSYM units", 0) + ",");
+            out.println("\"functions_before\":" + info.getInt("Macscope dSYM functions before", 0) + ",");
+            out.println("\"functions_after\":" + info.getInt("Macscope dSYM functions after", 0) + "},");
+        }
         out.println("\"effective_analysis_options\": {");
         boolean firstOption = true;
         Options analysisOptions = program.getOptions(Program.ANALYSIS_PROPERTIES);

@@ -16,6 +16,8 @@ The broad specification is a roadmap, not a completion claim.
 - [Detailed specification](docs/specification.md)
 - [Phase-1 findings](docs/phase1-findings.md)
 - [Pinned development environment](docs/lock-manifest.md)
+- [Independent decompiler review and opt-in experiments](docs/decompiler-review.md)
+- [Experimental parameter-inference profile and measured scope](docs/parameter-inference.md)
 
 ```sh
 PYTHONPATH=src python3 -m macscope --help
@@ -31,7 +33,30 @@ third-party application binaries or proprietary recovered material. No
 project license has been selected. Remote pushes, publication, paid-engine
 work and optional REA integration remain separate decisions.
 
+## Portable static metadata and failure checks
+
+Objective-C inventories resolve the chained-fixup pages needed by their
+metadata instead of depending on the first 10,000 image-wide fixups. Page
+validation, per-slot mapping checks, a bounded cache and lookup budgets still
+apply. A malformed relevant page or exhausted budget produces partial coverage;
+legacy-fixup inventory limits are unchanged. Exact class-slot method queries
+remain bounded separately. These static queries do not start Ghidra or Java.
+
 The direct baseline runner records missing-input and missing-toolchain failures
 in its immutable run summary. It fingerprints the engine only after staging an
-input, so these failure paths can be tested without a macOS Ghidra install.
-This does not make engine execution portable or change its isolation policy.
+input. This permits failure-path testing without a macOS Ghidra install;
+it does not make engine execution portable or relax the macOS isolation gates.
+
+## Linux host groundwork
+
+Static Mach-O inspection and cached queries work independently of the host's
+native decompiler. `doctor --host-only --json` now reports the host capability
+matrix without launching anything. `doctor --static --ghidra PATH --java-home
+PATH --json` checks dependency files without executing Java or Ghidra.
+
+Linux x86_64 has an explicit experimental native-layout contract and bounded
+ELF checks. **Linux engine execution is still disabled.** A namespace/mount
+plan is not an executable sandbox: executable-path confinement, runtime
+library pinning and live isolation checks remain required. macOS arm64 keeps
+its existing runtime pin and Seatbelt worker policy. See
+[Linux readiness and remaining gates](docs/linux-host-readiness.md).

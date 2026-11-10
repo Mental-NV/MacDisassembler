@@ -93,6 +93,7 @@ static void test_directed_arithmetic(void) {
     r = calc_negate(5); CHECK(r.status == CALC_OK && r.value == -5);
     r = calc_negate(INT64_MIN); CHECK(r.status == CALC_ERR_OVERFLOW);
     r = calc_abs_checked(-5); CHECK(r.status == CALC_OK && r.value == 5);
+    r = calc_abs_checked(5); CHECK(r.status == CALC_OK && r.value == 5);
     r = calc_abs_checked(INT64_MIN); CHECK(r.status == CALC_ERR_OVERFLOW);
     r = calc_pow_checked(2, 10); CHECK(r.status == CALC_OK && r.value == 1024);
     r = calc_pow_checked(2, 62); CHECK(r.status == CALC_OK && r.value == (INT64_C(1) << 62));
@@ -111,6 +112,8 @@ static void test_directed_arithmetic(void) {
 static void test_parse_format(void) {
     calc_result_t r;
     char buf[32];
+    char too_long[65];
+    memset(too_long, '0', sizeof(too_long));
     r = calc_parse_digits("0", 1); CHECK(r.status == CALC_OK && r.value == 0);
     r = calc_parse_digits("9223372036854775807", 19);
     CHECK(r.status == CALC_OK && r.value == INT64_MAX);
@@ -120,6 +123,10 @@ static void test_parse_format(void) {
     CHECK(r.status == CALC_ERR_OVERFLOW);
     r = calc_parse_digits("-9223372036854775809", 20);
     CHECK(r.status == CALC_ERR_OVERFLOW);
+    r = calc_parse_digits("18446744073709551616", 20);
+    CHECK(r.status == CALC_ERR_OVERFLOW && r.value == 0);
+    r = calc_parse_digits(too_long, sizeof(too_long));
+    CHECK(r.status == CALC_ERR_INVALID && r.value == 0);
     r = calc_parse_digits("", 0); CHECK(r.status == CALC_ERR_INVALID);
     r = calc_parse_digits("-", 1); CHECK(r.status == CALC_ERR_INVALID);
     r = calc_parse_digits("12a", 3); CHECK(r.status == CALC_ERR_INVALID);
@@ -143,6 +150,7 @@ static void test_parse_format(void) {
           calc_compare_s64(2, 1) > 0);
     CHECK(calc_compare_s64(INT64_MIN, INT64_MAX) < 0);
     CHECK(calc_compare_u64(UINT64_MAX, 0) > 0 && calc_compare_u64(3, 3) == 0);
+    CHECK(calc_compare_u64(0, UINT64_MAX) < 0);
     /* u64 vs s64 disagreement case: -1 signed < 1, but huge unsigned. */
     CHECK(calc_compare_s64(-1, 1) < 0 && calc_compare_u64((uint64_t)-1, 1) > 0);
 }
@@ -311,6 +319,13 @@ static void test_engine_signed_entry(void) {
 
 static void test_engine_directed(void) {
     calc_state_t st;
+    /* Null state is accepted by the defensive entry points. */
+    calc_state_init(NULL);
+    calc_engine_clear(NULL);
+    calc_engine_input_digit(NULL, 1);
+    calc_engine_input_op(NULL, '+');
+    calc_engine_equals(NULL);
+    calc_engine_sign_toggle(NULL);
     /* 2 + 3 =  -> 5 */
     calc_state_init(&st);
     feed_digits(&st, "2"); calc_engine_input_op(&st, '+');
@@ -321,6 +336,13 @@ static void test_engine_directed(void) {
     CHECK(!st.error_latched && st.display == 8);
     calc_engine_equals(&st);
     CHECK(!st.error_latched && st.display == 11);
+    /* The first equals succeeds, then repeating that addition overflows. */
+    calc_state_init(&st);
+    feed_digits(&st, "9223372036854775806"); calc_engine_input_op(&st, '+');
+    feed_digits(&st, "1"); calc_engine_equals(&st);
+    CHECK(!st.error_latched && st.display == INT64_MAX && st.last_operand == 1 && st.has_last);
+    calc_engine_equals(&st);
+    CHECK(st.error_latched && st.error == CALC_ERR_OVERFLOW && st.display == INT64_MAX);
     /* consecutive operators: 3 + * 4 = -> 12 */
     calc_state_init(&st);
     feed_digits(&st, "3"); calc_engine_input_op(&st, '+');
@@ -370,12 +392,21 @@ static void test_engine_directed(void) {
     calc_state_init(&st);
     calc_engine_input_digit(&st, 12);
     CHECK(st.error_latched && st.error == CALC_ERR_INVALID);
+    calc_engine_clear(&st);
+    calc_engine_input_digit(&st, -1);
+    CHECK(st.error_latched && st.error == CALC_ERR_INVALID && st.display == 0);
 }
 
 static void test_history(void) {
     calc_history_t h;
     calc_result_t r;
     size_t i;
+    calc_history_init(NULL);
+    calc_history_push(NULL, 2, '+', 3, 5);
+    CHECK(calc_history_len(NULL) == 0);
+    CHECK(calc_history_get(NULL, 0) == NULL);
+    r = calc_history_sum(NULL);
+    CHECK(r.status == CALC_ERR_INVALID && r.value == 0);
     calc_history_init(&h);
     CHECK(calc_history_len(&h) == 0);
     r = calc_history_sum(&h);

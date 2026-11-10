@@ -1,0 +1,598 @@
+{
+  "schema": "macscope-parameter-profile-checkpoint/1",
+  "date": "2026-11-09",
+  "base_revision": "fe1783850642409822f2134bbc293f3c0edbe2a9",
+  "classification": "Source-aware owned-fixture static validation; no semantic-equivalence claim",
+  "implementation_sha256": {
+    "src/macscope/engine.py": "1cb2714b745099ac8af2b6f5edf95055a5340d19fdf2f2e62f39fdccccc9306d",
+    "src/macscope/cli.py": "7fa801b2a4bd5c459aa0fdfdaaf4de750a8318ac66bf48f93356cc6093798298",
+    "src/macscope/bridge/MacscopeProfile.java": "df92d0fdcc2ece816b06a3a6b1ad0fa94878fd5e6d1e999c74079918bc910b20",
+    "src/macscope/bridge/MacscopeBridge.java": "e12cc00f3cbbd648de1baae9093c0f102194dd0dfccca6e49f534cd4b8d0eb39",
+    "tests/test_profiles.py": "92c1d17659aaab4ae5d60ba32ec62e8e0311dde0a8995b6327c10b345c60c8e9",
+    "tests/integration_profiles.py": "36486f46ff8c241b7e7d0af075aec0bdcd1761afe8dcb50fd08881475148f9d2",
+    "tests/test_core.py": "95e154864ad6c6901005b9b0c3a118b0843a565e104780fe9974782c757f7bae",
+    "analysis/prototype_experiment.py": "4f539e7dd6603074e51bef65414181b1394588d30aacfb864557aff63075d982",
+    "analysis/tests/test_decompiler_review.py": "2dd9af47950b94d11ec258122a9bea7463fb24ff74d900dbdfe88bd93c3765e6"
+  },
+  "engine_free_tests": [
+    {
+      "command": "PYTHONPATH=src python3 -m unittest discover -s tests -v",
+      "passed": 146,
+      "log_sha256": "6e0f5945faf858fd3813a3db7bde534770368a608e68802627f33d919b452521"
+    },
+    {
+      "command": "python3 -m unittest discover -s analysis/tests -v",
+      "passed": 53,
+      "log_sha256": "d7cc8dca90b2a19f8a6a3a5f0cdfaf96b6f36c066155ecc68cdffbcb9540d432"
+    }
+  ],
+  "fixture_provenance": {
+    "manifest_sha256": "15effb94a6a2db4b9db26128dd60012d6c937fa6818828c9ca925d82a63cda8b",
+    "source": {
+      "git_revision": "816516284f594f100743c1451f4f55cef7b01195",
+      "dirty": true,
+      "tracked_dirty_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_tree_sha256": "7ceb1a7d957269331453f474d81632a7016f093b3d28ed831461c745f015121f",
+      "source_files_sha256": {
+        "docs/semantics.md": "29ef70009fa788ea98914048d6edd557f3800c98cac7d2e072eecb98e70b930c",
+        "fixture/CalculatorFixture.xcodeproj/project.pbxproj": "e72396533994da3e9ff65c9cafbffe319858c0297046b39420a5777c52002b42",
+        "fixture/CalculatorFixture.xcodeproj/xcshareddata/xcschemes/CalculatorFixture.xcscheme": "073fdbd82c085433bb005062d46bbc4ba0f9572c5557ff2c6fd9d4e0187ed564",
+        "fixture/build/build_matrix.sh": "bef21b1d31e077d31ecc13d799778d4de6092e850e93bf472125016bb1298dd0",
+        "fixture/build/write_manifest.py": "6ad42b1e1a68d5df6f0e0ff9bda9c07879d6d0c8da57832dfd228ae99af2e369",
+        "fixture/src/CalcController.h": "fe9215d16aa262e0ca14a5e79784fb7243af642871ea4aae5cf5a98e0d1ef1f4",
+        "fixture/src/CalcController.m": "0fdae74a08da7b2ebfa5302a88af01f6925b89c8e53f384875e36de7237483f9",
+        "fixture/src/CalculatorFixtureAppDelegate.h": "e4b4a7cfec5c034800d8b0baaba6301c7126e4a632981a010fcf345cccc1a5ea",
+        "fixture/src/CalculatorFixtureAppDelegate.m": "75b33a28f02e3379dcf6fc75d6c440a342016f000b7f8dbff210209ead85b51e",
+        "fixture/src/Info.plist": "f4fc69d128edb60d07ffcdd74bc00446f8a3eccf1974d3b5d63ecdfcc7aacef2",
+        "fixture/src/calc_core.c": "f34c446da5c9074f01246eadc1bcff1753ebde6bd898b9de48ce33503e7c26ed",
+        "fixture/src/calc_core.h": "555c41b9e3c1345252a7535def3576b266be02596dcc771b637ee3d5c64ed769",
+        "fixture/src/corpus.c": "718172e95c17edb7c75e6cd0acbc264226524cc0e02161809dbc835cc47ec576",
+        "fixture/src/corpus.h": "70ed5b82224cd28e5987b92a8e9f0cafa3985799821fdec470c1c048e320afc0",
+        "fixture/src/corpus_main.c": "80aa3d6152d3ee335f47c0bc004b0b64fc7a80cbb2121449bb44c2f51de7972b",
+        "fixture/src/main.m": "e6d8e02f7b298c5e1da304d64e4e3c72341468084949e3afdd57e0c41d116495",
+        "fixture/tests/calc_core_tests.c": "5541949d54aa9eb1c8169054d7e92cd76fb3c2872b0b4000db9fcba7cca9a1cf",
+        "fixture/tests/ui_journeys.m": "418a71bee614268f60b4cb7db1c2afe4d48f63410ea02d9be5460e52bb7621bd"
+      },
+      "semantics_version": "1.1",
+      "note": "revision plus diff and source-file hashes identify uncommitted inputs"
+    }
+  },
+  "profile_matrix": {
+    "status": "passed",
+    "case_count": 16,
+    "public_cli_command_checks": 149,
+    "report_sha256": "b36aa03e2ffad7521d39e730fff1163aa547b5b7e30633c9641b037242992a35",
+    "cases": [
+      {
+        "case": "DebugAnalysis-arm64-sym-app",
+        "input_sha256": "90f90ae3410921afb003f1d73508cea85b0476d0520a517a63ca7e476ff2031c",
+        "baseline_analysis_id": "b328685dcc828e7ad67d28f8271de4384af08f485763656e5b8e1868efbae25b",
+        "inference_analysis_id": "b01042fa24a1c2f1d7619ebf04ac6952b1737942d23b6314b8d0d6be4a4c9782",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": {
+          "known_extra_argument_observed": false,
+          "expected_inferred_call_and_guard_observed": true,
+          "scope": "Exact source-aware arm64 O0 fixture regression, not semantic equivalence"
+        },
+        "function_count": 171,
+        "complete_pseudocode_count": 112,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 111,
+          "calling_convention": 29,
+          "pseudocode": 91,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "DebugAnalysis-arm64-sym-tool",
+        "input_sha256": "7c6a6a903251005b815d8198465291223db542eb138dffb4abfeee812bec646d",
+        "baseline_analysis_id": "278d4fe6379c2cb074abb78a6f1ec0a1ba10925a75e4d0002623aad68853aac1",
+        "inference_analysis_id": "5d68b957e88dba2251ed28cd75e7a6e602555ff19ccf0280b2e9705b06a85381",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": {
+          "known_extra_argument_observed": false,
+          "expected_inferred_call_and_guard_observed": true,
+          "scope": "Exact source-aware arm64 O0 fixture regression, not semantic equivalence"
+        },
+        "function_count": 44,
+        "complete_pseudocode_count": 36,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 36,
+          "calling_convention": 36,
+          "pseudocode": 15,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "DebugAnalysis-arm64-stripped-app",
+        "input_sha256": "d8172395e02f4c98f35f26c5fae8dec97667d4a56df6ffb49abd980c20ab2010",
+        "baseline_analysis_id": "75bf88206edd70a277a417183d20b8341fb3a24df8e7d3625f990dc9c5e3eb56",
+        "inference_analysis_id": "bfcd4e81d6c2972f6e0cc17846c452430bb87af9da04e83ac933e2f9b0d8519e",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 171,
+        "complete_pseudocode_count": 112,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 111,
+          "calling_convention": 29,
+          "pseudocode": 91,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "DebugAnalysis-arm64-stripped-tool",
+        "input_sha256": "2616a6a7b1b6d959c6788948d17d68a20d47c44241fef382c4925a46e5c70dc1",
+        "baseline_analysis_id": "04bc598566fa8dfb990f9b2d7fd15fa6198f0807e54627d305768238f6487e61",
+        "inference_analysis_id": "45382d5a610c70c3112cc2591b4cd913a199a734b76e9cb4045840ab32894242",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 44,
+        "complete_pseudocode_count": 36,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 36,
+          "calling_convention": 36,
+          "pseudocode": 15,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "DebugAnalysis-x86_64-sym-app",
+        "input_sha256": "c21b2078f3a8cadeb4f71b1d43ca2e4f06d7a20e61a0ae2af2bf7d02618c87ef",
+        "baseline_analysis_id": "1f5fb039426eb82b885f6da0e04671f976d3bd96a81d1ab8b3393a2656096455",
+        "inference_analysis_id": "501e8d4f4bc428cde1eb2bc69505b7faabc8c1cd00d9184b15d7d958329e47a3",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 115,
+        "complete_pseudocode_count": 56,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 55,
+          "calling_convention": 55,
+          "pseudocode": 32,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "DebugAnalysis-x86_64-sym-tool",
+        "input_sha256": "51ed114b0c9f6d8fc1ba858add774c7bbfab0432e0f07413066138d41c7b56ca",
+        "baseline_analysis_id": "1f75900b0aca32ca3048a3f35c59c41adab504aa21409a8b40ad6e481f68a41c",
+        "inference_analysis_id": "65979099e97733d5885ae3a7174a5884fd4222860fd7ca6584af2cfa891dd028",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 44,
+        "complete_pseudocode_count": 36,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 36,
+          "calling_convention": 36,
+          "pseudocode": 13,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "DebugAnalysis-x86_64-stripped-app",
+        "input_sha256": "36573a5c2fdc0a86463ad4b35d3c7008d7ff5e11ab09c51f22f34a7b97111cdb",
+        "baseline_analysis_id": "f5b7eb3f68f2c2213a3ec8dcf35a6b69cc6afbd41f6e5cfe839c187e6513c496",
+        "inference_analysis_id": "91c6b467b215717f05dda7e2a1ddfd0eda5ee86e2a568ac6bb78a7cc3617101d",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 115,
+        "complete_pseudocode_count": 56,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 55,
+          "calling_convention": 55,
+          "pseudocode": 32,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "DebugAnalysis-x86_64-stripped-tool",
+        "input_sha256": "16f391c627e7c59b92b7adc45df647c32de0f5385379d309235f899ea4d4936b",
+        "baseline_analysis_id": "e90cc5384bc278903211f64992f9f498d03a29f0749bc87334c5eaa7e7f5fffd",
+        "inference_analysis_id": "e2a3096aeb7ba34a3696a72af6242ad3fd1776b0a129cac5c331a1e37eeb202b",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 44,
+        "complete_pseudocode_count": 36,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 36,
+          "calling_convention": 36,
+          "pseudocode": 13,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-arm64-sym-app",
+        "input_sha256": "da59676e92b9c6d6dbe82b72e8932dee28b48d8eeb738c5b37625ad85c6bc263",
+        "baseline_analysis_id": "94f010c568f932d1d399db1814b6f41d818f17774fb2d23ea955071ab240c45a",
+        "inference_analysis_id": "0b4874d31f642dcabe67e2dc01ffc539237a6637915a0ff4c1bf9a492f119678",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 197,
+        "complete_pseudocode_count": 110,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 109,
+          "calling_convention": 27,
+          "pseudocode": 85,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-arm64-sym-tool",
+        "input_sha256": "81a8740371a1643f221a760b3ee2d1f3634dd8ae1894426e92bec11afc9de872",
+        "baseline_analysis_id": "99d53ca94161b74230b4c0d66b0121c751ede2bc1b669bb461affcd9878c3da1",
+        "inference_analysis_id": "e727f6d9c63ee7a6a6641b317d23355e1eb7e517a0f2e5f67f8d655dafc4adc6",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 39,
+        "complete_pseudocode_count": 31,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 31,
+          "calling_convention": 31,
+          "pseudocode": 6,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-arm64-stripped-app",
+        "input_sha256": "d297666ad785da42b937bc82906aec455e1000276404e052c96a9f05999eb650",
+        "baseline_analysis_id": "5f8b00e7bf56fb17924cbb4d670b4541ef1ca7f6f850ebf3226ca6f120873c51",
+        "inference_analysis_id": "9d7bcb5c7837a47c83c620c44b8d76491d9e1655b28166d229d73faa1e02a7c8",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 198,
+        "complete_pseudocode_count": 111,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 110,
+          "calling_convention": 28,
+          "pseudocode": 85,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-arm64-stripped-tool",
+        "input_sha256": "dc89c39480e83c765b9415f12739e0121a07e21235c66ea93bf6e653b4d3ce1e",
+        "baseline_analysis_id": "9609f35de420a1b12f91ef3988ff2ef601f48e575dd82f2abe2041b9754b44bd",
+        "inference_analysis_id": "8a369dd49022df639dac90b9a33e9e43f4a162ba97114aa19268fd6fcf2c2d18",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 39,
+        "complete_pseudocode_count": 31,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 31,
+          "calling_convention": 31,
+          "pseudocode": 6,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-x86_64-sym-app",
+        "input_sha256": "214a3916aa5d3c51b08af7acc40620d819ba977609cbc48e9fdde2bbbc4cbfce",
+        "baseline_analysis_id": "57140dd9da4ec18239c7b7a0aabcdf492cca6843aa7722d17e4ce8f22c6d9af6",
+        "inference_analysis_id": "1d2986d0b6643bcfad9bef21cf351c4fb66cba4c508987251e4294c51d8356da",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 141,
+        "complete_pseudocode_count": 54,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 53,
+          "calling_convention": 52,
+          "pseudocode": 30,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-x86_64-sym-tool",
+        "input_sha256": "d43c6223333bf37c20d9b684f1fcf83f89c8085582b6ed55a7e48ba16a5f7f8b",
+        "baseline_analysis_id": "f5c6d88e707bcbf76509e7f3784d056e229e8eecd9878aca40eababad9f6214b",
+        "inference_analysis_id": "d71afa7678856d7a32fd7a3b093dcebfc7f34417701ac1e4aadb6d2a90332864",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 39,
+        "complete_pseudocode_count": 31,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 31,
+          "calling_convention": 31,
+          "pseudocode": 9,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-x86_64-stripped-app",
+        "input_sha256": "d73dcad52705b92043ac153202dea4a3d5479344454e6d116709fdfaff30333d",
+        "baseline_analysis_id": "af71a83d046baf8c050e5d74e3e10e9c02e004316e3f675767f144c6b4aab85c",
+        "inference_analysis_id": "3d7c19c604065fad19e425ad90f0237a1cd67ebbe3047200c712c97ec0aa6063",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 141,
+        "complete_pseudocode_count": 54,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 53,
+          "calling_convention": 52,
+          "pseudocode": 30,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-x86_64-stripped-tool",
+        "input_sha256": "69623f3b292b93c653abf7b2d249dcdc4131a0fe1c4e610cd0f8f8f5a03b6cf0",
+        "baseline_analysis_id": "884a36e95d195006aeaa2c29dd9249f00ef96d0965df39ecc1c031b840df2222",
+        "inference_analysis_id": "7dad6f18cb2251057cc27cc8fa3bdcfdcf91a21dc7f6536f4e0eb190d30da1d1",
+        "baseline_restored_exactly": true,
+        "import_program_unchanged": true,
+        "source_aware_regression": null,
+        "function_count": 39,
+        "complete_pseudocode_count": 31,
+        "unchanged_machine_facets": true,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        },
+        "changed_counts": {
+          "name": 0,
+          "signature": 31,
+          "calling_convention": 31,
+          "pseudocode": 9,
+          "body_ranges": 0,
+          "instructions": 0,
+          "blocks": 0,
+          "decompile_status": 0
+        }
+      }
+    ],
+    "function_records_per_profile": 1581,
+    "complete_pseudocode_records_per_profile": 933,
+    "inference_repeat_exact_cases": [
+      "DebugAnalysis-arm64-sym-tool",
+      "DebugAnalysis-x86_64-sym-tool"
+    ],
+    "readonly_inferred_queries": [
+      {
+        "case": "DebugAnalysis-arm64-sym-tool",
+        "source_program_sha256": "e8a266ede3ad738efd0d977868efed42768508fa59e27b0c4472a054c9197aa8",
+        "job_id": "440d8cedb54749cb96a6fdc8cd791fc9",
+        "profile": {
+          "name": "parameter-inference",
+          "identity": "parameter-inference/1",
+          "marker": "macscope-binary-only-parameters/1",
+          "parameter_inference": true
+        }
+      },
+      {
+        "case": "DebugAnalysis-x86_64-sym-tool",
+        "source_program_sha256": "1fe24ce2c95383c11814a6ad1fdeadc1768b104dd4557e10a35460fea7b10dee",
+        "job_id": "22e8ba5387354328a09db4c336efd52e",
+        "profile": {
+          "name": "parameter-inference",
+          "identity": "parameter-inference/1",
+          "marker": "macscope-binary-only-parameters/1",
+          "parameter_inference": true
+        }
+      }
+    ],
+    "offline_export_inventory_check": {
+      "exports": 50,
+      "function_enumeration_complete": true,
+      "analysis_timed_out": false,
+      "output_budget_reached": false,
+      "errors": []
+    },
+    "independent_offline_recomparison_identical": true,
+    "aggregate_partial_results": {
+      "analyze": 38,
+      "export": 38,
+      "reason": "Bounded outgoing-xref collections only; measured pseudocode/instruction/CFG facets complete."
+    }
+  },
+  "baseline_cli_integration": {
+    "status": "passed",
+    "command_checks": 69,
+    "report_sha256": "52d6988d2977948aa4e095022502efb10ec19dad792ba14fbef5fdb6033695cc",
+    "thin_fat64_slice_parity": [
+      "arm64",
+      "x86_64"
+    ]
+  },
+  "research_adapter_smoke": {
+    "status": "passed",
+    "cases": 4,
+    "summary_sha256": "d3c22ab11600dfde5e039c7ac8de70fa20f78fe9335228c91beb440fe3f8ea93",
+    "independent_resummary_identical": true,
+    "arch": "arm64",
+    "optimization": "O0"
+  },
+  "retained_failed_trial": {
+    "report_sha256": "ba8caa5eaac5da0e1f7caa9a684aac11353c0acc6b543773c145c83183bd5dc3",
+    "reason": "Identical baseline snapshot differed only in incoming-xref iteration order; publication correctly refused.",
+    "remedy": "Canonical sorting of both unordered xref arrays, preserving duplicates; new order-stability unit test."
+  },
+  "limits": [
+    "The matrix is source-aware and contains only the owned v1.1 calculator app/tool.",
+    "Whole-program inference can change signatures, return types and calling-convention labels incorrectly.",
+    "Measured unchanged fields are name, entry set, body_ranges, instructions, blocks and decompile_status; not every exported facet.",
+    "Repeated inference equality and read-only inferred Program reopening were tested only on both O0 symbol-bearing tools.",
+    "No recovered C was compiled or executed, no app UI was launched, and no semantic equivalence was established.",
+    "The default analyzer configuration is unchanged; new provenance and xref normalization change serialized outputs.",
+    "Trusted-owned-input-only engine scope remains; this is not a complete hostile-input sandbox."
+  ]
+}

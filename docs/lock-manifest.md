@@ -20,12 +20,14 @@ during Phase 1; Homebrew paths are recorded for identity only.
   at `/opt/homebrew/opt/ghidra/libexec`
   (`/opt/homebrew/Cellar/ghidra/12.2/libexec`)
 - `Ghidra/application.properties` sha256:
-  `7bf69ade52e5530d6534a1202cc4ded88ca1940747456fe3d38ea03b2e399be`
+  `7bf69ade52e5530d6534a1202cc4ded88ca1940747456fe3d38ea03b2e3d99be`
   (version 12.2, layout 3, build date 20261023)
 - Native arm64 decompiler
   `Ghidra/Features/Decompiler/os/mac_arm_64/decompile`:
   Mach-O 64-bit executable arm64, sha256
-  `bbbe0c16cb5456ab6c8faa28f777a3d923e30cfd5546fab661ccf51c95f6cb`
+  `bbbe0c16cb5446ab6c338faa28f777a3d923e30cfd5546fab661ccf51c95f6cb`
+- Installed tree digest from `macscope doctor --full-digest`:
+  `72b7d1c417bf822927ba839647d1cc85268a165e9680e06781fa5f54ba1e9dbc`
 - No x86_64 decompiler directory present (only `mac_arm_64` under
   `Decompiler/os/`); x86_64 targets are analyzed by the same arm64 worker —
   target arch never implies a separate worker.
@@ -61,12 +63,19 @@ Do not compare these fields as if their definitions were the same.
 
 ## Isolation (tested)
 
-- `sandbox-exec -f analysis/nonet.sb` (`(deny network*)`, `(allow default)`)
-  verified: sandboxed TCP connect fails with EPERM, unsandboxed times out.
-  All 16 baselines ran under this profile.
-- Not claimed: filesystem confinement (none), sandboxing of untrusted
-  inputs in general (inputs limited to our own fixtures by runner design).
-- Outputs written with umask 077 (owner-only) under ignored `build/`.
+- The historical 16 captures used `analysis/nonet.sb`. Its network
+  control denied a sandboxed TCP connection with EPERM.
+- The current runner creates a Seatbelt profile, home, settings, cache
+  and temporary directory per capture. It denies network access,
+  confines writes to the case directory and `/dev/null`, and blocks
+  reads outside the case within the repository, build, sibling run and
+  private home and temporary roots. It denies execution from the case
+  directory. The worker reads a staged binary and two pinned scripts.
+- Before each launch, the same profile checks a successful staged read,
+  denied writes to the input and sibling canary, and denied reads of the
+  source, original binary, sibling canary and evaluator dSYM when present.
+  This is a fixture isolation policy for trusted owned binaries.
+- Outputs use umask 077 and a new private run directory.
 
 ## Hardened direct runner
 
@@ -76,7 +85,8 @@ Do not compare these fields as if their definitions were the same.
   analyzes the selected matrix and freezes a new isolated experiment.
 - Full Ghidra 12.2 remains the only selected engine. Loader class is
   `MachoLoader`, with `-loader-loadLibraries false` and
-  `-loader-linkExistingProjectLibraries false`. Trusted pre/post scripts
+  `-loader-linkExistingProjectLibraries false` and `-loader-reexport false`.
+  Trusted pre/post scripts
   only; no scripts or library paths discovered from input directories.
 - Trusted pre-script explicitly disables DWARF/PDB/source/external symbol
   discovery, including when an analyzer is inapplicable/unregistered.
@@ -85,5 +95,11 @@ Do not compare these fields as if their definitions were the same.
 - New baseline schema: `macscope-baseline/2`; run manifest records engine,
   bridge, runner, native worker and input hashes, JDK, host architecture,
   effective command arrays and budgets. New freeze schema: version 2.
-- No source/dSYM filesystem confinement is claimed. Network denial remains
-  required; this is restricted to our own calculator/corpus inputs.
+- Each case denies network access and reads from the protected artifact
+  roots outside its own workspace. A separate `--assisted-from` run verifies
+  the prior freeze and stages one SHA-256- and UUID-checked dSYM per case.
+  All runs are restricted to the owned calculator and corpus inputs.
+
+The separate [switch patch experiment](heldout-switch.md#upstream-patch-evaluation)
+records its own native binaries and full engine-tree digests. The installed
+distribution above is the CLI default.

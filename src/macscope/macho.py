@@ -3,6 +3,7 @@
 Rejecting symlinks in every path component is intentional for this narrow MVP.
 It is stricter than future in-bundle framework-link support.
 """
+import errno
 import hashlib
 import os
 import plistlib
@@ -10,10 +11,15 @@ import stat
 import struct
 from xml.parsers.expat import ExpatError
 from pathlib import Path
+from .dyld import require_engine_chains
+from .dyld_legacy import require_engine_streams
 from .errors import Error
+from .export_trie import require_engine_trie
+from .macho_load import ENCRYPTION_COMMANDS, bounded, details, encryption_region, require_engine_tables
 
 MAX_INPUT = 256 * 1024 * 1024
 MAX_COMMANDS = 8192
+MAX_SECTIONS_PER_SLICE = 8192
 MAX_PLIST = 1024 * 1024
 ARCHES = {0x100000c: 'arm64', 0x1000007: 'x86_64'}
 
@@ -35,47 +41,63 @@ def checked_path(path, directory=False):
     return p
 
 
-def read_regular(path, maximum=MAX_INPUT):
-    p = checked_path(path)
-    # Open every component relative to an already-open directory. A parent
-    # cannot become an attacker-controlled symlink between lstat and open.
+def open_directory(path):
+    """Open an absolute directory path without following any symlinks."""
     directory = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
     try:
-        for part in p.parts[1:-1]:
+        for part in path.parts[1:]:
             nextfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)
             directory = nextfd
+        return directory
+    except BaseException:
+        os.close(directory)
+        raise
+
+
+def read_regular(path, maximum=MAX_INPUT):
+    p = checked_path(path)
+    directory = None
+    try:
+        # A parent cannot be swapped for a symlink between lstat and open.
+        directory = open_directory(p.parent)
         fd = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     except OSError as e:
         raise Error('path_changed', 'Path changed or contains a symlink: '+str(e)) from e
     finally:
-        os.close(directory)
+        if directory is not None:
+            os.close(directory)
     try:
-        s = os.fstat(fd)
-        if not stat.S_ISREG(s.st_mode) or s.st_size > maximum:
-            raise Error('input_limit', 'Not a regular file or input exceeds byte limit')
-        data = bytearray()
-        while len(data) <= maximum:
-            chunk = os.read(fd, min(1024 * 1024, maximum + 1 - len(data)))
-            if not chunk:
-                break
-            data.extend(chunk)
-        after = os.fstat(fd)
-        if len(data) > maximum or (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-            raise Error('input_changed', 'Input changed while reading or exceeds limit')
-        return bytes(data)
+        return read_regular_fd(fd, maximum)
     finally:
         os.close(fd)
+
+
+def read_regular_fd(fd, maximum):
+    s = os.fstat(fd)
+    if not stat.S_ISREG(s.st_mode) or s.st_size > maximum:
+        raise Error('input_limit', 'Not a regular file or input exceeds byte limit')
+    data = bytearray()
+    while len(data) <= maximum:
+        chunk = os.read(fd, min(1024 * 1024, maximum + 1 - len(data)))
+        if not chunk:
+            break
+        data.extend(chunk)
+    after = os.fstat(fd)
+    if len(data) > maximum or (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise Error('input_changed', 'Input changed while reading or exceeds limit')
+    return bytes(data)
 
 
 def resolve_input(path):
     p = Path(os.path.abspath(path))
     if p.suffix.lower() != '.app':
-        return checked_path(p), []
+        return checked_path(p)
     p = checked_path(p, directory=True)
+    raw_info = read_regular(p / 'Contents/Info.plist', MAX_PLIST)
     try:
-        info = plistlib.loads(read_regular(p / 'Contents/Info.plist', MAX_PLIST))
-    except (plistlib.InvalidFileException, ValueError, OverflowError, ExpatError) as e:
+        info = plistlib.loads(raw_info)
+    except (plistlib.InvalidFileException, ValueError, OverflowError, RecursionError, LookupError, ExpatError) as e:
         raise Error('bundle_plist', 'Invalid bounded bundle property list') from e
     name = info.get('CFBundleExecutable') if isinstance(info, dict) else None
     if not isinstance(name, str) or not name or name in ('.', '..') or '/' in name or '\\' in name or '\x00' in name:
@@ -83,31 +105,31 @@ def resolve_input(path):
     binary = checked_path(p / 'Contents/MacOS' / name)
     if not binary.is_relative_to(p):
         raise Error('bundle_escape', 'Executable escapes bundle')
-    warnings = []
-    if (binary.parent / (name + '.debug.dylib')).exists():
-        warnings.append('Companion .debug.dylib present; main image may be a launcher. Companion import is not implemented.')
-    return binary, warnings
+    return binary
 
 
-def bounded(off, size, total, label):
-    if off < 0 or size < 0 or off > total or size > total - off:
-        raise Error('macho_bounds', label + ' exceeds file bounds')
+def debug_companion_path(executable):
+    return executable.with_name(executable.name + '.debug.dylib')
 
 
-def thin(data):
+def thin(data, *, allow_arm64e=False, include_section_linkage=False, for_engine=False):
     if len(data) < 32 or data[:4] != b'\xcf\xfa\xed\xfe':
         raise Error('unsupported_format', 'Only little-endian 64-bit Mach-O images are supported', 3)
     _, cpu, subtype, filetype, ncmds, cmdbytes, flags, reserved = struct.unpack_from('<8I', data)
     arch = ARCHES.get(cpu)
-    if not arch or (arch == 'arm64' and (subtype & 0xffffff) != 0) or (arch == 'x86_64' and (subtype & 0xffffff) != 3):
-        raise Error('unsupported_arch', 'Only ordinary arm64 and x86_64 CPU subtypes are validated (arm64e is unsupported)', 3)
+    model = subtype & 0xffffff
+    if arch == 'arm64' and model == 2 and allow_arm64e:
+        arch = 'arm64e'
+    elif not arch or (arch == 'arm64' and model != 0) or (arch == 'x86_64' and model != 3):
+        raise Error('unsupported_arch', 'Unsupported CPU subtype for this operation', 3)
     if filetype not in (2, 6, 8):
         raise Error('unsupported_filetype', 'Only MH_EXECUTE, MH_DYLIB and MH_BUNDLE are supported', 3)
     if ncmds > MAX_COMMANDS or cmdbytes > 16 * 1024 * 1024 or ncmds * 8 > cmdbytes:
         raise Error('command_limit', 'Invalid or excessive load-command table')
     bounded(32, cmdbytes, len(data), 'Load commands')
     cursor, end = 32, 32 + cmdbytes
-    sections, commands, warnings, uuid = [], [], [], None
+    segments, sections, commands, command_records = [], [], [], []
+    warnings, uuid, encryption = [], None, None
     for _ in range(ncmds):
         bounded(cursor, 8, end, 'Load command header')
         cmd, size = struct.unpack_from('<2I', data, cursor)
@@ -115,13 +137,14 @@ def thin(data):
             raise Error('command_size', 'Load command size must be aligned and at least 8')
         bounded(cursor, size, end, 'Load command')
         commands.append(hex(cmd))
-        if cmd in (0x21, 0x2c):
-            if size < (24 if cmd == 0x2c else 20):
-                raise Error('encryption_bounds', 'Truncated encryption command')
-            cryptoff, cryptsize, cryptid = struct.unpack_from('<3I', data, cursor + 8)
-            bounded(cryptoff, cryptsize, len(data), 'Encrypted region')
-            if cryptid:
-                raise Error('encrypted', 'Encrypted Mach-O is unsupported; no decryption is attempted', 3)
+        command_records.append((cmd,cursor,size))
+        if cmd in ENCRYPTION_COMMANDS:
+            if encryption is not None:
+                raise Error('encryption_bounds', 'Duplicate encryption load command')
+            encryption = encryption_region(data, cmd, cursor, size)
+            if encryption["cryptid"]:
+                raise Error('encrypted', 'Encrypted Mach-O is unsupported', 3,
+                            partial={'arch': arch, 'encryption': encryption})
         if cmd == 0x1b:
             if size < 24:
                 raise Error('uuid_bounds', 'Truncated UUID command')
@@ -133,6 +156,13 @@ def thin(data):
             bounded(off, filesize, len(data), 'Segment file bytes')
             if filesize > vmsize or nsects > 4096 or 72 + nsects * 80 != size or va + vmsize > 2**64:
                 raise Error('section_bounds', 'Invalid segment/section table')
+            if len(sections) + nsects > MAX_SECTIONS_PER_SLICE:
+                raise Error('section_limit', f'Mach-O slice exceeds {MAX_SECTIONS_PER_SLICE} sections', 7)
+            segments.append({'name': name.split(b'\0')[0].decode('utf-8','backslashreplace'),
+                             'va': hex(va), 'size': hex(vmsize),
+                             'file_offset': hex(off) if filesize else None,
+                             'file_size': hex(filesize), 'protections': prot,
+                             'max_protections': maxprot, 'flags': hex(segflags)})
             for i in range(nsects):
                 at = cursor + 72 + i * 80
                 sn, sg, addr, sz, fo, align, reloff, nreloc, sf, r1, r2, r3 = struct.unpack_from('<16s16s2Q8I', data, at)
@@ -144,25 +174,40 @@ def thin(data):
                 if addr + sz > 2**64 or addr < va or addr + sz > va + vmsize or align > 63:
                     raise Error('section_bounds', 'Invalid section virtual range')
                 bounded(reloff, nreloc * 8, len(data), 'Relocations')
-                sections.append({'name': sn.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'segment': sg.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'va': hex(addr), 'size': hex(sz), 'file_offset': None if zero else hex(fo), 'protections': prot})
-        if cmd == 2:
-            if size < 24:
-                raise Error('symtab_bounds', 'Truncated symbol table command')
-            so, ns, stro, strs = struct.unpack_from('<4I', data, cursor+8)
-            bounded(so, ns * 16, len(data), 'Symbol table')
-            bounded(stro, strs, len(data), 'String table')
-        if cmd in (0x1d, 0x26, 0x29, 0x80000033, 0x80000034):
-            if size < 16:
-                raise Error('linkedit_bounds', 'Truncated linkedit command')
-            lo, ls = struct.unpack_from('<2I', data, cursor+8)
-            bounded(lo, ls, len(data), 'Linkedit payload')
+                section = {'name': sn.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'segment': sg.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'va': hex(addr), 'size': hex(sz), 'file_offset': None if zero else hex(fo), 'protections': prot}
+                if include_section_linkage:
+                    section.update(flags=hex(sf), reserved1=r1, reserved2=r2)
+                sections.append(section)
         cursor += size
     if cursor != end:
         raise Error('command_size', 'Load-command count and byte size disagree')
-    return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype, 'uuid': uuid, 'sections': sections, 'load_commands': commands, 'warnings': warnings}
+    loader = details(data,command_records,segments,arch)
+    if encryption is not None:
+        loader['encryption'] = encryption
+    result = {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,
+            'flags': hex(flags), 'uuid': uuid, 'segments': segments, 'sections': sections,
+            'load_commands': commands, 'warnings': warnings,
+            'loader': loader}
+    if for_engine:
+        require_engine_tables(loader, arch)
+        require_engine_chains(data, result)
+        require_engine_trie(data, loader)
+        require_engine_streams(data, loader, segments)
+    return result
 
 
-def inspect_bytes(data):
+def with_loader_container_offsets(image):
+    loader = image["loader"]
+    locations = {}
+    for key in ("entry_point", "encryption"):
+        if (record := loader.get(key)) is not None:
+            offset = record["slice_file_offset"]
+            location = hex(int(image["offset"], 16) + int(offset, 16)) if offset is not None else None
+            locations[key] = dict(record, container_file_offset=location)
+    return dict(image, loader=dict(loader, **locations)) if locations else image
+
+
+def inspect_bytes(data, *, allow_arm64e=False, for_engine=False):
     if len(data) > MAX_INPUT:
         raise Error('input_limit', 'Input exceeds 256 MiB')
     digest = hashlib.sha256(data).hexdigest()
@@ -188,22 +233,64 @@ def inspect_bytes(data):
             if any(off < b and a < off+size for a,b in spans):
                 raise Error('fat_overlap', 'Universal slices overlap')
             spans.append((off, off+size))
-            meta = thin(data[off:off+size])
+            meta = thin(data[off:off+size], allow_arm64e=allow_arm64e, for_engine=for_engine)
             if (cpu, subtype) != (meta['cpu_type'], meta['cpu_subtype']) or meta['arch'] in arches:
                 raise Error('fat_identity', 'Universal CPU mismatch or duplicate architecture')
             arches.add(meta['arch'])
             slices.append(dict(meta, offset=hex(off), size=hex(size), sha256=hashlib.sha256(data[off:off+size]).hexdigest()))
     else:
-        slices.append(dict(thin(data), offset='0x0', size=hex(len(data)), sha256=digest))
+        slices.append(dict(thin(data, allow_arm64e=allow_arm64e, for_engine=for_engine), offset='0x0', size=hex(len(data)), sha256=digest))
+    slices = [with_loader_container_offsets(s) for s in slices]
     for s in slices:
         s['image_id'] = hashlib.sha256((digest+':'+str(s['cpu_type'])+':'+str(s['cpu_subtype'])+':'+s['offset']+':'+s['size']+':'+s['sha256']).encode()).hexdigest()
-    return {'artifact_sha256': digest, 'size': hex(len(data)), 'slices': slices, 'limitations': ['Bounded preflight is not authoritative Ghidra loading.', 'No dyld bind/chained-fixup decoding, signature validation or dependency loading in preflight.']}
+    limitations = ['Bounded preflight is not authoritative Ghidra loading.',
+                   'No dyld bind/chained-fixup decoding, signature validation or dependency loading in preflight.']
+    if any(s['arch'] == 'arm64e' for s in slices):
+        limitations.append('arm64e is available for data-only inspection.')
+    return {'artifact_sha256': digest, 'size': hex(len(data)), 'slices': slices, 'limitations': limitations}
 
 
-def inspect_path(path):
-    p, warnings = resolve_input(path)
+def inspect_debug_companion(root, executable, *, allow_arm64e):
+    candidate = debug_companion_path(executable)
+    relative = candidate.relative_to(root).as_posix()
+    try:
+        parent = open_directory(candidate.parent)
+        try:
+            info = os.stat(candidate.name, dir_fd=parent, follow_symlinks=False)
+        except OSError as error:
+            if error.errno in (errno.ENOENT, errno.ENAMETOOLONG):
+                return None
+            raise
+        finally:
+            os.close(parent)
+        if stat.S_ISLNK(info.st_mode):
+            raise Error('symlink', 'The companion debug image must be a physical file')
+        if not stat.S_ISREG(info.st_mode):
+            raise Error('file_type', 'The companion debug image must be a regular file')
+        evidence = inspect_bytes(read_regular(candidate), allow_arm64e=allow_arm64e)
+        if any(image['file_type'] != 6 for image in evidence['slices']):
+            raise Error('debug_companion_filetype', 'The companion must contain Mach-O dylib slices')
+    except Error as error:
+        return {'relative_path':relative, 'status':'unavailable', 'error_code':error.code}
+    except OSError:
+        return {'relative_path':relative, 'status':'unavailable', 'error_code':'path_unavailable'}
+    return {'relative_path':relative, 'status':'verified', 'artifact_sha256':evidence['artifact_sha256'],
+            'slices':[{key:image[key] for key in ('arch','image_id','sha256','uuid')}
+                      for image in evidence['slices']]}
+
+
+def inspect_path(path, *, allow_arm64e=False, include_companion=True, for_engine=False):
+    root = Path(os.path.abspath(path))
+    p = resolve_input(root)
     data = read_regular(p)
-    result = inspect_bytes(data)
-    result['warnings'] = warnings
+    result = inspect_bytes(data, allow_arm64e=allow_arm64e, for_engine=for_engine)
+    result['warnings'] = []
+    if include_companion and p != root:
+        companion = inspect_debug_companion(root, p, allow_arm64e=allow_arm64e)
+        if companion is not None:
+            result['debug_companion'] = companion
+            warning = ('Companion .debug.dylib verified. Use --include-images with its relative path to import it.'
+                       if companion['status'] == 'verified' else 'Unable to verify the companion .debug.dylib.')
+            result['warnings'].append(warning)
     result['input_name'] = p.name
     return result, data

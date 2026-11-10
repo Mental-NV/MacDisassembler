@@ -34,33 +34,132 @@ native-component checks. Defaults match the pinned development machine:
 The wheel is pure Python plus project-owned Java bridge source and JSON
 schemas, with zero third-party Python runtime/build dependencies.
 
+## Verify the local engine
+
+`doctor` checks the selected Ghidra release, launcher and key JAR class
+headers, and verifies that the native decompiler and selected Java
+components have arm64 Mach-O headers. It checks the exact JDK build by
+starting `java -version`. An incompatible component or a conflicting
+Java override produces a typed dependency error. `--full-digest` also
+hashes the complete selected Ghidra tree.
+
+```sh
+macscope doctor --verify-worker --experimental-trusted-input --json
+```
+
+The opt-in probe generates a two-instruction Mach-O in a temporary private
+workspace. It checks import, analysis, saved disassembly, and the native
+pseudocode from a reopened Program. It includes the full engine digest and
+removes the temporary workspace on exit. The report distinguishes this
+live verification from dependency preflight. For all worker jobs, the
+runner verifies the Java home, build and architecture reported by the
+bridge before publishing a result. The runtime record lives in the
+private job manifest.
+
+The installed wheel passed the live probe on stock Ghidra and the
+separately selected experimental full engine. Five dependency faults
+returned typed errors, including a wrong-architecture native decompiler
+that was rejected before job creation. A host-native replacement passed
+the Mach-O preflight and failed the live protocol check during analysis.
+The validation report SHA-256 is
+`231a06a52d6af526dc51dc2bf259d66f5034389bdab282b74618e3d474e85906`.
+Ordinary imports, analyses, and fresh queries on owned arm64 and x86_64
+targets recorded the same selected arm64 JVM in all six job manifests.
+Both fresh receipts replayed and cached results from the preceding
+bridge remained readable. The job report SHA-256 is
+`61a552dc5b9fc3ec507f1e04bed84d723f6888b4eb75613276963884d874e234`.
+
 ## Implemented commands
 
 All commands have `--help`; unknown flags are errors. Data goes to stdout,
 errors also have a short stderr diagnostic. `--format text|json|jsonl`,
 `--json`, `--output FILE`, and `--force` are supported as applicable.
-Text currently renders escaped, indented JSON, not a polished terminal view.
-JSONL collection records each have the complete versioned envelope.
+Omitting `--format` retains the original indented JSON output. Explicit
+`--format text` selects the [terminal view](#terminal-view).
+JSONL emits a versioned envelope for each row of a list result. Empty
+lists and manifest-shaped results, including `export`, use one envelope.
+The writer serializes JSONL incrementally to stdout or to the staging file
+used for atomic publication. Workspace loading and query limits still
+apply before serialization.
 Successful `--output` writes only the file, not a duplicate stdout response.
+Output must be separate from selected input files and outside selected app
+bundles and managed project storage. An output conflict exits 8 even with
+`--force`. Reports may be written to a separate file at the project root.
+Publication uses the directory opened without following symlinks. A
+replacement of that directory detected before publication aborts the write.
+If the path changes at commit time, the report stays in the original
+directory and the `output_directory_changed` error reports
+`published_in_original_directory` in its partial results.
+The `export` command also supports a [standalone HTML report](#private-html-export).
+
+The installed CLI rejected 19 conflicting destinations, including hard
+links, case aliases, app contents, and saved project files. The owned app
+completed full headless analysis on arm64 and x86_64. All four source files
+and all 162 managed project files retained their hashes. Separate exports
+inside and outside the project were private and supported explicit replacement.
+The validation report SHA-256 is
+`15457e87d395ed33006f75d8c972615c96a0a5b608787cc8ab5d9f2e85c6e0e2`.
+
+A second installed run repeated the headless workflow and swapped the
+report directory for a symlink to the analyzed workspace before staging
+and during commit. Both swaps returned exit 8 and preserved all 163 files
+in the workspace. The late swap left a complete report in the original
+directory and reported that publication in the error response.
+The validation report SHA-256 is
+`78759dd7264a6e0337947a4ab970da531fa656f02980381966c313ea4e93855f`.
+
+The installed CLI matched the previous JSONL bytes for function lists,
+paginated lists, batch decompilation, normalized exports and fixups on
+owned arm64 and x86_64 inputs. Both slices completed full headless Ghidra
+analysis. Standard output, private atomic files and explicit replacements
+matched. The validation report SHA-256 is
+`500760c8500296486551c16957f326b558365f78c0d2ba88cb0b2963d7a3df12`.
+
+On prebuilt synthetic results of approximately 32 MiB, peak traced
+Python allocations after query execution dropped from about 64 MiB to
+under 0.3 MiB. The comparison covered row lists and manifests on both
+stdout and atomic file output with byte-identical results. The memory
+report SHA-256 is
+`61c3c6df4b07a076ff5ee7a19d4319c26dc169d5153d6f76304fb66bfa9ae396`.
 
 ```sh
 macscope --version
 macscope version --json
 macscope doctor --json --full-digest
 macscope inspect path/to/CalculatorFixture.app --json
+macscope bundle list path/to/CalculatorFixture.app --kind images --json
 macscope project create workspaces/calculator
 macscope import path/to/CorpusFixture --project workspaces/calculator \
   --arch arm64 --experimental-trusted-input --json
+macscope import path/to/CalculatorFixture.app --project workspaces/calculator \
+  --include-images 'Contents/Frameworks/Example.framework/Example' \
+  --arch all --experimental-trusted-input --json
 macscope analyze --project workspaces/calculator --profile baseline \
   --experimental-trusted-input --timeout 300 --json
 macscope functions list --project workspaces/calculator --limit 100 --json
 macscope functions show --project workspaces/calculator --name _calc_add --json
 macscope disasm --project workspaces/calculator --name _calc_add --json
 macscope decompile --project workspaces/calculator --name _calc_add --json
+macscope decompile --project workspaces/calculator --name _calc_add --fresh \
+  --experimental-trusted-input --json
 macscope decompile --project workspaces/calculator --all --limit 1000 --json
 macscope xrefs --project workspaces/calculator --name _calc_add --direction both --json
+macscope xrefs --project workspaces/calculator --to 0x100000510 --json
 macscope cfg --project workspaces/calculator --name _calc_add --format dot
+macscope search calc_add --in all --project workspaces/calculator --json
+macscope calls --name _calc_add --direction callers --depth 2 --project workspaces/calculator --json
 macscope status --project workspaces/calculator --json
+macscope jobs list --project workspaces/calculator --json
+macscope headers --project workspaces/calculator --json
+macscope unwind --project workspaces/calculator --json
+macscope sections --project workspaces/calculator --name-contains text --json
+macscope imports --project workspaces/calculator --json
+macscope exports --source dyld --project workspaces/calculator --json
+macscope symbols --source indirect --project workspaces/calculator --json
+macscope strings --project workspaces/calculator --encoding ascii --min-length 8 --json
+macscope fixups --project workspaces/calculator --kind bind --json
+macscope objc methods --project workspaces/calculator --name-contains press --json
+macscope swift symbols --project workspaces/calculator --json
 macscope export --project workspaces/calculator --json --output private-results.json
 ```
 
@@ -69,9 +168,121 @@ and refuses an existing path. For a universal input import requires explicit
 `--arch arm64|x86_64|all`; it extracts each chosen slice before invoking
 Ghidra. Reimporting an already imported immutable identity is idempotent.
 An image operation requires a unique `--image ID` and/or `--arch` when the
-workspace has multiple images. `--name EXACT`, `--address 0xUNSLID_VA`, and
-`--function-id ID` are mutually exclusive; duplicate names return candidates.
-Addresses identify **function entries**, not an arbitrary containing function.
+workspace has multiple images. A function selector accepts one of
+`--name EXACT`, `--function-id ID`, `--address 0xUNSLID_VA`, `--rva 0xRVA`,
+`--file-offset 0xOFFSET`, or `--runtime-address 0xRUNTIME_VA --load-slide SLIDE`.
+Duplicate names return candidates. Address-based selectors identify
+**function entries**.
+
+To rebuild an unavailable import Program, use `import --repair` with the
+exact committed artifact and slice. The workspace's saved `.artifact`
+file can supply the input. A healthy import still returns
+`already_imported`. A repaired import reports `repaired` and a job ID.
+
+```sh
+macscope import path/to/OwnedCalendar --repair --arch arm64 \
+  --project workspaces/calendar --experimental-trusted-input --json
+```
+
+Repair stages and verifies a new Program in its own job, then commits
+its pointer and receipt together. The previous analysis stays available.
+If the Program digest changes, later analyses use the new digest in their
+identity. Completed focused receipts and their pinned handoffs can still
+replay using the earlier digest. Unfinished queries still require the
+exact Program in their request.
+
+Bridge 1.10.0 records Ghidra labels at each function entry as alternate
+names, with their namespace and symbol source. A label can select the same
+function as its primary name. Entry-label coverage is partial when the
+32-symbol scan limit is reached. `functions show` and `functions list`
+also report Ghidra's immediate thunk target, including an external location
+when applicable and the target function ID when it was enumerated. Analyze
+an older workspace with this bridge to capture these fields.
+
+On two owned slices, Apple tools matched the shared entry, local branch
+target and imported `_puts` stub. The installed CLI resolved both names to
+one function, replayed each fresh result, and reproduced the exports on
+repeat analysis. A separate entry with 36 alternate labels retained 32
+and reported partial coverage. Reanalysis of both saved slices in a copy
+of a bridge 1.9.0 workspace captured the new fields and retained the older
+snapshots. The alias and thunk validation report SHA-256 is
+`8c06c552768a49edc708b8125b70a5854eb3fcce5d64091214fcb9c9e2b21d7d`.
+
+`--rva` is relative to the Mach-O's preferred image base. `--file-offset`
+is relative to the selected Mach-O slice, including in a universal
+binary. A function offset must map to one file-backed section and a
+saved entry. Both selectors reject a disagreement between the Mach-O
+and recorded Ghidra image bases. Address selectors use hexadecimal numbers.
+
+Use a supplied slide to select a function or read file-backed bytes from a
+runtime address. The CLI subtracts the slide and uses the resulting unslid
+address. Use `--load-slide=-0x4000` for a negative slide. The result's
+`address_selection` records the runtime VA, slide, unslid VA, image and
+architecture. Instructions, references and byte offsets still use their
+saved coordinates. Fresh decompilation records the selection in the job
+and receipt so `jobs show` and `jobs resume` can return it.
+
+```sh
+macscope bytes --project workspaces/calculator --arch arm64 \
+  --runtime-address 0x100004100 --load-slide 0x4000 --length 4 --json
+```
+
+The installed wheel matched 28 runtime and unslid query pairs after full
+Ghidra analysis of owned arm64 and x86_64 thin and universal slices. Byte
+reads matched the source files. Both universal slices preserved the slide
+on receipt replay, including an x86_64 retry after a controlled write
+failure. The validation report SHA-256 is
+`d061bdc5622fc8978e357f347e48cbc6db2e117e38acf6843ec216b2895dccf7`.
+
+Use `disasm --range START:END` to read committed Ghidra instructions
+across function boundaries. Both addresses are unslid hexadecimal VAs
+and the end is exclusive. A range covers 1 to 4,096 bytes and selects
+one imported image. It uses its own selector in place of a single-function
+selector.
+
+```sh
+macscope disasm --project workspaces/calculator --arch x86_64 \
+  --range 0x100000510:0x100000552 --json
+```
+
+The result lists whole saved instructions in address order and reports
+their function IDs. Identical records from overlapping functions appear
+once. Missing records, conflicting decodes, and instructions cut by a
+range boundary are separate gap reasons. Gap ends are exclusive. A range
+with gaps exits 6 and reports the number of covered and requested bytes.
+
+Function ownership is reviewed separately from decoded bytes. When two
+saved function bodies intersect, `body_overlap` gives each affected
+function a representative inclusive range and the other function ID.
+The review scans up to 100,000 saved ranges. Exports and range queries
+report an incomplete scan explicitly. A range query reports ownership
+witnesses within its selected range and preserves instructions whose bytes
+and decoding agree. A known conflict makes the result partial. Fresh
+decompilation and receipt replay carry the saved ownership warning while
+preserving Ghidra's decompilation status.
+
+The interval review matched an exhaustive byte comparison on 5,000 seeded
+controls. The installed CLI repeated full Ghidra analysis of two owned
+slices and reproduced the prior analysis IDs and exports. A derived
+snapshot on each architecture added a second claim over one instruction.
+The CLI retained agreeing bytes, separately flagged a contradictory decode,
+and reproduced the ownership warning on fresh-query replay. The validation
+report SHA-256 is
+`b334dd0c1dbc7cf8cf19f8a4cbd593bd5fd033b300d3617755390b1491d58039`.
+An unmapped range yields an empty instruction list with a gap. Use `bytes`
+for file-backed bytes whether or not Ghidra decoded them. Range queries
+read a committed snapshot and start no worker.
+
+The installed wheel verified 27 ranges across six stock Ghidra captures
+of the owned O0 calculator tool, covering both thin architectures and
+symbol states and both slices of a symbol-bearing universal binary. All
+534 returned instruction addresses and 2,013 bytes matched LLVM and the
+original slices. The x86_64 range that crossed two functions reported the
+intervening padding gap. The unresolved switch reported its missing case
+range. The universal queries matched their thin counterparts after
+remapping image and function identities and container offsets. Exports
+stayed byte-identical and no range query created a worker job. The report
+SHA-256 is `464079202b7bbe8c5aed15db6655b66c80acc6ae5bab73f6b924377d56df3c4d`.
 
 `functions list --name-contains TEXT` is a literal filter. Collection cursors
 bind to project, full analysis ID, filter and sort order. Changing any of
@@ -79,16 +290,887 @@ these rejects the cursor. Pagination coverage distinguishes page truncation
 from global discovery truncation. `--all` means bounded engine-recognized
 functions, not every possible routine in the binary.
 
+`decompile --all` reports `summary` for the returned page and `batch_summary`
+for every captured function. The batch records the engine-recognized count,
+the number of uncaptured functions when known, and the captured decompilation
+outcomes. A capture limit, analysis timeout, or failed function makes every
+page partial with exit 6. Pagination alone returns exit 0 and a continuation
+cursor. Thunks and external functions that Ghidra skips appear as
+`not_requested` outcomes.
+
+Full Ghidra runs capped at one function on owned arm64 and x86_64 slices
+reported one captured and five uncaptured functions. The installed CLI
+returned exit 6 in both cases. A timeout added to a later function in a
+copy of each saved snapshot appeared in the batch summary on all six
+pages. The validation report SHA-256 is
+`4ba4a5c1863df5b543e7b824ce002dab87ae35e0d2c5dc4ee32ae157aee62380`.
+
+`search QUERY` matches a literal, case-insensitive query of up to 256 printable
+characters against the selected committed image. `--in names` covers
+function and symbol names, `--in strings` covers Ghidra-defined strings,
+`--in pseudocode` covers saved decompiler text, and `--in comments` covers
+current user comments. The default `all` searches all four scopes.
+Each matching source record returns one bounded excerpt
+with image identity, engine address when available, and a function ID when
+the record identifies a function. Pseudocode addresses identify the function
+entry. Use `--limit` and `--cursor` to page through the hits. A partial source
+facet yields partial coverage even when there are no matches. Search uses
+the saved evidence and requires no engine startup.
+
+Add `--regex` to use a Python regular expression. Matching is case-insensitive
+by default and searches each source record separately. A separate process
+compiles the expression and scans up to 100,000 records and 64 MiB of encoded
+text under a three-second deadline. Invalid expressions exit 2. Exceeding the
+text, record or time budget exits 7. A hit includes at most 376 characters of
+context, and its cursor applies only to the same search mode.
+
+```sh
+macscope search '^_?calc_.*(add|divide)' --regex --in names \
+  --project workspaces/calculator --arch arm64 --json
+```
+
+The installed CLI found nine expected records per slice across the four
+search scopes on an owned arm64 and x86_64 fixture analyzed with full
+Ghidra. A slow expression returned a typed timeout and preserved the
+existing output. Twelve archived literal search pages matched the previous
+wheel byte for byte, including continuation with its cursors. The validation
+report SHA-256 is
+`1017368d5a1bdbcb15636af8f399c5dc421864ba6b8cef5f04a910bc3738a5cd`.
+
+`xrefs --to 0xVA` and `xrefs --from 0xVA` select a single unslid address.
+They read the committed image-wide reference capture, which includes data
+and Ghidra external-entry markers alongside code references. Each row keeps
+Ghidra's reference type, source and operand index where available. Targets
+reported for computed control flow are labeled `indirect_or_inferred`.
+When a saved computed call or jump has no reported target, `--from` emits
+its instruction evidence with a null target. These rows describe static
+Ghidra evidence.
+
+Use `--limit` and `--cursor` to page an address query. When the saved
+capture is complete, an empty list means Ghidra recorded no references
+in that direction at the address. Older snapshots and capped captures
+reuse available function samples and return partial coverage. The
+function-selector form uses `--direction to|from|both`. It can recover
+references beyond a capped function sample when the complete image capture
+contains that sample. Outgoing recovery also requires complete saved body
+ranges, including every disjoint range. The result identifies a recovered
+direction in `reference_sources`. When recovery is unavailable, coverage
+identifies the incomplete direction and the saved sample remains available.
+
+Use `--limit` and `--cursor` to page function references as well. For
+`--direction both`, incoming records come before outgoing records. A cursor
+binds to the analysis, function and direction. Both selector forms use
+committed evidence without starting a worker.
+
+Independent read-only Ghidra queries verified the recovered records for 12
+functions on six owned arm64 and x86_64 slices. The installed CLI returned
+2,497 additional outgoing and 34 additional incoming records. Paged queries
+reproduced those results, and the call graph returned 649 additional
+reference edges across the tested queries. The capped image capture still
+reported partial coverage. The validation report SHA-256 is
+`d0ce5bded7a206c947b64234f527666869c1232fe61f5885332e8bd9fa66d871`.
+
+The installed wheel checked 32 address queries on owned arm64 and x86_64
+executables against separate exact queries on read-only Ghidra Program
+copies. All 34 returned reference records matched, including references
+from a data pointer and external-entry markers. LLVM confirmed the direct
+and indirect call sites. Reanalysis reproduced each snapshot. All 32
+queries also matched on the corresponding universal slices.
+
+On the stripped x86_64 O0 calculator, the image capture included every
+reference sampled by the function views. The stock unresolved switch
+still reported a null jump target. A separate owned fixture reached the
+16,000-record cap and returned paged evidence with partial coverage and an
+unknown total.
+
+| Report | SHA-256 |
+| --- | --- |
+| Exact-address and legacy-snapshot checks | `7d9b615c7cfcd4365e86dfc04d806c35d344759f90dc7a74c78e5df4705825e7` |
+| Universal slice parity | `47ebc7a7216aeee32b8826d0089b167c00cd81a69951f767ebcf32da274ed51f` |
+| Reference capture limit | `3daedd252d12e970ab676bd5858b21757cb547a57fc5f198bb35b5d9eb2c97c5` |
+| Stripped calculator reanalysis | `7e6518ece15b1ed34ac650164d04732214f6904035ee687611f0d4760a8ecfb5` |
+
+`calls` follows recorded direct call references breadth-first, by function
+entry, with `--direction callers|callees|both` and `--depth 1..8`. The default
+is both directions at depth 1. The graph reports the instruction address,
+reported target and resolution on each edge. It preserves indirect calls and
+inferred target hints without traversing them. Incoming references with
+ambiguous or unavailable instruction ownership retain an unresolved caller.
+In either direction, a callsite claimed by multiple saved function bodies
+retains its reference and target evidence. The caller stays unresolved,
+`caller_ownership` reports `overlapping_function_bodies`, and traversal
+stops at that edge. This check covers every shared address in the bounded
+body review. If the review reaches its limit, caller ownership remains
+unavailable and coverage is partial.
+Depth defines the requested scope. A reached `--max-edges` bound (default 500,
+maximum 2000) or incomplete scanned facets produces partial coverage. Call
+traversal uses the same recovery for capped reference samples. It follows
+direct edges only when the saved evidence supports the instruction and target.
+
+Five thousand seeded controls matched an exhaustive shared-address check.
+On two owned Ghidra snapshots, a derived second claim over an Apple-verified
+callsite made the caller unresolved in both directions. The reference,
+target, and neighboring direct edges remained available. Ordinary graphs
+matched the previous wheel. The validation report SHA-256 is
+`cfe03d6cc5af85585363c56a44233fc948911c87c57abf036e7609b2842c25ce`.
+
+## User labels and comments
+
+```sh
+macscope rename 'Checked addition' --name _calc_add --project workspaces/calculator --json
+macscope comment set 'Review the overflow path' --name 'Checked addition' \
+  --project workspaces/calculator --json
+macscope comment list --project workspaces/calculator --json
+macscope annotations history --name _calc_add --project workspaces/calculator --json
+```
+
+Labels are separate from Ghidra names. Both can select a function, subject
+to the usual ambiguity check. Comments can target a function or a saved
+instruction via `--instruction 0xVA`. Use `rename --clear` or
+`comment remove` to append a removal revision. Repeating the same edit is
+idempotent. Each revision records its author label, time, prior value,
+creation analysis ID, and exact image/function scope.
+
+These edits update the private SQLite index and preserve input bytes,
+saved Programs and committed analysis snapshots. They follow the same
+immutable image and engine entry across analyses. Default exports omit
+annotations. Use `export --include-annotations` to include current records
+as a separate field. History retains edits and removals and supports
+`--limit` and `--cursor`. Search and annotation cursors that depend on labels
+or comments are tied to the annotation revision.
+
+Use the dedicated private transfer format to preserve the full history
+including removed values, author labels, timestamps, original analysis
+IDs, and original workspace/revision identities. It keeps text verbatim.
+
+```sh
+macscope annotations export --project workspaces/calculator \
+  --json --output private-annotations.json
+macscope annotations import private-annotations.json \
+  --project workspaces/second-calculator --accept-type-hints --json
+```
+
+The destination must have the same imported image and a committed
+analysis whose functions and instructions match the active annotations.
+Import appends the missing history in one transaction, assigning local
+revision numbers. Replaying an existing prefix makes no edits. Diverging
+histories, invalid targets and malformed files are rejected before any
+revision is written. Importing type-hint revisions requires the explicit
+`--accept-type-hints` flag. Importing function boundary revisions requires
+`--accept-boundary-edits`. The transfer file is limited to 64 MiB.
+
+### Accepted type hints
+
+`type set --return-type TYPE --accept` records a user-supplied return type.
+`type set --parameters TYPES --accept` records a complete list of up to 16
+fixed parameter types. Give a comma-separated list or `void` for zero
+fixed parameters. A function can have both hints. Scalar types include
+`bool`, `float`, `double`, and signed and unsigned fixed-width integers
+from 8 to 64 bits. Pointers to those types or `void` can have up to two
+levels. Bare `void` is also a return type. Invalid input preserves the
+existing revisions. Use
+`type list` to inspect active hints, `type clear --accept` to clear a
+return hint, or `type clear --parameters --accept` to clear a parameter list.
+
+Use `struct Pair{left:uint64_t;right:uint64_t}` for a named structure by
+value. Append `*` or `**` to pass it by pointer. Use semicolons between
+fields and shell quotes around the declaration. A structure can contain
+up to 16 distinct named scalar or pointer fields. Names use ASCII C
+identifier spelling and can contain up to 48 characters. Each declaration
+is limited to 512 characters. Repeat the same definition everywhere an
+active hint uses that structure name in the selected image. Conflicting
+definitions are rejected before writing a revision. The worker request
+for all active hints is limited to 64 KiB.
+
+```sh
+macscope type set --name _calc_add --return-type uint64_t --accept \
+  --project workspaces/calculator --json
+macscope type set --name _owned_advance --parameters 'uint32_t*,uint32_t' --accept \
+  --project workspaces/parameter-fixture --json
+macscope type set --name _owned_pair \
+  --return-type 'struct OwnedPair{left:uint64_t;right:uint64_t}' --accept \
+  --project workspaces/aggregate-fixture --json
+macscope decompile --name _calc_add --fresh --with-type-hints \
+  --project workspaces/calculator --experimental-trusted-input --json
+```
+
+The explicit hint view applies accepted types to the private Program copy
+inside a rolled-back Ghidra transaction. It uses a distinct identity and
+reports applied revisions and resolved types. The hint view always starts a
+fresh worker and leaves the unassisted cached analysis available separately.
+Parameter hints require dynamic Ghidra storage and preserve the saved
+calling convention and variadic flag. An unknown calling convention stays
+explicit in the fresh output. By-value structure returns also require
+dynamic storage. Ghidra lays out fields with natural alignment for the
+selected image. `data.origin.aggregate_type_layouts` reports the resolved
+size, alignment and field offsets in bytes. Structure definitions and
+calling signatures are user-supplied hypotheses.
+
+The installed CLI verified a pointer return and two parameters, a
+nine-parameter function with a stack argument, and an empty parameter list
+on both slices of the [owned fixture](../analysis/heldout_parameter_hints.c).
+It also verified two pointer levels as a separate user-supplied hypothesis.
+Program digests and unassisted exports matched after the queries. A
+cancelled arm64 query restarted with its original accepted list after a
+later clear and replayed the saved receipt. The validation report SHA-256 is
+`7d02cc3692d50511d128122efc0fe19c6dba1870969efdccff4a209634a2fa61`.
+
+The [owned aggregate fixture](../analysis/heldout_aggregate_hints.c)
+verified structure sizes, alignments and field offsets against Clang on
+arm64 and x86_64. Ghidra recovered field accesses for an integer pair, a
+padded structure passed by pointer, and a large return through hidden
+storage. It recovered named field assignments for the arm64 float pair.
+On x86_64 the float pair's body still contains `insertps` and vector lane
+operations despite the applied structure signature.
+The installed CLI also verified opt-in annotation transfer, unchanged
+saved Program digests and cached export, and receipt replay after clearing
+the original parameter hint. The validation report SHA-256 is
+`7533b71c9d96f8edda2380a40e98ef3fb9f4715cd51c49da8a00316fff81a2b9`.
+
+## Terminal view
+
+```sh
+macscope decompile --project workspaces/calculator --name _calc_add --format text
+macscope disasm --project workspaces/calculator --name _calc_add --format text
+```
+
+The text view shows the command result, analysis ID, coverage, and any
+continuation cursor. It prints indented pseudocode, aligned assembly
+bytes, function identities, control-flow and reference rows, search
+context, and a hex view. Other commands use indented field names and
+values. Use `--json` or `--format jsonl` for the full versioned records.
+Terminal control characters in binary data and diagnostics appear as
+visible escapes. Explicit text output uses the same private, atomic
+file handling and exit codes as the other formats.
+
+The installed CLI matched the text layouts against saved JSON evidence
+from owned arm64 and x86_64 slices. The run also checked pagination,
+unresolved references, partial instruction ranges, and a fresh arm64
+type-hinted result. Default exports reproduced the archived JSON and
+private text output preserved the partial exit code. The validation
+report SHA-256 is
+`d86317c2ed167b3c54cc6d1b3c5de64fa2303d147d8343543196340f61824847`.
+
+## Input preflight
+
+`bundle list APP` inventories physical files by relative path. `--kind images`
+selects Mach-O candidates and identifies the main executable named by
+`Info.plist`. `--kind resources` selects regular non-image files. Records
+include byte size and SHA-256 when hashing completes. The default `all`
+also lists symlinks and special files as metadata. The scan follows physical
+directories, including versioned framework directories, without traversing
+symlinks or mount boundaries.
+
+Inventory is bounded to 10,000 scanned entries, depth 16, 256 MiB per file
+and 512 MiB of hashing. Read or budget gaps are partial. Pagination rescans
+the selected scope and rejects a cursor when the inventory changes.
+Header candidates can be checked with `inspect` before import.
+
+Bundle import includes the main executable by default. Repeat
+`--include-images PATH` to add exact bundle-relative image paths or use
+`--include-images all` for the complete physical image inventory. Relative
+framework links are resolved through the bundle's own directory descriptors.
+Escaping, absolute, cyclic, and over-limit links are rejected. The result
+records each canonical relative path and keeps the ordinary immutable image
+identity. Selection is limited to 64 images and 512 MiB in aggregate.
+
+A universal image still requires an explicit architecture selection. The
+selected architecture applies to every image in the import. A failure after
+an earlier image has been committed reports partial completion and the failed
+bundle path. Repeating an import reuses an already imported identity.
+
 `inspect` is a bounded stdlib preflight for thin/fat/fat64 little-endian
-64-bit arm64 and x86_64 executable/dylib/bundle images. It resolves a main
-`.app/Contents/Info.plist` executable and reports companion debug dylibs.
-Every path component is opened without following symlinks. Symlinks,
-including legitimate internal framework links, are rejected in this MVP.
-Encrypted images, arm64e, x86_64h, other CPU subtypes, 32-bit images,
-relocatable objects and malformed ranges receive explicit failures. The
+64-bit arm64, arm64e and x86_64 executable/dylib/bundle images. It resolves
+the main executable named by `.app/Contents/Info.plist`.
+Ordinary input paths open each component without following symlinks.
+Encrypted images, x86_64h, other CPU subtypes, 32-bit images, relocatable
+objects and malformed ranges receive explicit failures. The arm64e path
+is data-only. Engine import supports ordinary arm64 and x86_64. The
 preflight is **not** a complete Mach-O/dyld parser or a security proof.
+Select the ordinary slice explicitly when a universal input also contains
+arm64e. An all-slices import requires every slice to support engine import.
+
+### Xcode debug companions
+
+`bundle list --kind images` marks an adjacent `NAME.debug.dylib` with a
+Mach-O header as `debug_companion_candidate`. `inspect APP` verifies the
+physical file's dylib slices and records its relative path, SHA-256,
+architectures and UUIDs in `debug_companion`. The main executable keeps its
+own slice records. An invalid or unreadable companion returns partial
+coverage with the main slice records and a typed companion error. Xcode can
+put app code in this companion and use the main binary as a launcher.
+[Apple Xcode build settings](https://developer.apple.com/documentation/xcode/build-settings-reference#Enable-Debug-Dylib-Support)
+
+Select the companion explicitly when importing the app.
+
+```sh
+macscope import CalculatorFixture.app --project workspaces/calculator \
+  --arch all --include-images Contents/MacOS/CalculatorFixture.debug.dylib \
+  --experimental-trusted-input --json
+```
+
+Xcode 27.0 produced a universal launcher and companion from a temporary
+copy of the owned calculator fixture with a Swift probe. The installed CLI
+matched the companion's two architectures, UUIDs and file hash against
+Apple tools and the file bytes. Full Ghidra analyzed all four slices with
+partial reference coverage and recovered the probe's pseudocode and
+instruction bytes on both companion slices. An escaping link and a Mach-O
+executable at the companion path were reported as unavailable. The
+validation report SHA-256 is
+`19306c6ad7103290d8530839b7e3e46193efe74b524ccd7008e6b2ad4268ae9d`.
+
+### Bundle resources
+
+`resources list APP` lists physical regular non-image files across the
+bundle, including resources inside versioned frameworks. Each row includes
+the bundle name, relative path, inferred type, size, SHA-256 when available,
+and inventory ID. The query reads files in place and works without Ghidra.
+
+Use `--type TYPE` to match a case-insensitive filename extension without
+the dot, or `--type file` for extensionless resources. Filtering happens
+before hashing. Use `--under DIRECTORY` to start scanning inside an exact
+physical bundle-relative directory. This leaves unrelated directories out
+of the entry and hash budgets. Framework resources can be selected using
+their physical `Versions/A` path. Missing directories, symlinks and paths
+that cross a mount return a typed selection error.
+
+```sh
+macscope resources list 'Owned Calendar.app' --under Contents/Resources/Calendar \
+  --type strings --limit 25 --json
+```
+
+`--limit` and `--cursor` page by relative path and bind to the selected
+directory, filter and inventory. Paths in each row are relative to the app.
+JSONL emits an envelope for each row. The same scan and hash bounds apply
+as for `bundle list`. An incomplete scan reports its coverage gaps and
+exits 6.
+
+The installed CLI matched all six resource sizes and hashes in an owned
+app and framework and reproduced the three text rows across paginated
+JSON and JSONL. All four arm64 and x86_64 app and framework slices
+completed full headless Ghidra analysis. The resource inventory and bundle
+contents matched afterward. A 257 MiB resource made the unfiltered scan
+partial, and the text-only scan completed. The validation report SHA-256 is
+`de71ca38df8dc852b1125234ba6e2f5605900d9eade1b73c6b5e17024790502f`.
+
+#### Decode a selected localization table
+
+```sh
+macscope resources strings 'Owned Calendar.app' \
+  --file Contents/Resources/Calendar/en.lproj/Calendar.strings \
+  --key OwnedCalendar.RangePreferences --json
+```
+
+The command reads one physical `.strings` file. Each report includes the
+bundle-relative path, byte size, SHA-256, format and decoded key-value
+records. Omit `--key` to page through all keys in sorted order. A cursor
+binds to the exact file digest, path and key filter. An absent exact key
+returns a complete result with zero records.
+
+Supported inputs are UTF-8 and BOM-marked UTF-16 OpenStep strings tables
+and flat XML and binary property lists with string keys and values.
+OpenStep escapes include ASCII octal and `\Uhhhh` Unicode code units.
+Duplicate keys, malformed files and unsupported encodings return typed
+errors. The reader caps input at 1 MiB, decoded text at 1,048,576
+characters and tables at 16,384 keys. It uses no external parser or
+archive loader. Treat a shared resource key and binary string as a lead
+for checking references and handler behavior.
+
+#### Read declarations in a selected compiled nib
+
+```sh
+macscope resources nib 'Owned Calendar.app' \
+  --file Contents/Resources/Calendar/Calendar.nib --json
+```
+
+The view reads an exact physical `.nib` file and reports its SHA-256 and
+archive table counts. `--kind connections` reads archived AppKit actions
+and outlets from `NSConnections`. `--kind labels` reads titles and alternate
+titles from archived `NSButtonCell` records linked to `NSButton` objects.
+The default includes both. Endpoint indexes and direction come from the
+archive. An action's source is the control and its destination is the
+declared receiver. A custom object's declared class is reported when the
+archive provides it as a supported string.
+
+Cursors bind to the file digest, bundle path and selected kind. Missing
+connection fields and unsupported connection classes keep coverage partial.
+The parser covers NIBArchive version 1, coder versions 9 and 10, with a
+4 MiB input limit and bounded tables. The owned Xcode fixture used coder
+version 10. Other archive formats return a typed error. The reader treats
+the archive as data and uses no interface or application loader.
+[NIBArchive format observations](https://github.com/matsmattsson/nibsqueeze/blob/master/NibArchive.md)
+
+Compile `fixture/calendar/CalendarWiring.xib` with `xcrun ibtool --compile`
+to reproduce the owned test. The compiled outlet, action and button labels
+matched `ibtool`'s source records. The action's class and selector also
+matched the owned executable's saved Objective-C declaration and Ghidra
+function. Use those records to evaluate the handler separately from the
+interface declaration.
 
 ## Persistence, identity and freshness
+
+`headers`, `segments`, and `sections` query imported Mach-O metadata and
+work before analysis. Older imports can recover the added header and segment
+fields from their digest-verified slice. The `loader` record includes
+process entry and deployment information, the preferred image base, dylib
+paths and versions, rpaths, symbol table ranges, linkedit payload ranges,
+function starts, and
+data-in-code entries. An incomplete decoded table makes the header result
+partial. Dyld stream, export trie, chained fixup and signature ranges are
+recorded as extents.
+
+### Imported Program mapping
+
+Before publishing an import, the CLI checks the Ghidra image base against
+the Mach-O preferred base when available. It compares each nonempty
+file-backed section's virtual range and slice offsets with the sources
+reported by Ghidra for loaded, initialized default memory. Bridge 1.14.0
+adds the original file offset of each Ghidra FileBytes object to its
+sub-block offset. It also reports the backing filename so the CLI can
+check that it matches the staged slice.
+
+`jobs show JOB_ID` exposes the saved `loader_mapping` with the base, the
+number of declared file-backed sections and the number fully verified.
+Missing coverage or ambiguous declarations make the mapping report partial.
+A conflicting base, source file or section offset fails import with
+`loader_mapping_mismatch` before Program publication. Invalid worker
+evidence returns `loader_mapping_evidence`.
+
+For a mapped `LC_MAIN` or `LC_UNIXTHREAD` entry, the import also checks
+that Ghidra maps the exact slice offset in an executable block. A complete
+capture missing the entry fails with `loader_mapping_mismatch`. An
+incomplete capture without that source records the entry as `unverified`
+in `loader_mapping.entry_point`. The status is `not_declared` when the
+image has no process entry command. On resume, a prepared import from an
+earlier 1.14.0 build gains the entry check from its original worker report
+before promotion. The recorded engine and isolation policy still apply.
+
+The installed CLI verified both entry command types on owned arm64 and
+x86_64 slices. It rejected an omitted entry in a complete capture and
+recorded the same omission as unverified in a truncated capture. An older
+prepared import rejected an altered report, recovered with the restored
+report, and replayed its receipt without an engine.
+
+The installed CLI verified 31 file-backed sections across the owned arm64
+and x86_64 calculator slices and the Calendar app and framework. A control
+shifted one source offset in a live worker result. The import recorded a
+failed job and left the image and Program unpublished. Both calculator
+slices completed full headless analysis, disassembly and fresh decompilation.
+
+### Mach-O process entry points
+
+`inspect` and `headers` decode `LC_MAIN` and legacy `LC_UNIXTHREAD`.
+`LC_MAIN` retains the declared image-relative offset and stack size.
+`LC_UNIXTHREAD` reads the initial PC from the supported arm64 or x86_64
+general-register state and records the register's file location. The
+entry record includes its declared VA, available RVA, and slice and
+container offsets when it maps to unique executable file-backed bytes.
+Unsupported thread layouts or unmapped entries report partial coverage.
+Conflicting entry commands and malformed register state extents return
+typed errors. [Apple load command definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h) [Apple dyld entry checks](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOAnalyzer.cpp)
+
+The [owned fixture](../analysis/heldout_legacy_entry.S) builds with
+`xcrun clang -arch ARCH -c`. Link it with `xcrun ld -arch ARCH -static
+-e _owned_start` for `LC_UNIXTHREAD`, or use `xcrun clang -arch ARCH
+-nostdlib -lSystem -Wl,-e,_owned_start` for `LC_MAIN`. Both commands
+take the resulting object file.
+
+The installed CLI matched all four arm64 and x86_64 entry locations
+against Apple `otool` and `nm` on two owned universal binaries. Full
+headless Ghidra found each function at the same VA and reported the exact
+entry bytes. The trial also covered unsupported and malformed legacy
+commands and read-only header recovery from an older workspace. The
+validation report SHA-256 is
+`9d5c21b57be14cfa8b9254451d5b8a02e62ef6aaac556e4ec9e5734a5ce453b1`.
+
+### Mach-O deployment and encryption declarations
+
+`inspect` and `headers` report `LC_BUILD_VERSION` and legacy
+`LC_VERSION_MIN_*` declarations under `loader.deployment`. The list
+preserves command order, the declared platform, minimum OS and SDK
+versions, and any build tool IDs and versions. Unknown numeric platform
+and tool IDs retain their values. Legacy commands describe the platform
+family. `LC_SOURCE_VERSION` includes the five-part source version and its
+raw word. These fields describe the build declarations. [Apple Mach-O load commands](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+
+`loader.encryption` records the range declared by an encryption command
+with `cryptid` zero. It includes the slice and container file offsets.
+A nonzero `cryptid` returns `encrypted` during preflight with the
+declared slice extent in the error. Find declared signature extents under
+`loader.linkedit`.
+
+The installed CLI matched Apple `otool` on two modern universal slices
+and a legacy x86_64 executable built from the
+[owned entry fixture](../analysis/heldout_legacy_entry.S). The modern
+fixtures used `-Wl,-source_version,1.2.3.4.5`, the arm64 slice used
+`-Wl,-encryptable`, and the legacy slice targeted macOS 10.13.
+The declaration records matched the saved full-Ghidra exports.
+A copy marked with a nonzero `cryptid` was rejected before any Ghidra
+job or input copy was created. The report SHA-256 is
+`6c662c5bc32224b166c34b7ea8916a77ab91a4681c1e9ad8e9e04b6423bbe5f9`.
+
+### Mach-O symbol declarations and indirect slots
+
+`symbols --source macho` reads the declared `LC_SYMTAB` entries in index
+order from the digest-verified slice. It retains the raw name bytes, type,
+description, and value. Section definitions include their declared VAs
+and file coordinates when they lie inside the declared file-backed
+section. Undefined names, common sizes, absolute values and alias
+names remain separate kinds of evidence. [Apple symbol table definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/nlist.h)
+
+`symbols --source indirect` maps `LC_DYSYMTAB` entries to stub and pointer
+slots using their section type, starting index and stride. A row
+identifies the slot's location, the raw table word, and the declared
+symbol or local/absolute marker. Slot VAs locate the stubs or pointers.
+Runtime targets require separate binding evidence. [Apple load command definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h) [LLVM indirect-symbol decoder](https://github.com/llvm/llvm-project/blob/main/llvm/tools/llvm-objdump/MachODump.cpp)
+
+Both sources work before analysis and support `--name-contains`, `--limit`,
+and `--cursor`. Each source reads up to 10,000 records with a 4,096-byte
+per-name limit and a 2 MiB aggregate name budget. Coverage reports absent
+tables, unmapped indirect entries and limits. Invalid names, indices,
+section spans and strides return typed errors. The default
+`--source ghidra` queries symbols in the saved Program snapshot.
+
+The installed CLI matched 28 declarations and 18 indirect slots against
+Apple `nm`, `otool`, and LLVM on owned arm64 and x86_64 slices. The test
+used the [consumer](../analysis/heldout_symbol_consumer.c) and
+[provider](../analysis/heldout_symbol_provider.c) fixtures with the
+default linker and with `-Wl,-no_fixup_chains`. It checked universal-file
+coordinates, six- and twelve-byte stubs, eight-byte pointer slots and
+source-bound cursors. The legacy variants returned identical file-backed
+records after full headless analysis. The report SHA-256 is
+`f30df15634fa6bde4427e57242d06dbc75471cd26578ff87fca87c9aeed0e851`.
+
+### Compact unwind lookup ranges
+
+`unwind --project P --source compact [--arch ARCH] [--limit N] [--cursor TOKEN]` reads
+`__TEXT,__unwind_info` from the digest-verified imported slice. It works
+before analysis and is the default unwind view. Regular and compressed
+pages expose the raw encoding, range start and exclusive end, available VA and file coordinates,
+personality slot offsets, and LSDA offsets. The next entry or the linker
+sentinel determines the lookup range end. One encoding can cover more
+than one function. [Compact unwind format](https://github.com/llvm/llvm-project/blob/main/libunwind/include/mach-o/compact_unwind_encoding.h) [Linker index and sentinel](https://github.com/llvm/llvm-project/blob/main/lld/MachO/UnwindInfoSection.cpp)
+
+The compact view reports the `__eh_frame` extent and, where available, the
+declared file offset of a referenced DWARF FDE. Use the DWARF view for the
+frame instructions. Unsupported versions, pages, encodings and
+table limits also produce explicit coverage gaps. Invalid offsets,
+overlapping arrays or inconsistent indices produce
+`compact_unwind_malformed`. The decoder caps the compact section at
+16 MiB, the index at 4,096 pages, and output at 10,000 ranges.
+
+The [owned C++ fixture](../analysis/heldout_unwind_exceptions.cpp) can be
+built for either architecture with `xcrun clang++ -arch ARCH -O1`. Link
+the [DWARF assembly fixture](../analysis/heldout_unwind_dwarf.s) into the
+x86_64 build to reproduce the mixed compact and DWARF case. Compare the
+result with `xcrun llvm-objdump --macho --unwind-info` and
+`xcrun dwarfdump --eh-frame`.
+
+The installed CLI matched 1,261 lookup ranges across five owned arm64
+and x86_64 variants, including a regular page and a 1,249-range table
+with two compressed pages and common encodings. It also verified
+personality and LSDA records, thin and universal offsets, and a DWARF FDE
+reference. Two additional variants without a compact section reported
+partial coverage. Both C++ slices reproduced the query after full
+headless analysis. The report SHA-256 is
+`b20f6d336673d29451ddedd3c9046147c8a4239e414e10f1c7842241ce793ba4`.
+
+### DWARF call frame records
+
+```sh
+macscope unwind --project workspaces/calculator --source dwarf --json
+```
+
+The DWARF view reads linked `__TEXT,__eh_frame` records in section order.
+Common Information Entries (CIEs) report the alignment factors, return
+address register, augmentation and pointer encodings. Frame Description
+Entries (FDEs) retain their CIE link, declared PC range, available file
+coordinates, and language-specific data address. Absolute and PC-relative
+pointer forms expose their encoded value and computed unslid VA.
+Indirect fields report the pointer slot separately. Use a compact
+record's `dwarf_fde_offset` to look up the FDE by `section_offset`.
+[DWARF call frame information](https://dwarfstd.org/doc/DWARF5.pdf)
+[LLVM linked EH frame decoder](https://github.com/llvm/llvm-project/blob/main/llvm/lib/DebugInfo/DWARF/DWARFDebugFrame.cpp)
+
+The instruction list reports the opcode, raw operands, and byte span.
+Expression blocks are retained as hex. The command provides static
+evidence for inspection. Unsupported encodings, augmentations and
+instructions carry explicit partial coverage, and malformed records
+return `eh_frame_malformed`. Pagination binds to the selected source
+and image. Bounds include a 16 MiB section, 10,000 records, 1,024
+instructions per record, 20,000 instructions per section, and 4,096
+bytes per expression.
+
+Apple `dwarfdump --eh-frame` matched four CIEs, five FDEs, 57
+opcodes and 28 operand checks across three owned inputs. The run covered an arm64
+executable with deliberately embedded frame records and two linked
+x86_64 variants from the fixtures above. It also checked the CIE
+personality slot, the FDE's language-specific data address, a raw CFA
+expression, universal offsets, and identical queries before and after
+full headless analysis of both slices. The validation report SHA-256 is
+`f0d1705344162623016a79666a92a941208f6f69010645c49d46c20411bb8df1`.
+
+### Dyld exports and fixups
+
+`exports --source dyld` reads declared exports directly from the
+digest-verified slice, including before analysis. It accepts modern
+`LC_DYLD_EXPORTS_TRIE` and legacy dyld-info export extents. It reports
+regular, weak, absolute, thread-local, re-export, and stub/resolver records
+with raw flags and slice/container offsets. Thread-local addresses refer
+to the image descriptor. Re-exports preserve the library ordinal, declared
+path and import name, with no resolved runtime address. Absent evidence,
+unsupported flags and traversal limits receive partial coverage. Malformed
+tries and conflicting extents produce typed errors. Use `--name-contains`,
+`--limit` and `--cursor`. The default `--source ghidra` reads the existing
+saved analysis facet. [Apple Mach-O export encoding](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+
+Apple's `dyld_info -exports` agreed on 392 name/offset pairs across 16
+manifest-verified calculator binaries and four locally linked legacy
+variants. Six separately compiled arm64 and x86_64 dylibs added 14 checked
+records covering absolute, weak, thread-local, re-export and dynamic
+resolver entries. LLVM's export-trie display independently matched the
+stub and resolver offsets. The public CLI paginated both architectures
+after a universal dylib import with analysis still pending.
+
+`fixups` reads the digest-verified imported slice before or after analysis.
+Use `fixups --input FILE` to read an owned Mach-O directly. Select a slice
+with `--arch arm64|arm64e|x86_64` for a universal input. File pagination
+binds to the artifact digest and exact slice.
+
+The decoder supports ordinary 64-bit chains and the arm64e userland
+formats 1, 9 and 12 with uncompressed names and import record formats 1–3.
+Authenticated records include the key, diversity and address-diversity flag.
+Rebase records carry
+unslid targets. Bind records carry declared symbols, ordinals, weak flags
+and addends, with an unresolved runtime address. The ordinary 64-bit
+legacy rebase, bind, weak-bind and lazy-bind opcode streams are also
+decoded. Records preserve stream identity where streams share a pointer
+address. Threaded legacy binds, other chained pointer formats, and
+compressed names receive partial coverage. No dependencies are loaded.
+Use `--kind bind|rebase|all`,
+`--limit` and `--cursor` to inspect the evidence.
+
+Use `--address` for an exact unslid fixup slot. On a chained image the
+lookup validates the chain on the selected page. On a legacy image it
+scans up to 262,144 operations and retains up to 32 matching records,
+including distinct rebase and lazy-bind records at the same address.
+The general inventory still stops at 10,000 records. An empty complete
+result means the selected address has no matching record in the requested
+scope. An unsupported format or scan limit produces partial coverage.
+
+On 16 owned fixtures, `dyld_info -fixups` agreed on all 3,296 rebase
+addresses/targets and 594 bind addresses/symbols. Those binaries used
+`DYLD_CHAINED_PTR_64_OFFSET` and import format 1.
+An independently linked arm64e fixture used format 12. Two derived copies
+exercised formats 1 and 9, tagged targets and negative inline addends.
+Apple's static tool matched all 18 raw words, targets or symbols, and
+authentication fields. The tool displays the raw 19-bit addend. The CLI
+reports its signed value as used by the loader. The same test verified
+universal arm64/arm64e selection and pagination. [Apple pointer layouts](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h) · [Apple loader addend decoding](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOLayout.cpp#L1882)
+
+The arm64e decoder also handled 12,000 seeded mutations of the owned
+fixup words and chain tables. It returned 7,056 typed errors, 3,234
+partial results and 1,710 complete decodes within its bounds. The
+mutation report SHA-256 is
+`0eb4cd9f34a3dd1a71c6665d1cf7226c2b35bc59510414da9bd018abbd01806e`.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 tests/integration_arm64e_fixups.py \
+  --output-dir /private/tmp/new-arm64e-fixup-check
+```
+
+An isolated full-Ghidra probe of a separate owned arm64e call fixture
+imported under the Apple Silicon language and matched LLVM's authenticated
+instruction mnemonics. Its low p-code omitted the signing operations for
+`pacibsp` and `paciza`, modeled `blraaz` as an ordinary indirect call,
+and modeled `retab` as an ordinary return. Engine import and analysis
+for arm64e remain gated on authenticated instruction semantics. The
+probe report SHA-256 is
+`9b959c2592f39d01a880f1552a9e9fe9e5761512a74d53baa0803a84f50b9330`.
+
+Four separately linked owned tools and AppKit binaries using
+`-Wl,-no_fixup_chains` matched Apple tooling on 906 rebases, 142 ordinary
+binds and 38 lazy binds. Synthetic tests cover weak binds and a backward
+address delta emitted by the linker.
+
+#### Strong definitions in legacy weak-bind streams
+
+Use `fixups --kind non-weak-definition` with `--input` or `--project` to
+list strong symbol definitions advertised for weak-symbol coalescing.
+Each record includes the symbol, the encoded flags, and the slice and
+container file offsets of its `BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM`
+opcode. The query scans the legacy weak-bind stream within the decoder
+bounds and paginates by opcode offset. The `all` filter lists address-based
+fixups. [Apple Mach-O flags](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h) · [LLVM weak-bind decoder](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Object/MachOObjectFile.cpp)
+
+For each architecture, an owned executable linked with `-no_fixup_chains`
+overrode two weak definitions from an owned dylib and referenced a third.
+Apple LLVM's `llvm-objdump --macho --weak-bind` matched all four strong
+definitions and both weak pointer binds. The installed CLI reproduced the
+declarations on thin files and universal slices, including paginated
+queries and project queries before and after native full-Ghidra analysis.
+The validation report SHA-256 is
+`e58ab2a52d1b07f0113f22e83af0796444a36eb6d7026d86e9e511b3aa8260f8`.
+
+Across 12,000 seeded weak-bind stream mutations, the decoder returned
+2,560 typed errors, 986 partial results and 8,454 complete scans. Every
+returned declaration pointed to its encoded opcode inside the stream.
+The mutation report SHA-256 is
+`156dd4823e53ce64440b5469549193bcec677d1dcdbdcbb884564334073e6d9b`.
+
+#### Objective-C and Swift metadata
+
+`objc classes`, `objc methods`, and `objc selectors` read static declarations
+and selector references from the immutable slice. Class records include the
+metadata address and a local or external superclass reference. Method
+records distinguish instance and class declarations and preserve category
+names when present in the linked image. Absolute and relative method records
+include selector and implementation evidence. Selector declarations and
+reference slots remain separate, and none imply a resolved runtime dispatch.
+Use the reported implementation address with `functions show --address` in
+an analyzed project. The views work before analysis and support filtered,
+paginated output. [Apple Objective-C runtime structures](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.h)
+
+`objc methods --class-slot VA` selects one aligned pointer slot in
+`__objc_classlist` or `__objc_nlclslist`. On a chained image it verifies
+up to 1,024 individual relocation sites for the selected class and its
+metaclass, including sites beyond the full inventory cap. On a legacy
+image this view requires complete relocation inventory. The result covers
+method lists declared on the class and metaclass. Categories and inherited
+methods are outside that scope.
+
+Apple's `dyld_info -objc` agreed on the 16 class records and 216 method
+addresses across eight owned calculator app builds. Separately compiled
+arm64 and x86_64 probes also matched for instance, class and category
+methods.
+
+`objc properties` reports instance and class property declarations from
+classes, categories and protocols. Each record preserves the raw attribute
+string, its declaring owner and the record, name and attribute addresses.
+A category on an external class retains the recorded bind. Class properties
+on categories require the image-info flag, and those on protocols require
+the corresponding field in the declared protocol size. The scan examines
+at most 10,000 property records and reports unsupported or incomplete
+evidence as partial. [Apple Objective-C metadata layouts](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.h)
+
+```sh
+macscope objc properties --project workspaces/calculator --arch arm64 \
+  --name-contains label --json
+```
+
+The installed CLI matched 36 declarations and 72 name and attribute
+pointer sites against Apple tools and file bytes on owned arm64 and x86_64
+libraries using chained and legacy fixups. The attributes preserved the
+architecture-specific `BOOL` encodings. All four slices completed full
+Ghidra analysis and reproduced the property results from before analysis.
+The validation report SHA-256 is
+`3f522ea08b009a0cc7fd420cd0ae6162ee183ce8533525b90c0bedb2773bf0b0`.
+
+`objc ivars` reports instance variables by declaring class. Each record
+includes the raw type encoding, declared size and alignment, and the initial
+byte offset when its storage is file-backed. Offsets describe the linked
+image. The Objective-C runtime can adjust them when laying out a class.
+Unresolved storage retains the declaration and reports partial coverage.
+An anonymous bitfield record can have a null name and offset. The scan
+examines at most 10,000 ivar records. [Apple Objective-C ivar layout](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.h#L1113) · [Apple Objective-C runtime layout adjustments](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.mm#L2568)
+
+```sh
+macscope objc ivars --project workspaces/calculator --arch x86_64 --json
+```
+
+The installed CLI matched 40 declarations and 120 pointer sites against
+Apple tools and file bytes on owned arm64 and x86_64 slices with chained
+and legacy fixups. Tests included a subclass, arrays, structures, object
+pointers and named bitfields. All four slices completed full Ghidra
+analysis and reproduced their earlier ivar queries. The validation report
+SHA-256 is `abceca55221887e1e5c1ff81d6cf635fc6b3c0c23a5decfa863ae7ea1810c6a3`.
+
+`swift symbols` lists Swift mangling candidates from the Mach-O symbol table,
+including raw names, definition state, available VAs and detected Swift
+sections. The command works before analysis. Use `--demangle
+--experimental-trusted-input` to demangle the current page using Xcode's
+local Swift demangler. Results identify its version and digest and preserve
+names it did not recognize. `macscope demangle NAME --experimental-trusted-input`
+uses the same helper for a standalone Swift name. The sandbox denies network
+and file writes. Symbolic references and broader Swift metadata decoding
+remain outside the name view. [Swift ABI mangling reference](https://github.com/swiftlang/swift/blob/main/docs/ABI/Mangling.rst)
+
+Two owned Swift libraries built for arm64 and x86_64 and their stripped copies
+matched `nm` on all 38 reported candidates. All eight retained names in the
+imported stripped arm64 library demangled before Ghidra analysis.
+
+`bytes` reads 1–4096 bytes from the immutable selected slice before or after
+analysis. Use `--address 0xVA`, `--rva 0xRVA`, or `--runtime-address` with
+`--load-slide` for a range within one unambiguous file-backed section. Use
+`--file-offset 0xOFFSET` for any byte range within the slice, including its
+header. The response includes both slice and container offsets. VA, RVA,
+and address space are null where the file range has no unambiguous section
+mapping.
+
+The installed CLI compared VA, RVA, and slice-offset selection on six
+owned stock Ghidra calculator captures. All selectors returned the same
+function views and byte ranges. Annotation edits and history resolved to
+the same entries. Both slices of a newly imported universal binary returned
+the same bytes through all three selectors before analysis. Header reads
+retained the correct container offsets. Two fresh queries selected by RVA
+and file offset replayed the original receipts without starting another
+worker. Saved exports remained byte-identical. The calculator report
+SHA-256 is `3b640173dd5bddb805400d2c77ad9c145a8ba9f2da02815058610b3cf3e54f36`.
+Separately linked arm64 and x86_64 dylibs and bundles also agreed with
+the Mach-O base, Apple `nm` entry and original bytes. Each had a preferred
+and Ghidra image base of zero. The four-probe report SHA-256 is
+`d259b2d072ae0f59239df071bf28c510e3171a2102c0b3799aabc5a2746fbe31`.
+
+`imports`, `exports`, `symbols`, and `strings` query saved engine
+collections without starting Ghidra. The first three accept a literal
+`--name-contains` filter. All collection commands support `--limit` and
+`--cursor`.
+
+#### String evidence
+
+`strings` queries Ghidra-defined strings. Use `--contains` for a literal
+text filter and `--min-length` for the minimum size in bytes of the
+defined data, including any terminator and padding. `--encoding` accepts
+`ascii`, `utf8`, `utf16le`, and `auto` (the default). A concrete encoding
+requires strict decoding. The result records the Ghidra charset and whether
+the encoding came from that charset or from valid UTF-8 bytes in an
+ASCII-typed C string. An explicit encoding filter reports partial coverage
+if any otherwise matching candidate has unknown encoding. `auto` includes
+unknown encodings and older records with saved text.
+
+Each row reports its image, architecture, address, and available RVA and
+file offsets. `bytes` contains the full defined span in hex when the imported
+slice and the saved Program agree. A row's `bytes_status` explains missing
+bytes, including redacted text and older snapshots without a byte digest.
+`xrefs_to_start` contains up to 32 recorded incoming references to the
+first byte. `xrefs_status` reports reference coverage independently of the
+page's string coverage.
+
+Build the [owned encoding fixture](../analysis/heldout_string_encodings.S)
+from the repository root and import its two slices into a disposable project.
+
+```sh
+fixture_dir=$(mktemp -d /private/tmp/macscope-string-fixture.XXXXXX)
+for arch in arm64 x86_64; do
+  xcrun clang -arch "$arch" -nostdlib -lSystem -Wl,-e,_main \
+    -o "$fixture_dir/$arch" analysis/heldout_string_encodings.S
+done
+xcrun lipo -create "$fixture_dir/arm64" "$fixture_dir/x86_64" -output "$fixture_dir/owned"
+macscope project create "$fixture_dir/project"
+macscope import "$fixture_dir/owned" --arch all --project "$fixture_dir/project" \
+  --experimental-trusted-input
+macscope analyze --arch arm64 --project "$fixture_dir/project" --experimental-trusted-input
+macscope strings --arch arm64 --project "$fixture_dir/project" --encoding utf16le \
+  --contains 'Owned Wide' --json
+```
+
+The installed CLI verified all three encodings on each slice. Apple
+`nm` and `llvm-objdump` confirmed the addresses and reference sites, and
+the byte spans matched both the thin slices and the universal container.
+The run also checked malformed and redacted strings, encoding-bound
+cursors, read-only access to an older snapshot, and byte-identical
+exports after reanalysis. The report SHA-256 is
+`d6badcd4a1a0069df164cb3221a8ee6976dd30431918d76e5b41400501f707a2`.
 
 Import passes `-noanalysis` to Ghidra, disables loading/reexporting/linking
 libraries, and records the actual language/compiler pair. A no-analysis
@@ -100,9 +1182,12 @@ Inputs are private immutable copies with SHA-256 for the whole container and
 selected slice. The original binary is never changed. A saved full Ghidra
 Program database is retained. Each analysis clones the pristine no-analysis
 import, so a retry cannot silently inherit preceding analyzer mutations.
-The bridge applies `macscope-binary-only/1`, resets and records every effective
-analysis option, and disables source/DWARF/PDB/debug/external/library and
-demangler options. `deep` is explicitly unsupported, not an alias.
+The default bridge profile remains `macscope-binary-only/1`. It resets and
+records every effective analysis option and disables source/DWARF/PDB/debug/
+external/library and demangler options. See the
+[deep analysis profile](#deep-analysis-profile) and
+[parameter inference profile](#experimental-binary-derived-parameter-inference)
+for the explicit alternatives.
 
 SQLite points only to completed, digest-checked immutable JSON snapshots.
 A writer lock serializes import and analyze; readers continue using the
@@ -119,82 +1204,1476 @@ locations carry image, architecture, address space, unslid VA, RVA, and nullable
 slice/container offsets. External functions have `entry_va: null` and a typed
 `EXTERNAL` engine location, not a fabricated image VA.
 
-After analysis, **all public function/disassembly/decompile/xref/CFG/export
-commands query the committed snapshot and do not start a JVM**. These are
-cached analysis evidence, not freshly recomputed results. An internal worker
-query mode has been tested with `-process -readOnly -noanalysis` and unchanged
-Program digests; a public uncached-decompile/refresh command is not yet
-exposed. Rerun `analyze` for new evidence. `status` shows at most 100 job
-records; interrupted/disconnected running markers become
-`unknown_after_disconnect`, with no attempt to signal stale PIDs.
+By default, function, disassembly, decompile, xref, CFG and export commands
+query the committed snapshot without starting a JVM. `decompile --fresh`
+requires an exact function selector and the trusted-input flag. It opens a
+private copy of the selected saved Program with `-readOnly -noanalysis`,
+inherits its analysis profile, and asks the native decompiler for that one
+function. The result identifies the original analysis and the new query job.
+The worker requires the Ghidra distribution recorded by the saved analysis.
+Fresh queries preserve the committed snapshot and the original Program.
+`--fresh` supports the same worker time and Java heap limits as analysis.
+On the owned arm64 and x86_64 tools, fresh queries matched the cached
+pseudocode under both profiles. The integration checks verified one
+decompile attempt and preserved the saved Program and snapshot.
+
+For a supported x86_64 dispatch function, request return recovery in the
+fresh query copy with the same full Ghidra distribution used for analysis.
+
+```sh
+macscope decompile --project workspaces/calculator --arch x86_64 \
+  --name _calc_dispatch_table --fresh --recover-dispatch-return \
+  --experimental-trusted-input --json
+```
+
+The option requires one selected function and is mutually exclusive with
+`--with-type-hints`. The worker uses an immutable table, both return paths,
+a caller that observes both registers, and agreement among the table's
+callees. `origin.dispatch_return_recovery` records `applied` or `skipped`,
+the policy and request digest, and the register storage or skip reason.
+A skip returns the ordinary fresh pseudocode. The cached pseudocode,
+function signature, CFG, and unresolved indirect references remain the
+saved evidence. [Owned fixture validation](dispatch-tables.md#installed-cli-validation)
+
+Direct-call signature recovery is available for a separate fresh query.
+
+```sh
+macscope decompile --project workspaces/calculator --arch x86_64 \
+  --name _calc_apply_op --fresh --recover-direct-signatures \
+  --experimental-trusted-input --json
+```
+
+The policy checks exact direct-call bytes and linker entries along a
+bounded call path. A caller must observe both result registers, and each
+eligible call must forward those registers to the return. The worker
+commits the inferred callee signatures in the read-only copy after
+checking argument storage and agreement on the return ABI.
+`origin.direct_signature_recovery` records the applied call sites or a
+skip reason. The option uses its own query, separate from dispatch
+recovery and accepted type hints. [Direct-call validation](direct-signatures.md)
+
+For a supported scalar call, request scalar signature recovery in its
+own fresh query.
+
+```sh
+macscope decompile --project workspaces/calculator --arch x86_64 \
+  --name _calc_engine_input_op --fresh --recover-scalar-call-signatures \
+  --experimental-trusted-input --json
+```
+
+The policy verifies an observed full-width x86_64 result or the arm64
+Mach-O binding for the libSystem stack-check failure import.
+`origin.scalar_signature_recovery` records the applied call sites and
+ABI or the reason recovery was skipped. [Scalar signature validation](scalar-call-signatures.md)
+
+To infer parameters for verified direct callees of one selected function,
+use a separate fresh query.
+
+```sh
+macscope decompile --project workspaces/calculator --arch arm64 \
+  --name _calc_engine_input_op --fresh --recover-callee-parameters \
+  --experimental-trusted-input --json
+```
+
+The bridge uses Ghidra's native register-parameter inference along
+verified call paths. The result records the applied sites or skip
+reasons in `origin.callee_parameter_recovery`.
+[Scope and validation](callee-parameters.md)
+
+For an observed integer result forwarded through a direct call, use
+`decompile --fresh --recover-forwarded-return` with one selector and
+the trusted-input flag. The query verifies the wrapper epilogue and
+an independent full-width caller store. The result records the
+evidence or a skip reason in `origin.forwarded_return_recovery`.
+[Forwarded return validation](forwarded-return.md)
+
+Cached and fresh results report partial coverage when a recorded computed
+jump lacks a destination or Ghidra emits an explicit jump-recovery warning.
+The original pseudocode, edges, and printer status remain available.
+`control_flow_gaps` identifies the Ghidra evidence and
+`control_flow_review` identifies the reporting policy. Selected pseudocode
+and CFG queries with an observed gap exit 6. The check also applies when
+reading existing snapshots. It leaves analyzer settings and stored
+snapshots intact. [Held-out and calculator validation](heldout-switch.md#measured-results)
+
+To recover an eligible x86_64 switch in one fresh trusted query, use
+`decompile --fresh --recover-switch-table` with one function selector.
+This option has its own query scope, separate from type hints and other
+recovery options. It requires a guarded relative table whose bytes and
+extent match the immutable Mach-O and the saved Program. Ghidra verifies
+the omitted case blocks and prints the resulting switch with its native
+override warning. `origin.switch_table_recovery` records the verified
+case indexes and ordered targets, including repeated destinations, or
+the reason recovery was skipped. If the saved signature came from analysis
+of the incomplete body, the worker can refresh it from the restored body.
+It keeps the refresh only when Ghidra finds additional register arguments
+and preserves existing parameter storage. The `prototype` field records
+the saved source, the saved and native parameter counts, and whether the
+worker kept a refresh. Cached analysis remains independent of the query.
+[Stock engine validation](heldout-switch.md#stock-engine-fresh-query)
+
+The CLI also reports a function-boundary conflict when a linker-confirmed
+function falls through into a competing Ghidra function entry inside the
+same linker extent. Both entries carry the evidence, and cached, fresh and
+replayed pseudocode report partial coverage. The original function records
+and Program are preserved. [Owned app-main measurement](phase1-findings.md#controlled-core-instruction-audit)
+
+To apply guarded boundary recovery to a new analysis copy, use:
+
+```sh
+macscope analyze --project workspaces/calculator --repair-split-boundaries \
+  --experimental-trusted-input --json
+```
+
+The opt-in works with either analysis profile. It uses the complete
+function-start table from the verified Mach-O slice. A join requires
+adjacent fallthrough into a default-named competing entry, continuous
+decoded instructions within the same executable linker extent, and no
+recorded outside reference anywhere in the competing body. Analysis
+reports each join or refusal under `boundary_recovery`. A refusal or a
+reached scan bound yields partial coverage.
+
+The policy and request digest form part of the new analysis identity.
+Fresh queries use the saved repaired Program, and job replay restores the
+recorded policy. The pristine import and preceding analysis remain
+available. [Held-out validation](heldout-fallthrough.md#production-validation)
+
+New analyses and fresh queries can include `address_spans` from Ghidra's C
+markup. `text_start` and `text_end` are zero-based UTF-16 offsets into the
+returned pseudocode, with the end excluded. Each `ranges` entry is an
+inclusive pair of unslid addresses in the selected function body. Ghidra
+supplies links only for tokens with machine-address evidence. The bridge
+checks that token text aligns with the printed pseudocode and caps links at
+1,024 per function and 40,000 per job. If display redaction changes the code,
+its raw offsets are unavailable in the normalized result.
+
+The four owned thin/fat64 integration exports contained 9,742 token links
+across 144 completed function records. All linked addresses matched exported
+instruction starts and the pseudocode matched the preceding bridge version.
+Fresh and cached links matched for `_calc_add` on both architectures.
+
+### Manual function boundary edits
+
+After saving an analysis, use `boundary set --accept` to record a function
+body at an unslid entry address. An existing entry receives a replacement
+body. An unused entry creates a function. Use `--remove` in place of
+`--body` to remove a saved function. Body ranges are inclusive. A body can
+contain up to 16 comma-separated ranges covering up to 64 KiB. It must
+contain its entry. The image can have up to 32 active boundary edits.
+
+```sh
+macscope boundary set --project workspaces/calculator --arch arm64 \
+  --address 0x1000002d8 --body 0x1000002d8:0x100000303 --accept --json
+macscope boundary list --project workspaces/calculator --arch arm64 --json
+macscope analyze --project workspaces/calculator --arch arm64 \
+  --with-boundary-edits --experimental-trusted-input --json
+```
+
+Each edit records the original body, proposed body, author and revision.
+`annotations history` shows the audit trail. `boundary clear --accept`
+appends a revision that clears the selected edit. Recording or clearing an
+edit leaves the current analysis in place. Run a new analysis to publish
+the edited or ordinary view. Use a separate run for guarded linker recovery.
+
+The worker checks each original body against the fresh autoanalysis before
+applying the edits together. Every proposed range must contain complete
+decoded instructions in executable memory. An overlap with an unedited
+function or another proposed body rejects the entire set. To split a
+function, record both the reduced original body and the new entry before
+running analysis. To join functions, record the expanded body and the
+removal of the competing entry. Manual corrections rely on the user for
+the intended ownership of those instructions.
+
+`manual_boundaries` in the analysis result records the applied revisions.
+Fresh queries use the edited Program and report its boundary request digest.
+An ordinary analysis uses the pristine import. A retry after interrupted
+publication uses the original accepted revisions even after a later clear.
+Use `annotations export` and `annotations import --accept-boundary-edits`
+to transfer the history to a compatible analysis of the same image.
+
+The installed CLI resized, added and removed functions on owned arm64
+and x86_64 slices. The split instruction bytes matched the original, and
+fresh Ghidra queries reopened the corrected bodies. An x86_64 test
+also preserved a discontiguous body. The worker rejected an overlap with
+an unedited function and a range ending inside an instruction. The
+validation checked annotation transfer and retry after interrupted
+publication, then reproduced the ordinary analysis. The report SHA-256 is
+`c68f9aa78850f7761fcc9fc9829aa9345c1b95e1711c776ea7914db74fd58e94`.
+
+### Project and job status
+
+`status --project P` reports each selected image and its active analysis.
+Use `--arch` or `--image` to narrow the image selection. A verified analysis
+includes its profile, function counts, decompilation summary, coverage gaps
+and recorded versions. The freshness check compares the saved Ghidra
+version and bridge version and digest with the CLI's packaged worker.
+Missing provenance reports `unknown`. `doctor` checks the installed engine.
+
+The command verifies at most eight active snapshots per request, up to
+64 MiB each. A snapshot beyond that limit reports `unverified`. A failed
+integrity check reports `unavailable` with its error code. Both make the
+status result partial and exit 6 while preserving the other image rows.
+
+Add `--verify-programs` to check the local Ghidra project layout and
+recorded tree digest for the import Program and the active analysis Program.
+Their results appear separately under each image's `programs` field.
+The check reads at most eight selected images with a saved import or an
+active analysis. It uses the current import provider, including any
+replacement committed by `import --repair`. An unavailable snapshot leaves
+its analysis Program unverified and the import Program can still be checked.
+An unavailable Program or a skipped check makes the result partial and
+exits 6. Use the error to choose `import --repair` for an unavailable import
+Program or `analyze` for an unavailable analysis Program. Cached snapshot
+queries remain available while the snapshot passes its own integrity checks.
+Status checks run without Ghidra or Java. Program checks can read the full
+saved project trees.
+
+`analyze` and `export` report saved coverage limits in the response's
+`truncation_reason`. `status` lists the same reasons for each checked
+analysis under `coverage_reasons`. The report distinguishes a bounded
+function facet, such as `function_xrefs_from_limit`, from unresolved
+control flow. Older partial snapshots with insufficient detail use
+`engine_or_facet_partial`.
+
+An offline check reopened 32 owned matrix snapshots. It reported 16
+cases with an outgoing-reference limit, eight with both that limit
+and unresolved control flow, and three with unresolved control flow
+alone. Five cases reported complete coverage. The exported snapshot
+payloads matched the saved exports. The report SHA-256 is
+`b404637eb3f8efb5ae8457e5bfae0c9161049c54d367bb67e795dddb49041652`.
+
+The installed CLI reported seven saved functions per slice after owned
+arm64 and x86_64 import, analysis and fresh decompilation. It reported an
+archived 44-function analysis as partial and stale, and surfaced distinct
+startup and total timeouts from archived jobs. A corrupt snapshot left the
+healthy slice visible. A nine-image control exercised the verification
+limit and verified the remaining image by explicit selection. The status
+queries ran with Ghidra and JDK paths set to missing locations. The
+validation report SHA-256 is
+`9eadb582ed7715bd93e313d8489da30851f8e90ed3ec99c57a168bd6f1473676`.
+
+`status` and `jobs list` show up to 100 recent worker records.
+`jobs show JOB_ID` reads a particular job and includes its limits and
+engine digests. Its worker status and `publication_status` are separate.
+The latter reports `published`, `published_by_other_attempt`, or
+`not_published` using the durable receipt. An older job with no receipt
+or recorded restart request reports `unknown`. Live status requires an
+ownership lock held by the supervisor. Without that lock, an earlier
+running record is reported as `unknown_after_disconnect`.
+
+```sh
+macscope jobs show JOB_ID --project workspaces/calculator --json
+macscope jobs cancel JOB_ID --project workspaces/calculator --json
+```
+
+Cancellation records a request for that exact live owner. The supervisor
+handles the request and signals its own worker group. Poll `jobs show` for
+the final state, since a worker can finish while a request is being written.
+A confirmed cancellation exits 130 in the original command and preserves
+the prior committed snapshot.
+
+Restart an eligible analysis, import slice or fresh decompile with its
+recorded request.
+
+```sh
+macscope jobs resume JOB_ID --project workspaces/calculator \
+  --experimental-trusted-input --json
+```
+
+The restart verifies the stored immutable artifact and selected slice. It
+preserves the recorded worker limits and, for analysis, uses the pristine
+import Program and recorded profile. Select the same Ghidra and JDK used by
+the original job, including any explicit `--ghidra` or `--java-home` paths.
+The CLI also verifies the recorded isolation policy. It recognizes the
+earlier built-in profiles for recovery when the workspace, job and
+dependency paths still match. A new worker launches with the current
+profile. New import profiles bind the selected staged slice.
+
+For a partial import batch, use the `failed_job_id` in the error's partial
+results to restart that slice. The workspace's artifact copy is sufficient
+even if the original input path has disappeared. Other committed slices stay
+available. If Ghidra finished and the import journal was written, the CLI can
+verify the saved Program and finish publishing it without running Ghidra again.
+New journals bind the Program digest to the completed job and verify its
+request, loader, limits and isolation policy before promotion. Earlier
+prepared journals use the retained bridge report and launcher log to verify
+the completed import. A malformed journal or inconsistent producer record
+returns `import_journal` and leaves the import unpublished.
+
+If a result fails to publish after the worker finishes, the error includes
+the restartable `job_id`. A failure during a retry also includes its
+`attempt_job_id` and keeps the original job as the restart target.
+
+In an installed full Ghidra test, a controlled failure committing the
+second slice of an owned arm64 and x86_64 import reported the failed job
+ID and recovered its prepared Program without another worker. Failed
+analysis and fresh query publication preserved the previous snapshot and
+cached result. After successful retries, all three commands reused their
+receipts. The validation report SHA-256 is
+`c5e00a67cb1e9f856ac1c81229db1458245c0608d757f683422d21b924ced9c9`.
+
+For a fresh decompile, the restart opens the original saved Program and
+uses the recorded function, label and accepted type hints, even if
+a later analysis or annotation revision is current. Signature recovery
+rechecks the original slice and snapshot against the recorded request digest.
+The restart returns the stored result if the original or restarted query
+already published one. Replay preserves the active analysis and annotation
+revisions.
+
+For `decompile --from-import`, `jobs resume` verifies the original slice,
+linker extent and committed import identity. A retry uses the recorded
+Ghidra, worker limits and isolation policy. The original job ID locates
+the published receipt and repeat requests reuse that result. A focused
+handoff accepts either the original job ID or the retry that produced
+the receipt.
+
+The result and its publication receipt commit together. Repeating a
+successful restart returns the recorded result. Analysis restart also
+checks that its preceding active analysis is still current.
+
+Use the original job ID for further retries. Before launching a retry,
+the supervisor records its job ID in the original job directory. Another
+retry checks that attempt's ownership and process-group state. A live or
+unconfirmed attempt returns `job_resume_ownership` and identifies the
+attempt in the error. Earlier jobs use a bounded scan of up to 4,096 job
+directory entries to check their recorded retry history.
+
+An installed test disconnected the supervisor of an owned analysis retry
+while its Ghidra worker group was live. Both the recorded retry and the
+legacy scan refused an overlapping retry. The worker completed in its
+private job directory and the prior committed snapshot matched afterward.
+Once the group exited, the original job restarted successfully. Import,
+analysis and fresh decompilation each reused the committed receipt on a
+second request. The validation report SHA-256 is
+`d91ad149c2c225ef45543b5af5eb341836e99a92ce6eb61cef9e547e643ef5ba`.
+
+New Ghidra jobs record the process group before releasing the launcher.
+If the supervisor disconnects during the same macOS boot, `jobs show`
+reports `stopped_after_disconnect` when the CLI can verify that the group
+is gone or that the launch guard never released it. Such jobs can be
+restarted explicitly. A live worker, a job with unconfirmed exit or an
+older job without a recorded request remains ineligible. The process-group
+check requires the recorded macOS boot identity and sends no signal to
+the worker.
+
+Before import, analysis or a restart of either, the CLI checks up to
+4,096 job directory entries while holding the project writer lock. A
+previous writer with a live or unconfirmed process group returns
+`writer_conflict` with the earlier job ID. An incomplete history returns
+`writer_history`. For new jobs on a local workspace, a verified change in
+macOS boot session clears a writer from the previous boot. Cached and
+fresh read-only queries use committed snapshots. [Apple boot session identifier](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sysctl.c#L2735)
+
+An installed test disconnected an owned arm64 analysis supervisor while
+its Ghidra worker was live. A new import, a new analysis and an unrelated
+analysis restart each returned `writer_conflict`. Cached export and fresh
+x86_64 decompilation completed while that group was still live. The
+committed snapshots and imported Programs matched after it exited, and
+all three writer commands then completed. The validation report SHA-256 is
+`a6f231c9b746af9ec46fa03c5d8257c66c55b510dbcae5ffda72e1ba3e502c9b`.
 
 Raw bridge JSON and job manifests/logs remain private in the workspace.
-Normalized exports sort records, omit volatile Program-info/timing fields and
+Normalized exports sort function and unordered cross-reference records (retaining
+duplicate references), omit volatile Program-info/timing fields and
 installation paths, and redact `/Users/<name>` prefixes even when embedded
 in recovered binary strings. Raw evidence is retained separately. These
 exports can still contain sensitive recovered code/strings; never publish
 them by default. Logs are bounded per job but retained until the owner removes
 the workspace; no automatic retention or deletion task is installed.
 
+### Private HTML export
+
+```sh
+macscope export --project workspaces/calculator --format html \
+  --output private-report.html
+```
+
+The report opens from a local file. It shows the analysis identity, status
+and coverage, with an index that links to each function's pseudocode,
+assembly, control-flow and reference records. Expand the evidence sections
+to inspect the Mach-O metadata, Ghidra options, diagnostics and provenance.
+Use `--include-annotations` to include the saved annotation history.
+Use `--json` for machine-readable evidence and `macscope diff`.
+
+HTML export reads the committed snapshot and preserves its complete or
+partial status. Repeated exports from the same snapshot and annotation
+revision are byte-identical. Binary strings, code, names and comments are
+escaped as text. The standalone report uses local links and a content
+policy that allows its stylesheet and blocks active content. Output files
+use mode 0600 and require `--force` to replace. Reports exceeding 64 MiB
+return `html_output_limit` and preserve any existing file.
+
+The installed CLI reproduced reports for four owned Ghidra snapshots
+covering arm64, x86_64 and partial analysis. The report sections matched
+saved JSON evidence, every function link resolved locally, and annotation
+markup remained literal text. The validation report SHA-256 is
+`1eb844748432ae3e8e8a5971aa9b9e6327ebf700ab75bbe070c5f97599efeba3`.
+
+### Decompile one function from an import
+
+Use `decompile --from-import --address` when you know an exact unslid
+function address and have already imported the owned image. The command
+opens a disposable read-only copy of the import and runs Ghidra on the
+selected function without waiting for whole-image analysis.
+
+```sh
+macscope decompile --from-import --address 0x100000920 \
+  --project workspaces/calendar --image IMAGE_ID \
+  --experimental-trusted-input --json
+```
+
+The address must appear in `LC_FUNCTION_STARTS` and have a following entry
+in the same file-backed instruction section. Use the address from your own
+build. Exact lookup scans the bounded linker table even when the general
+inventory has reached its 10,000-entry limit. The selected extent can be
+up to 8 KiB and must exclude declared embedded data and encrypted bytes.
+
+The result includes the linker extent, its slice and container offsets,
+its digest, the verified instruction bytes and available pseudocode. It
+reports incomplete decompilation or undecoded bytes as partial coverage.
+References come from the local Program copy with automatic analysis
+disabled. A successful result publishes a receipt under its job ID.
+Use `jobs resume` to retry an interrupted job or return its published
+receipt. The receipt can also be included in a handoff.
+Use `--fresh` to query an existing analyzed Program and apply
+saved-analysis options.
+
+### Selected evidence handoff
+
+`evidence` exports a reviewer-selected list from committed analyses and
+focused receipts. It can reopen a pinned analysis after another analysis
+becomes active. It reads saved evidence without starting Ghidra or a JDK.
+
+```sh
+macscope evidence --project workspaces/calendar --leads calendar-leads.json \
+  --output private-calendar-evidence.json --json
+macscope evidence --project workspaces/calendar --leads calendar-leads.json \
+  --output private-calendar-evidence.html --format html
+```
+
+The HTML view has a lead index and includes the same pinned images,
+selection outcomes, saved code and coverage as the JSON. It uses local
+links and expandable evidence records. Use JSON for cross-build comparison.
+
+The lead file uses schema `macscope-evidence-leads/1`. Copy the image ID,
+architecture, artifact SHA-256 and slice `sha256` from `headers`. Use the
+exact `analysis_id` from `analyze`, `status` or an existing export. Replace
+the angle-bracket placeholders in this example with those values.
+
+```json
+{
+  "schema": "macscope-evidence-leads/1",
+  "images": [{
+    "image_id": "<image ID>",
+    "arch": "arm64",
+    "artifact_sha256": "<artifact SHA-256>",
+    "slice_sha256": "<slice SHA-256>",
+    "analysis_id": "<committed analysis ID>"
+  }],
+  "leads": [{
+    "id": "calendar-handler",
+    "image_id": "<same image ID>",
+    "kind": "objc_selector",
+    "value": "calendarDayDuration:",
+    "class_name": "OwnedCalendarController"
+  }]
+}
+```
+
+Each lead has a unique ID and one selector. Use `address` for an unslid
+entry VA, `function_id` for an exact function ID, or `name` for an exact
+saved engine label. `objc_selector` matches a declaration in the verified
+workspace slice and accepts an optional `class_name` or unslid
+`class_slot`. With `class_slot`, the search is limited to the selected
+class's declaration lists. `string` finds a
+case-insensitive literal in saved strings and uses recorded references
+from saved instruction addresses. A known shared body prevents ownership
+from being assigned at that reference site. An ambiguous lead returns its
+observed candidates for review. Incomplete coverage is reported even when
+one observed function can be selected.
+
+Add `query_job` with the fresh result's `data.origin.job_id` to include an
+existing receipt for the same image, analysis and function. The receipt
+appears alongside the stock pseudocode. If it is missing or belongs to a
+different function, the report keeps the saved function and identifies
+the receipt error.
+
+To include a focused result before whole-image analysis, copy
+`data.origin.extent.program_sha256` from `decompile --from-import` into
+the image pin as `import_program_sha256` in place of `analysis_id`.
+Keep the image, architecture, artifact and slice digests. Each function
+lead for that pin needs the focused `data.origin.job_id` in `query_job`,
+plus either the exact unslid `address` or an `objc_selector` whose
+implementation matches the receipt. An analyzed pin and an import pin can select
+different images in the same handoff.
+
+The handoff checks the receipt against the producing job, the pinned
+Program digest and the selected slice bytes. A focused result supplies
+the function evidence for that lead. Its references cover the local
+query and incoming coverage is partial. With `--link-imports`, the
+verified selected instruction can establish a call through a stub to a
+pinned provider. A provider pinned to an import needs its own verified
+focused lead at the export entry. Replaying a saved import receipt does
+not require the original app bundle.
+
+A `fixup` lead selects one exact unslid dyld slot by its `value`.
+It works with either pin and needs no query job.
+
+```json
+{"id":"class-slot","image_id":"<image ID>","kind":"fixup","value":"0x100017980"}
+```
+
+The handoff decodes the slot from the digest-verified slice, using the
+same targeted lookup as `fixups --address`. It retains the declared
+rebase or bind, its offsets, and any coverage gaps. A bind records the
+library and symbol declaration. A rebase records the encoded target.
+Neither establishes which indirect call executes at runtime. Missing,
+ambiguous, or invalid slots keep a typed outcome. Fixup leads appear in
+HTML and their declarations and locations are tracked in evidence diffs.
+
+The installed CLI matched an owned Calendar class rebase on arm64 and
+x86_64 and the arm64 framework bind. A mixed arm64 handoff included
+both slots and focused receipts and replayed byte for byte with Ghidra
+unavailable. A data-only handoff completed, and a change from a rebase
+to a bind appeared in the evidence diff.
+
+Add `--link-focused` to follow direct calls between the selected focused
+receipts in one pinned image. The CLI decodes arm64 `BL` or x86_64
+`CALL rel32` from the verified instruction bytes and matches the target
+to an exact selected entry. The optional `selected_calls` record includes
+the callsite, bytes, target function ID and matching lead IDs. Computed
+dispatch keeps its original unresolved status in the local call trace.
+The handoff retains up to 32 selected call links in total and reports
+unavailable receipts, incomplete instructions and unsupported encodings.
+The same fields appear in HTML and are included in evidence comparisons.
+
+On owned arm64 and x86_64 Calendar images, the installed CLI matched two
+calls per architecture from the duration calculation to its midnight
+helper. The arm64 handoff also retained the declared cross-image link.
+A mismatched receipt withheld the selected link. The handoff replayed
+byte for byte with the engine unavailable, and removing the target lead
+appeared as a selected-call change in `diff --scope evidence`.
+
+Job records and receipts reject duplicate JSON fields, nonfinite numbers
+and nesting deeper than 64 containers. Focused receipts also validate
+the body, instruction, reference and coverage fields before replay.
+A damaged receipt makes its lead unavailable. The report still includes
+the other requested leads and their own coverage.
+
+The handoff records hashes, Ghidra provenance, instructions, linked
+pseudocode, incoming and outgoing references, and a one-hop call trace
+within the selected image.
+Computed dispatch stays unresolved where the engine has no proven target.
+Keep runtime observations and `resources list` evidence alongside the
+handoff. The command supports up to four images and 16 leads, with 64
+references per direction, 32 call edges and 512 KiB of compact JSON for
+each lead's base evidence. A missing, ambiguous or partial lead yields
+exit 6 with a row for every requested lead. `--output` writes an
+owner-only file and protects the lead manifest and managed workspace files
+from replacement.
+
+The installed CLI verified eight leads across both images of the
+[owned Calendar fixture](#owned-calendar-evidence-rehearsal). Four function
+records matched the independent rehearsal, and a string reference led to
+the app entry. The export retained an unresolved dispatch, a saved
+recovery receipt and typed outcomes for an ambiguous name, a missing
+address and a mismatched receipt. The pinned report matched after the
+active framework analysis changed. The report SHA-256 is
+`5b316bcebf6ead17064bd712b168ef5302f8dadeb7806268ead28ca737120b1d`.
+
+Add `--link-imports` to verify declared embedded-library calls in the
+handoff. For each selected function, the CLI checks ordinary arm64 or
+x86_64 import stubs reached by its saved direct call edges. It matches
+the call and stub bytes, the two-level bind slot, and an ordinary export
+with an exact function entry in a pinned provider of the same architecture.
+The provider's install name and recorded relative bundle path must match
+the declared library and a supported loader-relative or executable-relative
+path. This covers the app's own executable-relative rpaths. It requires
+the recorded physical path when a framework has unrecorded aliases.
+
+`declared_imports` records the call, stub, bind and export chain separately
+from the local call trace. It describes static declared linkage. A missing
+or ambiguous provider, unsupported stub or incomplete evidence returns a
+typed reason. The view is bounded to 16 import links per lead. Computed
+dispatch remains in the call trace with its original coverage.
+
+The installed CLI matched both owned Calendar slices against LLVM call
+and stub bytes, Apple dyld bind sites, and exact export addresses. The
+x86_64 controls withheld a target with zero or two matching provider pins.
+The export ran from saved analyses with the engine unavailable. The arm64
+and x86_64 report SHA-256 values are
+`09e09466b94a573d222028dda2d9c2c06b90df7630f429a125b3222ae9b32a3e` and
+`27140c924e00f78c1b8d0f9b58eac99deb0f0f9e8fd44401541b4f4e7a8cc52c`.
+
+## Comparing committed exports
+
+```sh
+macscope diff old.json new.json --scope functions --json
+macscope diff old.json new.json --scope pseudocode --limit 50 --json
+macscope diff old.json new.json --scope metadata --json
+```
+
+Both inputs are single JSON envelopes from `macscope export --json`.
+The comparison records their export, analysis, artifact and slice identities
+and runs without opening a worker or workspace. `--cursor` binds to both
+ordered input file digests and the comparison scope.
+
+`metadata` compares the image layout, loader records and saved Ghidra
+imports, exports, symbols and strings. It shows short values directly and
+summarizes larger collections by size and digest. `functions` reports
+changed attributes, the count of differing decoded instruction offsets
+and the first difference. `pseudocode` compares the saved printed text,
+with content digests and the first differing line. Both function scopes
+require the same architecture.
+
+For the same slice bytes, matching memory entries use their recorded
+address. Across builds, a unique qualified engine name or a unique complete
+instruction fingerprint can suggest a pair. The result labels those pairs
+as candidates and records which evidence supports them. Conflicting or
+non-unique candidates retain bounded samples of alternatives. An unmatched
+row shows an observation for which the comparison found no pair. Incomplete
+facets and ambiguous matches return partial coverage. Results describe
+saved evidence and printed text.
+
+The installed CLI checked owned arm64 and x86_64 pairs with a changed
+constant, a changed branch, a renamed function, an added function and
+duplicate bodies. LLVM and DWARF verified the body fingerprints. Both
+symbol-bearing pairs reported the constant and branch changes, paired
+the rename by complete bytes and left the duplicate bodies ambiguous.
+Both stripped pairs still matched the renamed bytes and left the changed
+routines unmatched. An `LC_RPATH` change appeared in metadata while all
+decoded instructions matched. The thin and universal comparisons paired
+all eight checked entries by same-slice address. The validation report
+SHA-256 is `a35f371455cded1cf8f96c73672a5e3e975f816bf8e239d8c259371bc55dca2d`.
+
+### Comparing pinned Calendar handoffs
+
+```sh
+macscope diff old-calendar.json new-calendar.json --scope evidence --json
+```
+
+Pass the JSON output of `macscope evidence` on each side. Give the same
+review question the same lead ID across builds. The comparison pairs that
+ID only when the architecture, bundle role and selector intent agree.
+An explicit address or function ID can be repinned for a new build.
+Added and removed rows describe the lead lists. Unresolved rows retain
+the original evidence gaps.
+
+The comparison reports changed observations, coverage and provenance
+separately. Instruction bytes are compared at offsets from the function
+entry. Pseudocode and signatures are compared as saved text. References
+and calls retain their kind and resolution, with out-of-body numeric
+addresses tracked separately. Declared imports retain the symbol, library
+and provider role, with the stub, bind and provider entry locations
+tracked separately. The output contains digests and counts for these
+facets.
+
+`unchanged_observations` means the comparable saved facets match. A
+partial handoff or incompatible lead keeps the comparison partial.
+The comparison runs without the original bundles, workspaces or Ghidra.
+Pagination binds to the two ordered handoff file digests.
+
+On the owned arm64 Calendar fixture, changing the day-length constant
+from 86,400 to 82,800 and moving its framework export changed the provider's
+saved instructions and pseudocode. The caller's declared symbol, library
+and provider role matched while the provider entry moved. Recapturing the
+original in new worker jobs preserved all three leads' saved observations.
+
+## Experimental binary-derived parameter inference
+
+Baseline remains the default. To request Ghidra's generic whole-program
+`Decompiler Parameter ID` analyzer, explicitly select the alternate profile:
+
+```sh
+macscope analyze --project workspaces/calculator --profile parameter-inference \
+  --experimental-trusted-input --json
+```
+
+This is a binary-only inference pass, not source recovery or a calculator-
+specific call rewrite. It takes no source declarations, dSYMs, symbol-server
+data or manual prototype hints. Symbol-bearing inputs can still provide their
+embedded names. All source/external analyzers disabled by baseline remain
+disabled. The only changed analyzer option is `Decompiler Parameter ID=true`.
+
+Baseline's analyzer configuration and default selection are unchanged; new
+provenance fields and canonical cross-reference ordering change serialized
+exports. Analysis identities already include bridge component hashes, so this
+is not a promise of identical IDs or bytes across code versions. Existing
+snapshots are not rewritten or migrated.
+
+The profile is `parameter-inference/1` with Program marker
+`macscope-binary-only-parameters/1`. Baseline remains `baseline/1`.
+The requested configuration is in the job manifest, normalized snapshot,
+analysis identity and analyze response; the bridge records the applied marker,
+inference flag, source description, semantic-validation status and complete
+effective options. Missing, incomplete or mismatched policy evidence rejects
+the result before snapshot publication. `doctor` lists supported profiles.
+
+Each profile starts from the same pristine import. Switching back to baseline
+does not reuse inferred parameter commits. Existing snapshots stay immutable,
+and cached queries return whichever profile is active. The internal reopened
+query inherits the saved profile and uses `-readOnly -noanalysis`; it never
+silently falls back to baseline or reruns inference.
+
+Inferred argument counts, parameter types, return types and calling-convention
+labels may be wrong. Whole-program inference changes many functions, not just
+the known arm64 invalid-digit call. The tests establish the recorded policy,
+profile isolation and selected static properties, **not semantic equivalence**.
+There is no automatic promotion, automatic profile selection or hidden fallback.
+
+A source-aware fixture matrix covers arm64/x86_64, O0/O2, symbol-bearing/stripped,
+and the owned AppKit app main/command-line tool. It does not launch the app,
+execute recovered pseudocode or validate broad ObjC/Swift behavior:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 tests/integration_profiles.py \
+  --fixture-build-root build/review-v2 \
+  --output-dir /private/tmp/new-macscope-profile-matrix \
+  --experimental-trusted-input
+```
+
+The schema-2 fixture manifest and each input digest must match. The output
+directory must be new; private evidence remains there even on failure.
+Use an absolute build-root path when running from a separate worktree.
+See [the profile evidence review](parameter-inference.md) for measured scope
+and remaining limits.
+
+## Deep analysis profile
+
+```sh
+macscope analyze --project workspaces/calculator --profile deep \
+  --experimental-trusted-input --json
+```
+
+`deep/1` enables Ghidra 12.2's `Decompiler Parameter ID` and the Reference
+analyzer's `Create Address Tables` option. The Reference analyzer can
+define pointer entries at addresses referenced by instructions. Relocation
+guidance stays enabled. The profile checks that Reference switch-table
+inference and the Aggressive Instruction Finder stay disabled, and retains
+the baseline exclusions for source and external analyzers. The export
+records the full option inventory and the Program marker
+`macscope-binary-only-deep/1`. Fresh decompilation verifies the saved
+profile on the read-only Program. Analysis restart verifies and reuses the
+recorded profile and limits. Address-table references are inferred data
+evidence. Unresolved indirect jumps keep their explicit coverage gaps.
+
+The [owned packed-table fixture](../analysis/heldout_address_table.S)
+contains a table referenced by an instruction, a second unreferenced table
+with the same pointer bytes, and an indirect jump with an unknown
+destination. Build it with the macOS command-line tools from the repo root.
+
+```sh
+fixture_dir=$(mktemp -d /private/tmp/macscope-deep-fixture.XXXXXX)
+xcrun clang -arch arm64 -nostdlib -lSystem -Wl,-no_fixup_chains,-e,_main \
+  -o "$fixture_dir/arm64" analysis/heldout_address_table.S
+xcrun clang -arch x86_64 -nostdlib -lSystem -Wl,-no_pie,-no_fixup_chains,-e,_main \
+  -o "$fixture_dir/x86_64" analysis/heldout_address_table.S
+```
+
+Import each binary into a separate disposable project and export after
+analyzing under each of the three profiles. Use `xcrun nm -n` to locate
+`_owned_table`, then query its three consecutive 8-byte entries with
+`macscope xrefs --project PROJECT --from ADDRESS`. On both architectures, the installed CLI
+reported 22 references under baseline and parameter inference and 25 under
+deep. Each of the three additions matched the pointer bytes and the
+linker address of its target. The unreferenced control table gained no
+references, and the unresolved jump kept the same coverage gap under all
+three profiles. The fixture's analyze and export commands exit 6 because
+of that gap. Repeated deep exports matched byte for byte, fresh
+decompilation used the saved deep Program, and switching back reproduced
+the baseline exports. A cancelled arm64 deep job preserved the previous
+snapshot. Its restart reproduced the deep export, and a second restart
+request returned the saved receipt. The validation report SHA-256 is
+`81170c7a32865b1131fd4939d3e824fa015e96a27c7516f3f603df34181e9132`.
+
 ## Limits and safety boundaries
 
-Defaults: one worker; 300s total wall deadline; 15s per decompilation;
-1000 functions; 1024MiB Java heap. Allowed ranges are documented by help.
+Mach-O preflight accepts up to 4,096 sections in a segment and 8,192
+across all segments of a slice. The per-slice cap applies independently
+to every universal slice, including slices outside the requested import
+architecture. Exceeding the per-slice cap returns `section_limit` and
+exits 7 before the CLI stages that input. A bundle import that has already
+committed an earlier image reports the failed companion in a partial result.
+
+The installed CLI accepted exactly 8,192 sections on both architectures
+and in a two-slice universal fixture. A 204,800-section control increased
+peak RSS by 101.5 MiB in the previous parser and by 3.8 MiB before the
+new parser rejected it. The measurements began after reading the input.
+In an owned Calendar bundle, the valid main image remained committed when
+the framework exceeded the cap. Restoring the original framework allowed
+import to reuse the main image. Both images completed full headless
+analysis and returned matching cached and fresh pseudocode.
+
+The defaults are one worker, a 300-second total wall deadline, a 300-second
+startup deadline, 15 seconds per decompilation, 1000 functions and a
+1024 MiB Java heap. Help lists the allowed ranges.
 Fixed bridge bounds include 2000 instructions/function, 500 blocks and
 500 edges/function, 200 references/direction/function, 10000 symbols/category,
 5000 strings, 100000 defined-data entries scanned, and 64MiB result output.
+Address cross-reference capture retains up to 16000 references per image
+and up to 10000 computed control-flow sites from 100000 scanned instructions.
 Every cut facet has explicit partial coverage; some totals are unknown.
 
 The worker launcher log is sampled at 8MiB and combined job storage at
-512MiB. These sampled checks can overshoot; they are not hard filesystem
-quotas. `--max-memory-mib` is rejected because a hard process-memory limit
+512MiB. The runner checks both again after process-group cleanup, before
+accepting any result. These are sampled checks and can overshoot.
+`--max-memory-mib` is rejected because a hard process-memory limit
 is not enforceable here. `--heap-mib` limits only the Java heap, not native
-memory or total process RSS. `--jobs` values other than 1 and independent
-`--startup-timeout` are rejected. `--timeout` bounds startup plus analysis
-plus export as one owned worker wall deadline.
+memory or total process RSS. `--jobs` accepts 1. `--timeout` covers the
+whole owned worker through processing and export.
 
-The worker starts a private process group, records an ownership token,
-and terminates only its live owned group, including remaining descendants
-if the launcher exits first. Timeout/interrupt/failure manifests preserve
-prior committed results. There is no PID-file based kill/recovery operation.
+`--startup-timeout` applies to import, analysis and fresh decompilation.
+It measures elapsed time from launching the worker until the supervisor
+observes Ghidra 12.2's initialization marker in the first 256 KiB of the
+launcher log. Ghidra emits the marker before Program processing begins.
+The first applicable deadline wins, with the total deadline taking
+precedence on a tie. A startup timeout exits 7 with
+`worker_startup_timeout`. A clean exit without the marker returns
+`worker_startup_unconfirmed`. Job details show the configured limit, the
+supervisor's observation time, and Ghidra's own initialization timing.
+Restart reuses the recorded limit, including the total-only policy of
+earlier jobs. [Ghidra 12.2 startup source](https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.2_build/Ghidra/Features/Base/src/main/java/ghidra/app/util/headless/AnalyzeHeadless.java#L1802)
 
-The tested macOS seatbelt profile denies network and user-home reads/writes
-outside the private project, bridge, and exact engine/JDK paths. HOME, Java
-user state, cwd and temporary files are private to the workspace; environment
-variables are whitelisted. The profile still broadly permits system data and
-non-home filesystem access. **It is not a complete hostile-input security
-sandbox.** Missing/broken isolation fails with no automatic unsandboxed
-fallback. The explicit experimental flag is required on each engine command.
+The installed CLI observed readiness on all six import, analysis and fresh
+decompilation jobs for owned arm64 and x86_64 slices. A controlled launch
+delay exercised a 4-second startup deadline and a separate 1-second total
+deadline. Both stopped their worker groups and preserved the saved inputs,
+Programs and snapshots. The startup-timeout job completed on restart with
+the same recorded limits. The validation report SHA-256 is
+`85ba9e0b7824e18e8c94604711081ba88b5d70b9a143facc7acc851d71e7ae66`.
+
+`jobs show` includes a `decompiler_timing` summary for analysis and fresh
+decompilation under bridge 1.9.0. It records the elapsed time and outcome
+of Ghidra's `openProgram` call, plus the count and total time of actual
+`decompileFunction` calls. The private `bridge.json` holds the individual
+call times and available entry addresses. Normalized exports exclude these
+volatile timings. Exact replay of an unfinished job from an earlier bridge
+build requires its original CLI build.
+
+The worker starts a private process group and records an ownership token.
+The supervisor observes the launcher exit without reaping it, stops
+remaining group members while the child PID is still reserved, then
+reaps the launcher. Timeout, interruption, and failure preserve prior
+committed results.
+
+The macOS seatbelt profile denies network access and restricts user-home
+reads to the private project, bridge, exact engine/JDK paths, and listed
+ancestor directories. Each worker gets a newly created writable job
+directory with its own HOME, Java settings, working directory, and
+temporary files. The launcher also uses `/dev/null`. Saved inputs,
+snapshots, the index, and previous jobs are outside the write scope.
+Before launch, analysis and fresh queries compare the staged Program copy
+with the recorded digest of its import or analysis source. This applies
+to focused, ordinary and assisted queries. A mismatch, unreadable copy
+or symbolic link produces a failed job record before the worker launches.
+The job can be retried under its recorded request after the staging error
+is resolved.
+
+The installed canary check allowed reads of staged inputs and writes
+to the current job. It denied writes to the index, a saved snapshot, an
+input, a prior Program, and the shared workspace home. The kernel also
+denied writes through a hard link staged in the input directory and
+through a symlink aimed at an outside file. Creating a new hard link
+from outside the job and connecting to a loopback listener were denied.
+Non-home reads remain broadly available. The policy is for trusted owned
+inputs. Missing or broken isolation fails closed.
+
+Every job records a digest of its exact path-specific policy. Restart
+validates the cancelled job against that original path. The replacement
+worker gets a new private path and policy digest. An import publication
+journal binds the policy to the job that produced the Program. Earlier
+committed snapshots and published query receipts remain readable.
+An unfinished job carrying an older policy returns `job_resume_engine`
+before launch.
+
+The installed-wheel matrix covered both profiles in four scopes.
+It used symbol-bearing arm64 and stripped x86_64 with stock Ghidra 12.2,
+and stripped arm64 and symbol-bearing x86_64 with the experimental tree.
+All eight scopes imported, analyzed, and reproduced their cached C in
+fresh queries. Saved Programs and exports retained their hashes. All
+eight receipts replayed. A prior published receipt also replayed. On a
+copy with the receipt removed, a simulated unfinished job using the old
+policy was rejected before launch.
+
+A separate live trial cancelled and restarted import, analysis, and
+fresh decompilation, then replayed each receipt. Import restarted from
+the staged bytes after removal of the scratch original. The cancelled
+analysis and query preserved the previous export. A repeated baseline
+analysis produced the same analysis ID and byte-identical export in a
+different job. A final wheel reproduced the archived forwarded-return
+query and rejected symlink aliases for both an imported Program and
+an earlier analysis job before starting the worker.
+
+| Local report | SHA-256 |
+| --- | --- |
+| `canaries/report.json` | `d0872264aca79c01fc49238884295d4a97c6a70fe8dc89b42f4f364b73cc71b3` |
+| `matrix/report.json` | `f9ed662dc4945045084a2573f628068b95aef35fcf2e213838658b9267387496` |
+| `restart/report.json` | `ed0d16685dc8c2d3b0891b32d5dc1737171b03c9d22af22576f72ed95250be01` |
+| `repeat/report.json` | `ca918e4e59bf5642269db799a0accb139adff91ff3118123cf296ca0de4e4af1` |
+| `final-check/report.json` | `ba81b9eba2326e3e58e80cbfb4edae7e94cfaf2f2865c0e3cf108056383a73cb` |
+
+The reports are under `/private/tmp/macscope-job-isolation.RNU3U6`.
+The previous workspace-wide policy was measured separately in
+`/private/tmp/macscope-worker-isolation.X9QyEf/matrix/report.json`.
 
 No source/dSYM discovery, dependency execution, arbitrary user scripts,
 network symbol fetches, input execution, remote model calls, or automatic
 installs are part of the CLI. Installed dependencies themselves remain a
 trusted part of the execution environment.
 
+### Validating worker reports
+
+The main bridge result, focused range proof and signature decision must
+each be a bounded JSON object. The reader rejects duplicate fields,
+nonfinite numbers and excessive nesting. The main result also checks the
+job status, declared function count, function rows and shared coverage
+containers before the CLI publishes evidence. A rejected report remains
+in the private job directory with a typed failed job record.
+
+Import and analysis also check the saved local Ghidra project layout
+before publishing. The project marker, repository metadata and index,
+and a nonempty Program database must be present. The CLI records the
+existing tree digest after this check. Missing or incomplete Programs
+return `baseline_integrity` for import or `analysis_program_integrity`
+for analysis and keep the previous committed state available.
+
+If reanalysis produces the same snapshot bytes and analysis ID, the CLI
+keeps the original Program while it passes its digest and layout checks.
+An unavailable or damaged Program is replaced with the verified new one.
+Completed fresh-query receipts can replay against their original Program
+digest. An unfinished query still requires the exact digest in its request.
+
+### Targeted malformed Mach-O payloads
+
+The installed data-only parsers processed 20,480 seeded mutations in
+owned arm64 and x86_64 calculator copies. A bounded worker denied network
+access and user-home data reads. Each fixture and parser pair used 2,048
+mutations with one to four byte flips inside a fixup, export-trie, or
+Objective-C metadata extent. The random seed was `0x67686472612D6F30`.
+The worker checked that the staged inputs retained their original bytes.
+
+| Parser | Complete | Partial | Typed errors |
+| --- | ---: | ---: | ---: |
+| Dyld fixups | 3,362 | 856 | 3,974 |
+| Dyld exports | 2,289 | 383 | 5,520 |
+| Objective-C methods | 2,482 | 292 | 1,322 |
+
+The trial calls the installed parser entry points and measures this
+sample of payloads. The local report at
+`/private/tmp/macscope-baseline-callees.89xYWz/parser-audit/report.json`
+has SHA-256 `447a7877637d6ca538063aa84742774d302826137286f903de4f4f7706f0758f`.
+
+### Dynamic symbol table preflight
+
+`inspect` and `import` check all six `LC_DYSYMTAB` table extents
+against the containing Mach-O slice using 64-bit record widths. The local,
+defined external, and undefined groups must fit the companion `LC_SYMTAB`.
+A missing companion or invalid group returns `dysymtab_bounds`. A table
+extent outside the slice returns `macho_bounds`. These checks validate the
+declared extents. Table contents remain subject to the selected decoder.
+
+The installed CLI rejected 76 mutations across owned thin and universal
+calculator images. Three import controls left the image index, staged
+inputs, and worker jobs empty, including a malformed slice outside the
+requested architecture. The original universal fixture completed full
+Ghidra import, analysis, disassembly, and fresh decompilation on both
+architectures. Selected disassembly matched the original slice bytes.
+
+### Load-command string preflight
+
+`inspect` and `import` bound strings in the dynamic-linker, dyld
+environment and sub-library commands to their own load command. They
+reuse the existing dylib and rpath string limit. Malformed strings
+return `command_string`, duplicate dynamic-linker identification
+returns `dylinker_command`, and a linker-option command in a linked
+image returns `linker_option_filetype`. Apple defines linker options
+for relocatable object files. [Mach-O load-command definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+
+A separately installed test wheel rejected 80 owned mutations that
+the earlier CLI accepted. All 20 original thin and universal build
+artifacts produced byte-identical inspection output. The seeded test
+classified 8,192 command-string mutations against their declared
+bounds, accepting 934 and rejecting 7,258 with a typed error. Five
+public import controls left the staged inputs, jobs and engine
+directories empty, including a universal input with a malformed
+unselected slice.
+
+The intact arm64 and x86_64 calculator tools completed full Ghidra
+import and analysis. All 39 selected instructions matched the original
+slice bytes and both fresh pseudocode queries matched their saved
+results. The private validation report SHA-256 is
+`a0ba00d185151554914834856347301b1c2b2957964e0324a5a533178712e331`.
+
+### Function-start and data-in-code preflight
+
+Imports validate the `LC_FUNCTION_STARTS` and `LC_DATA_IN_CODE` tables
+before staging any slices of an artifact. New analysis jobs apply the
+same check to the verified slice, including imports created with an
+earlier build. Ambiguous or malformed tables return
+`function_starts_malformed` or `data_in_code_malformed` with exit 5.
+The engine admission budget is 1 MiB per table. Exceeding it returns
+`function_starts_limit` or `data_in_code_limit` with exit 7.
+Data-only inspection keeps its diagnostics. Its 10,000-row display limit
+is independent of validation, which checks the whole in-budget table.
+Completed import receipts remain replayable without a worker.
+[Mach-O load-command definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+
+The isolated test wheel reproduced inspection output byte for byte for
+all 20 intact owned artifacts. It rejected 29 import controls before
+staging or worker launch. The cases covered broken terminators, invalid
+data ranges, duplicate and oversized tables, malformed records beyond
+the display limit, and a malformed unselected universal slice.
+
+Intact arm64 and x86_64 calculator tools completed full headless
+analysis and fresh decompilation. The x86_64 Program came from an
+earlier wheel. All 39 selected instructions matched the original bytes,
+and both fresh results matched the saved pseudocode. The private
+validation report SHA-256 is
+`9e96703339b683eaeb10ed7198d1dc7c7d79769bcab6bfee254cb7174183505e`.
+
+### Chained-fixup layout preflight
+
+Before an import or new analysis, the CLI validates the
+`LC_DYLD_CHAINED_FIXUPS` header, starts and import table extents,
+segment page records, and all referenced symbol strings inside their
+declared payload. This includes import names that a targeted fixup
+query would never read. Engine admission requires version 0, import
+formats 1 through 3, and uncompressed symbols. It caps the aggregate
+import and page counts at 262,144 each and a segment's page count at
+32,767 to fit the pinned loader.
+[Apple chained-fixup definitions](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h)
+
+The isolated wheel rejected 31 owned malformed or unsupported import
+controls before staging or worker launch, including a malformed
+unselected universal slice. Data-only inspection and fixup results
+matched byte for byte on 24 intact slices. Intact arm64 and x86_64
+calculator tools completed full headless import and analysis, and
+both fresh queries reproduced their saved pseudocode. The validation
+report SHA-256 is
+`b4b50f5be8228266a20243c913700d0d45640e0456378aa99f2a6ed90a7da89b`.
+
+### Chained pointer preflight
+
+Engine admission also walks each declared pointer chain within its
+file-backed page. It checks the segment mapping, page starts, pointer
+fields, forward steps, and referenced import ordinals. Consecutive
+slots may not overlap. Unsupported pointer formats and multi-start
+pages fail admission. The walk allows 262,144 pointers per slice and
+retains no output inventory. Data-only `fixups` keeps its separate
+inventory and exact-address behavior. The existing arm64e engine
+support gate still applies.
+
+The temporary wheel rejected 18 owned controls before staging, including
+an escape in an unselected universal slice. A synthetic slice at the
+exact pointer limit passed preflight, and one additional pointer returned
+the typed limit error. Inspection and fixup output matched the previous
+wheel on 24 intact slices. Arm64 and x86_64 calculator tools completed
+full headless analysis and fresh decompilation, with 39 selected
+instructions checked against the original slice bytes. The validation
+report SHA-256 is
+`2ba094f37975e66d4df4072cf8b5442c919a807e817f1ad41d3030bc6bf4ccae`.
+
+### Dyld export-trie preflight
+
+Before headless import or new analysis, the CLI uses the same bounded
+trie decoder as `exports --source dyld`. It checks both modern and
+legacy declarations and accepts a mirrored pair with the same extent.
+It rejects duplicate or conflicting declarations, invalid nodes and
+terminals, and cycles. Engine admission requires recognized terminal
+flags and a complete traversal within the byte, node, name and row
+limits. The data-only query still reports partial evidence for limits
+or unsupported flags. Ordinary `inspect` continues to report the
+declared extents without traversing the trie.
+
+The temporary wheel matched inspection output for 30 intact owned
+slices. It rejected 23 malformed, unsupported or oversized import
+controls before staging, including one in an unselected universal slice.
+A synthetic earlier workspace with a verified malformed slice also
+stopped before starting a new analysis. Both modern and legacy
+calculator tools completed headless import and analysis on arm64 and
+x86_64. Each returned the same 32 export records before and after
+analysis as the previous CLI. Fresh queries on the modern tools
+matched saved pseudocode. All 39 selected saved instructions matched
+the original slice bytes.
+The primary and legacy validation report SHA-256 values are
+`f443a4d65470c7a0d6ee14b194a46c0499be6f9cb0033a1ad7a8cd25cbaa4630`
+and
+`c21bc7c84e381f25f962c3bf9a1ea666a88773a3128abebd65351fd1f8a4add3`.
+
+### Legacy dyld stream preflight
+
+Headless import and new analysis validate each declared nonempty
+rebase, bind, weak-bind and lazy-bind stream with the data-only fixup
+decoder. Admission requires termination and rejects malformed operands,
+out-of-range pointer sites, unsupported operations and unknown bind
+library ordinals. Each stream may occupy at most 1 MiB. Across all four
+streams in a slice, the CLI permits up to 262,144 expanded fixups and
+weak definitions. This bounds compact repeated-fixup opcodes even when
+every operation points to the same slot. Engine validation retains no
+fixup inventory. `fixups` keeps its existing partial coverage semantics
+and query limits.
+
+The temporary wheel rejected 19 owned controls before staging, including
+an over-limit repeated operation and a malformed unselected slice.
+Data-only fixup output matched the previous wheel byte for byte on 28
+intact slices. Legacy arm64 and x86_64 calculator tools completed full
+headless analysis and fresh decompilation. The 14 fixup records for each
+tool matched before and after analysis, and fresh pseudocode matched the
+saved snapshot. The report SHA-256 is
+`d300d298f1758e62b5a5c58d14595e3a97a1c55b471d9ab20931a4fd1563fd05`.
+
+### Owned per-job isolation experiment
+
+The [research runner](../analysis/verify_job_isolation.py) exercises
+the ordinary owned-input CLI operations in disposable projects with a
+stricter macOS worker profile. It uses the local Ghidra 12.2 and JDK
+25.0.5.0.3. The prototype applies only inside the research process.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 \
+  analysis/verify_job_isolation.py --fixture-build-root build/review-v2 \
+  --output-dir /private/tmp/new-owned-isolation \
+  --experimental-trusted-input
+```
+
+For each DebugAnalysis symbol-bearing calculator tool, the runner
+calls `project create`, `import --arch`, and
+`decompile --from-import --address` for the linker-confirmed
+`calc_add` entry. Both imports and focused workers initialized.
+The arm64 query returned 20 instructions with complete extent
+coverage. The x86_64 query returned 19 and kept the
+`linker_extent_bytes_undecoded` status. Both produced pseudocode,
+preserved their saved Programs and replayed through `jobs resume`
+with engine calls disabled.
+
+The import worker could read its exact staged slice. The focused
+worker could read the Program copy within its own job. Both profiles
+permit job data, the pinned Ghidra, JDK and bridge trees, specific
+macOS runtime reads, launcher utilities and 12 exact Homebrew library
+files. The report records the read paths and library digests. The
+tested runtime needs a read of the root directory itself, `/dev/fd`
+for launcher pipes, and the JDK subprocess helper. No broad read
+permission for `/private/tmp` or the project is required.
+
+The focus profile denies writes to the copied Program database files.
+Ghidra still needs writable metadata and directories in the disposable
+project even with `-readOnly`. Broader write denials stopped it before
+decompilation. The supervisor verifies the original and copied Program
+digests after the query.
+
+Separate canaries checked that the focused worker could read and write
+within its job and could not read the staged slice, a sibling job,
+the project index, unrelated non-home data or calculator source. They
+also verified denial of outside writes, a database append, a loopback
+connection and execution of a readable staged script canary. Each
+architecture returned exit 7 on a one-second wall deadline, left no
+receipt for that attempt, and cleared its recorded process group.
+
+The positive and negative reports have SHA-256
+`2597551c1eb712531a5382441367d80107dad2f7184f2fb01553b134030d8476`
+and
+`8fec1fd9a00efa390b953dd8a145761bb2a2b6c2d697c454bd51dea860c47d67`.
+This is one pinned macOS host and runtime. File metadata, other IPC,
+hard process-memory and disk quotas, and hostile-input containment
+remain outside the demonstrated guarantees.
+
+### Direct execution guard for staged files
+
+The normal worker profile denies direct execution from the project's
+`inputs` and `jobs` directories. The loader can still read the immutable
+slice, and the worker can read and write files in its job according to
+the existing rules. The execution guard covers a direct launch of a
+staged input or a copy made inside a job. Readable content remains
+available to interpreters, and the overall policy remains experimental
+and limited to trusted, user-owned inputs.
+
+On the pinned macOS host, both executable canaries ran with the previous
+policy. With the new policy macOS denied both launches, and both files
+still read back byte for byte. Owned arm64 and x86_64 calculator tools
+completed import, analysis, cached and fresh queries, and focused queries.
+An upgrade in the same temporary installation finished an older prepared
+import without launching a worker and restarted an older interrupted
+analysis with the new policy. Both receipts replayed offline. The
+validation report SHA-256 is
+`99b21a119760e5efb1748e2233564d09ce2390f7b5ec191888a05f414b7de39d`.
+
+### Worker workspace read scope
+
+An import worker can read its job and exactly one immutable staged
+`.macho` slice. Analysis and query workers read the Program copy in their
+own job. The worker profile denies file-content reads of sibling jobs,
+other staged slices, the full artifact copy and the workspace index.
+The pinned runtime and bridge retain read access. This checkpoint
+restricted reads inside the workspace. See the
+[headless worker read paths](#headless-worker-read-paths) for the current
+rules outside it.
+
+The temporary wheel passed import, analysis, fresh queries and focused
+queries on owned arm64 and x86_64 calculator tools. The import and query
+policies made the expected decisions on seven read controls each. Both
+blocked the index, sibling job, unrelated slice and full artifact. Both
+could still read the separate non-home file outside the workspace.
+An in-place upgrade finished a prepared import without a new worker,
+restarted an interrupted analysis under the new policy, and replayed
+both receipts offline. The one-shot capture research also passed its
+two owned runs with the updated worker interface. The validation report
+SHA-256 is
+`7beca2edd42d0a9652b7d24eb64108b0facda9fb3595f9aec3bfc2b70735c97d`.
+
+### Headless worker launch paths
+
+The normal headless worker can directly launch the selected Ghidra
+launch scripts, the selected JDK's `java` and subprocess helper, the
+pinned native decompiler, and the exact macOS shell and launcher utility
+paths used by the pinned setup. The list applies to child processes as
+well. The existing workspace execution denial also applies. The
+allowlist governs direct process launches. Allowed interpreters still
+have access to readable content under the worker's separate read rules.
+
+The previous profile launched a disposable executable outside the
+workspace. The new profile denied it directly and from a child shell,
+and denied an unlisted system utility. The canary stayed readable.
+The temporary wheel passed the live doctor probe and owned arm64 and
+x86_64 import, analysis, fresh query and focused query. The analysis
+runs used `deep` and `parameter-inference`, respectively. A prepared
+import and an interrupted analysis recovered after upgrading the test
+wheel in place. Both receipts replayed offline. The validation report
+SHA-256 is
+`d05bfc2dd3c1ed41702760b5db971c3036ef723f161cf54cb9563035d941c224`.
+
+### Read-only Program database files in queries
+
+Fresh and focused queries pass `-readOnly -noanalysis` and run on a
+verified Program copy in their own job. The query sandbox also denies
+writes to `.gbf` database files inside that copy. Ghidra can still write
+the working metadata and temporary files it needs to open the project.
+Import creates a writable Program, and analysis uses a writable copy.
+A query restarted from a recognized earlier profile uses the current
+database protection.
+
+The temporary wheel recovered an interrupted arm64 query with an accepted
+type hint and an interrupted x86_64 focused query from the previous
+wheel. Both launched with the new protection and replayed offline after
+publication. A separate x86_64 O2 query applied direct-signature
+recovery. macOS denied an append to a real copied database in all three
+queries while allowing database reads. The metadata write control, live
+doctor probe and owned one-shot capture rerun also passed. The report
+SHA-256 is
+`498514c1307fa13daa5b3d7b0dfcfb4d320524c9ea33123afb605556c4d4e080`.
+
+### Headless worker read paths
+
+The normal worker profile permits file-content reads in its job and the
+selected Ghidra, JDK and bridge directories. An import also gets the
+exact staged slice. The profile permits the pinned setup's macOS system
+runtime paths, exact launcher utilities and named auxiliary JDK
+libraries. Homebrew library entries resolve to files within their
+expected formula directories. The profile records the resolved paths.
+
+The temporary wheel completed the 32-case owned calculator matrix.
+All normalized exports matched the earlier wheel, including the five
+complete and 27 partial results. The live probe passed. A focused query
+from the previous wheel restarted under the new profile and replayed
+offline. Its worker could still read its Program copy and the system
+control. It could no longer read a separate disposable project or an
+unrelated non-home file. The combined policy also denied a loopback
+connection, an outside write, and launch of the outside executable
+canary. A write inside the job succeeded.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Owned matrix | `9c6c05e65599239482e906bab6c31e4e762cfe259d94c1cb11708b1fdef9037b` |
+| Read controls and retry | `f93a8525074a1beb4484ec1663d26041614c1a26a83865e877add3abdcb0e94a` |
+| Combined worker controls | `031d943c6729e8d74fc613fa7b0a7abcb27a140dcbb786cc1c0bd1128aaa25d1` |
+
+This is a file-content policy for the tested macOS arm64 setup. File
+metadata, other IPC, hard memory and disk quotas, and hostile-input
+containment remain separate validation gaps.
+
+### Auxiliary JDK library fingerprint
+
+The dependency probe hashes the contents of the resolved auxiliary JDK
+libraries on the worker allowlist. The aggregate `jdk_auxiliary_sha256`
+uses the formula-relative names and file hashes. New job manifests,
+worker policy digests and analysis identities bind that value. The
+supervisor checks it before launch and again before publishing the
+worker result. A fresh or focused query checks the value recorded in
+its source when that value is available.
+
+Earlier jobs retain the dependency fields recorded by their original
+wheel. Their receipts can replay offline. A new worker for a recognized
+earlier retry records the current fingerprint. New records with a
+different fingerprint require matching libraries before a retry.
+
+The temporary wheel independently hashed all 12 selected libraries and
+matched the live doctor result. Owned arm64 and x86_64 imports,
+analyses and fresh queries recorded the same fingerprint. Repeat
+analyses reproduced their IDs and cached exports. A prepared import
+and an unfinished focused query recovered from the previous wheel and
+replayed offline. A different fingerprint blocked fresh and focused
+queries before job creation. Changing a disposable control before
+launch or after a real worker completed produced
+`worker_jdk_auxiliary_mismatch` without publishing an import. The
+validation report SHA-256 is
+`b729c7ca3784bf232319080f19292cfa77f159ce9fb442db17031c85f10e7e39`.
+
+### Owned one-shot approval prototype
+
+The [research supervisor](../analysis/verify_capture_approval.py)
+uses a simulated issuer with an ephemeral, process-local signing key.
+It tests grant authentication and consumption on manifest-verified
+calculator tools. A grant binds the artifact and slice digests, image
+identity and architecture, exact linker entry and extent, project path
+and identity, worker limits, Ghidra and bridge, the JDK tree, the library
+digests and the isolation runner. It expires after five minutes and can
+be consumed once, before staging. The supervisor rechecks the staged
+bytes, requested operation and pinned runtime at each launch. The query
+also checks the digest of the Program produced by the import.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 \
+  analysis/verify_capture_approval.py --fixture-build-root build/review-v2 \
+  --output-dir /private/tmp/new-owned-capture-approval \
+  --experimental-trusted-input
+```
+
+On arm64 and x86_64, one grant yielded one no-analysis import and one
+read-only focused query. Both produced pseudocode and replayed the
+verified receipts with the engine disabled. Extent coverage was complete
+on arm64 and partial on x86_64. Each architecture rejected 18 requests
+before staging, including an actual request for a different calculator
+function, scope changes, tampering, a foreign issuer, a missing signature
+and expiry. One of eight concurrent consumers claimed a grant. Reuse
+after capture produced zero additional jobs.
+
+The `positive.json` report SHA-256 is
+`c5e299ebd8770934415cfc76fa382e86aae5058e3dbd89f99cb0c56ede3814a6`.
+The `negative.json` report SHA-256 is
+`83d06145ff1b7eeda5da5cac72031251788ce7e501eb2baf657f810091da4031`.
+
+This experiment uses an in-process simulation of approval. A production
+launcher would need a trusted approval channel and cross-process grant
+verification. It would also inherit the unverified isolation limits
+listed above. The public CLI continues to require trusted, user-owned
+inputs for worker operations.
+
 ## Envelopes, errors and explicit omissions
+
+Workspace opens validate the manifest structure, schema version, and
+workspace identifier before using the index. Malformed manifests
+return `workspace_manifest` and exit 5. An unsupported version
+returns `workspace_schema` and exits 3. An installed-wheel check
+reopened an earlier schema 1.0 workspace and reproduced its export
+byte for byte before and after five manifest error cases. The saved
+index retained its digest. The local report in
+`/private/tmp/macscope-forwarded-return.gwE9OS/workspace-check/report.json`
+has SHA-256 `d6ebd323819fa8b5dc31f8372ad39978b776d75c6430459047c23bf4761d6211`.
+
+The SQLite index is validated for the required schema 1.0 tables and
+columns before a project opens. Damaged indexes and missing core schema
+return `workspace_index` and exit 5. A lock during the check returns the
+retryable `workspace_index_busy` error and exits 8. An installed-wheel
+trial reproduced an earlier valid export byte for byte and verified
+that failed opens preserved the test indexes.
+
+The local index report in
+`/private/tmp/macscope-worker-isolation.X9QyEf/index-check/report.json`
+has SHA-256 `4f6af5740a007ecf698c8525ce215665b99049a0996d3568aecca36bc863cad0`.
+On the same saved workspace, 20 paired cached queries produced
+byte-identical JSON with the earlier and current wheels. The observed
+95th percentiles were 0.167 s and 0.143 s on the development Mac.
+
+Saved-work queries check image and analysis IDs before building paths.
+The image ID and architecture must agree with the index row, and image
+metadata must carry valid artifact and slice digests. A bad row returns
+`workspace_image`. Unreadable SQLite text returns `workspace_index`.
+The snapshot loader checks the recorded
+SHA-256, the snapshot's basic structure, and its analysis and image
+identity. Invalid receipts, malformed snapshots and identity mismatches
+return `snapshot_record`, `snapshot_format` and `snapshot_identity`
+respectively, all with exit 5.
+
+Workspace manifests, indexed image and analysis records, and snapshot
+files reject duplicate JSON fields, nonfinite numbers, and nesting over
+64 containers. Snapshot and query receipt publication use the same
+nesting limit, and the JSON writer rejects nonfinite numbers.
+
+Publication and reopening both check that each function row belongs to
+the selected image, architecture and analysis. Function IDs and entry
+addresses must be unique. Different hexadecimal spellings of one RAM
+address count as the same entry. A conflicting row returns
+`snapshot_function_identity`. Evidence that fails normalization records
+the analysis job as failed and preserves the previous active snapshot.
+
+The installed CLI rejected eight corrupt-workspace queries, including a
+path that led outside the project and a snapshot from another slice with
+a valid recorded digest. The test preserved the selected workspaces and
+the outside control file. Five archived exports matched byte for byte,
+and a fresh owned arm64 and x86_64 project completed full headless import,
+analysis and fresh decompilation. The validation report SHA-256 is
+`f0be5fad6a9f6b6bb7ec333c5850d1fe747688daa5510fdcf4e13aa968b72841`.
 
 Bundled `envelope.schema.json` and `function.schema.json` use schema1.0.
 Every JSON response has command, status, analysis_id (nullable), data,
 diagnostics and coverage. A stdlib subset validator validates those schemas
-and emitted function records. `complete` denotes completion of a backend
-operation, **not** semantic correctness or exhaustive runtime behavior.
-Unavailable pseudocode is null; unknown coverage totals are null.
-Token/address spans are currently unavailable and explicitly marked as such.
+and emitted function records. `complete` denotes completion within the
+recorded coverage. Unavailable pseudocode and unknown coverage totals are
+null. Token/address spans include a separate availability field.
 
 Exit codes: 0 complete, 2 usage/ambiguity/cursor, 3 unsupported capability,
-4 dependency missing/incompatible, 5 malformed/integrity, 6 partial batch,
+4 dependency missing/incompatible, 5 malformed/integrity, 6 partial result,
 7 timeout/resource limit, 8 workspace/output conflict, 10 unexpected worker/
 internal failure, 130 interrupt. A bounded collection page can have partial
 coverage while the page request itself exits0; use `next_cursor`.
 
-Not implemented: public uncached refresh, annotations/types, rich ObjC/Swift
-views, search commands, bundle/resource inventory, auxiliary images, REA,
-HTML exports, diffs, manual function corrections, source-equivalence proof,
-strong hostile-input isolation, hard RSS/disk quotas, migrations, signed
-packaging, x86_64 host workers, or release-wide fuzzing/SBOM/notices review.
-Unknown commands fail through the parser rather than fabricating support.
+Remaining capabilities include richer Objective-C and Swift views, packed
+and nested aggregate hints, and boundary edits that require decoding new
+instruction ranges.
+Additional release requirements include stronger isolation,
+hard RSS/disk quotas, schema migrations, signed packaging, x86_64 host
+workers and expanded fuzzing. The [progress checklist](current-status.md)
+tracks behavior validation and the separately gated work.
 
 ## Reproduce validation
+
+### Owned Calendar evidence rehearsal
+
+Use the installed `macscope` Python environment to build the owned arm64
+Calendar fixture and analyze only its main executable and one embedded
+framework. Give the rehearsal a new private directory. It runs the owned
+fixture as a separate control before analyzing its bytes with Ghidra.
+Xcode's `ibtool` compiles the owned XIB and generates its localization table.
+
+```sh
+python tests/integration_calendar_workflow.py /tmp/owned-calendar-rehearsal
+python tests/integration_calendar_workflow.py /tmp/owned-calendar-rehearsal --replay
+```
+
+The control returned 24, 23 and 24 hours across one forward offset change.
+The CLI matched the selector implementation to Apple `nm`, followed a
+string reference to the app entry, and linked a local call stub's bind slot
+to the framework's declared export. The framework's two calls matched in
+both directions. The Objective-C call through a function pointer retained
+its unresolved target. The scoped inventory matched all three selected
+resources by size and SHA-256. The compiled action, outlet and titles
+matched `ibtool`'s source records. The rehearsal matched the archived
+receiver class and selector to the exact Objective-C method entry and
+linked that entry to the saved Ghidra function.
+
+The handoff retains the stock pseudocode and an opt-in fresh query with
+`--recover-callee-parameters`. Stock Ghidra omitted the first midnight
+call's arguments in the printed code. The recovery reported four verified
+register parameters, and the fresh output showed four arguments at both
+calls. A missing address returned `function_selector`. The private report
+contains four selected functions, their coverage, the captured interface
+and localization records, and a separate record of the executed control.
+`--replay` regenerates the report using the saved workspace, the recorded
+resource evidence and the fresh query receipt. Replay works with the
+original app bundle absent and uses the original report schema for older
+captures. The earlier v1 rehearsal report SHA-256 is
+`e6f6d0cf8d1a589d748f68e2e26bec763932be65785990a28cbc1f899d871573`.
+
+### General CLI tests
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -v
@@ -207,4 +2686,5 @@ fat64 container, exercises both thin and explicit universal selections,
 checks every phase-2 command/schema and atomic exports, and compares
 pseudocode/instruction content by slice digest. It creates fresh
 `build/cli-integration-*` evidence on every run. Performance here is a local
-measurement, not a release target or cross-machine benchmark.
+measurement, not a release target or cross-machine benchmark. See the
+[20-round CLI benchmark](benchmark.md) for the measured development host.

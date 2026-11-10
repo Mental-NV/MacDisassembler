@@ -1,0 +1,33 @@
+--- a/printc.cc
++++ b/printc.cc
+@@ -526 +526,3 @@
+-  if (result->getMetatype() != TYPE_INT || result->isEnumType() || result->getSize() != size)
++  bool unsignedResult = result->getMetatype() == TYPE_UINT;
++  if ((result->getMetatype() != TYPE_INT && !(unsignedResult && size == 8 && op->numInput() == 2))
++      || result->isEnumType() || result->getSize() != size)
+@@ -527,0 +530,2 @@
++  bool signedInput = false;
++  bool narrowUnsignedLiteral = false;
+@@ -533,0 +538,3 @@
++    signedInput |= type->getMetatype() == TYPE_INT;
++    narrowUnsignedLiteral |= input->isConstant() && type->getMetatype() == TYPE_UINT
++      && input->getOffset() <= 0xffffffff;
+@@ -534,0 +542,5 @@
++  // A small literal printed with U has C's unsigned-int rank, even
++  // when its p-code type is 64-bit unsigned. A signed long operand
++  // would otherwise force the operation back to signed arithmetic.
++  if (unsignedResult && !(signedInput && narrowUnsignedLiteral))
++    return (Datatype *)0;
+@@ -538,3 +550,2 @@
+-/// Render signed-view p-code arithmetic through its same-width unsigned
+-/// carrier. Each operand is emitted once. The outer cast restores the
+-/// expression type used by its consumer.
++/// Use a same-width unsigned carrier for modulo arithmetic. A cast
++/// restores the signed view when the consumer expects that type.
+@@ -548,2 +559,4 @@
+-  pushOp(&typecast,op);
+-  pushType(result);
++  if (result->getMetatype() == TYPE_INT) {
++    pushOp(&typecast,op);
++    pushType(result);
++  }

@@ -8,11 +8,12 @@ import os
 from pathlib import Path
 import plistlib
 import struct
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from macscope import macho
+from macscope import focused, macho, macho_load
 from macscope.errors import Error
 
 
@@ -36,6 +37,17 @@ def command(kind, payload=b"", *, size=None):
     return struct.pack("<2I", kind, 8 + len(payload) if size is None else size) + payload
 
 
+def entry_segment(name, va, file_offset, file_size, protections=5):
+    return command(0x19, struct.pack("<16s4Q4I", name, va, 4096, file_offset,
+                                     file_size, 7, protections, 0, 0))
+
+
+def thread_state(flavor, count, pc_index, va):
+    payload = bytearray(4 * count)
+    struct.pack_into("<Q", payload, 8 * pc_index, va)
+    return struct.pack("<II", flavor, count) + payload
+
+
 def segment_image(*, file_offset=184, section_size=4, section_address=0x100000100,
                   section_flags=0, alignment=2, reloc_offset=0, reloc_count=0,
                   segment_address=0x100000000, segment_size=0x1000,
@@ -47,6 +59,13 @@ def segment_image(*, file_offset=184, section_size=4, section_address=0x10000010
                           segment_size, segment_file_offset, segment_file_size,
                           7, 5, nsects, 0)
     return image(commands=[command(0x19, segment + section)], payload=b"\x1f\x20\x03\xd5")
+
+
+def linker_table(kind, payload, *, cpu=ARM64):
+    offset = 32 + 72 + 16
+    text = entry_segment(b"__TEXT", 0x100000000, 0, offset + len(payload))
+    table = command(kind, struct.pack("<II", offset, len(payload)))
+    return image(cpu=cpu, commands=[text, table], payload=payload)
 
 
 def universal(images=None, *, endian=">", fat64=False):
@@ -93,6 +112,36 @@ class ErrorAssertions(unittest.TestCase):
             self.assertEqual(exit_code, caught.exception.exit_code)
         self.assertTrue(str(caught.exception))
         return caught.exception
+
+
+class FocusedFunctionTests(ErrorAssertions):
+    def test_exact_linker_selection_beyond_inventory_limit_validates_the_tail(self):
+        base = 0x100000000
+        count = macho_load.MAX_TABLE_ROWS + 3
+        payload = b"\x04" * count + b"\0"
+        text = {"va": hex(base), "file_size": hex((count + 1) * 4)}
+        entry = base + 4 * (macho_load.MAX_TABLE_ROWS + 1)
+        extent = [(0, len(payload))]
+        self.assertEqual(macho_load.function_starts(payload, extent, text)["status"], "partial")
+        self.assertEqual(macho_load.function_starts(payload, extent, text, selected=entry),
+                         {"status": "complete", "addresses": [hex(entry), hex(entry + 4)]})
+        self.assertEqual(macho_load.function_starts(payload, extent, text, selected=entry + 1)["addresses"], [])
+        malformed = payload[:-1] + b"\x80"
+        self.assertEqual(macho_load.function_starts(malformed, extent, text, selected=entry)["status"],
+                         "malformed")
+
+    def test_worker_instruction_bytes_must_match_the_selected_extent(self):
+        report = {"entry_va": "0x1000", "end_va_exclusive": "0x1004", "extent_sha256": "a" * 64}
+        proof = dict(report, length=4)
+        payload = bytes.fromhex("1f2003d5")
+        instructions = [{"addr": "0x1000", "bytes": payload.hex()}]
+        function = {"entry_va": "0x1000", "instructions": instructions}
+        focused.verify(proof, payload, report, function)
+        self.assert_error("focused_worker_proof", focused.verify, proof, payload, {}, function)
+        instructions[0]["bytes"] = "00000000"
+        self.assert_error("focused_instructions", focused.verify, proof, payload, report, function)
+        instructions[0]["addr"] = "0x1004"
+        self.assert_error("focused_instructions", focused.verify, proof, payload, report, function)
 
 
 class ThinMachOTests(ErrorAssertions):
@@ -168,6 +217,34 @@ class ThinMachOTests(ErrorAssertions):
         result = macho.thin(image(commands=[command(0x12345678)]))
         self.assertEqual(["0x12345678"], result["load_commands"])
 
+    def test_dylinker_and_sub_library_strings_stay_inside_their_commands(self):
+        for kind in (0xE, 0xF, 0x12, 0x13, 0x14, 0x15, 0x27):
+            with self.subTest(kind=hex(kind)):
+                valid = command(kind, struct.pack("<I", 12) + b"abc\0")
+                self.assertEqual(macho.thin(image(commands=[valid]))["load_commands"], [hex(kind)])
+                for malformed in (command(kind), change32(valid, 8, 8),
+                                  change32(valid, 8, 16), change32(valid, 8, 0xFFFFFFFF),
+                                  valid[:-1] + b"d"):
+                    # Following bytes must not serve as a terminator or as the string.
+                    self.assert_error("command_string", macho.thin,
+                                      image(commands=[malformed, command(0x7777)], payload=b"x\0"))
+
+    def test_dynamic_linker_identification_is_unique(self):
+        load, identity = (command(kind, struct.pack("<I", 12) + b"abc\0") for kind in (0xE, 0xF))
+        for duplicate in (load, identity):
+            self.assert_error("dylinker_command", macho.thin, image(commands=[load, duplicate]))
+        environment = command(0x27, struct.pack("<I", 12) + b"a=b\0")
+        self.assertEqual(len(macho.thin(image(commands=[load, environment, environment]))["load_commands"]), 3)
+
+    def test_linker_options_rejected_for_linked_images(self):
+        options = command(0x2D, struct.pack("<I", 1) + b"-lX\0")
+        for kind in (2, 6, 8):
+            with self.subTest(kind=kind):
+                self.assert_error("linker_option_filetype", macho.thin,
+                                  image(filetype=kind, commands=[options]))
+        self.assert_error("unsupported_filetype", macho.thin, image(filetype=1, commands=[options]),
+                          exit_code=3)
+
     def test_uuid_and_truncated_uuid(self):
         uuid = bytes(range(16))
         self.assertEqual(uuid.hex(), macho.thin(image(commands=[command(0x1B, uuid)]))["uuid"])
@@ -176,18 +253,218 @@ class ThinMachOTests(ErrorAssertions):
     def test_encryption_commands_reject_protected_data(self):
         for kind in (0x21, 0x2C):
             with self.subTest(kind=kind):
-                encrypted = command(kind, struct.pack("<4I", 0, 0, 1, 0))
-                self.assert_error("encrypted", macho.thin, image(commands=[encrypted]), exit_code=3)
-                plain = command(kind, struct.pack("<4I", 0, 0, 0, 0))
-                self.assertEqual([hex(kind)], macho.thin(image(commands=[plain]))["load_commands"])
+                encrypted = command(kind, struct.pack("<4I", 56, 4, 1, 0))
+                with self.assertRaises(Error) as caught:
+                    macho.thin(image(commands=[encrypted], payload=bytes(4)))
+                self.assertEqual((caught.exception.code, caught.exception.exit_code), ("encrypted", 3))
+                self.assertEqual(caught.exception.partial["encryption"]["cryptid"], 1)
+                self.assertEqual(caught.exception.partial["encryption"]["slice_file_offset"], "0x38")
+                plain = command(kind, struct.pack("<4I", 56, 4, 0, 0))
+                binary = image(commands=[plain], payload=bytes(4))
+                self.assertEqual([hex(kind)], macho.thin(binary)["load_commands"])
+                fat = macho.inspect_bytes(universal([binary, image(cpu=X86_64)]))["slices"][0]
+                declaration = fat["loader"]["encryption"]
+                self.assertEqual(declaration["cryptid"], 0)
+                self.assertEqual(int(declaration["container_file_offset"], 16), int(fat["offset"], 16)+56)
                 self.assert_error("encryption_bounds", macho.thin, image(commands=[command(kind)]))
                 invalid = command(kind, struct.pack("<4I", 10000, 1, 0, 0))
                 self.assert_error("macho_bounds", macho.thin, image(commands=[invalid]))
+                self.assert_error("encryption_bounds", macho.thin, image(commands=[plain, plain]))
+        self.assert_error("encryption_bounds", macho.thin,
+                          image(commands=[command(0x2c, bytes(24))]))
+
+    def test_deployment_and_source_versions_preserve_multiple_declarations(self):
+        modern = command(0x32, struct.pack("<8I", 1, 0x0d0203, 0x0f0000, 2, 3, 0x010203, 99, 0x020000))
+        other = command(0x32, struct.pack("<4I", 99, 0x0e0000, 0, 0))
+        legacy = command(0x25, struct.pack("<II", 0x0a0000, 0x0a0100))
+        source = 1 << 40 | 2 << 30 | 3 << 20 | 4 << 10 | 5
+        meta = macho.thin(image(commands=[modern, other, legacy, command(0x2a, struct.pack("<Q", source))]))
+        first, second, third = meta["loader"]["deployment"]
+        self.assertEqual((first["platform"], first["minimum_os"], first["sdk"]), ("macos", "13.2.3", "15.0.0"))
+        self.assertEqual(first["tools"], [{"tool_id": 3, "name": "ld", "version": "1.2.3"},
+                                          {"tool_id": 99, "name": None, "version": "2.0.0"}])
+        self.assertIsNone(second["platform"])
+        self.assertEqual(second["platform_id"], 99)
+        self.assertEqual((third["command"], third["platform"], third["platform_id"]),
+                         ("LC_VERSION_MIN_IPHONEOS", "ios", None))
+        self.assertEqual(meta["loader"]["source_version"]["version"], "1.2.3.4.5")
+        self.assertEqual(meta["loader"]["source_version"]["raw"], hex(source))
+
+    def test_deployment_sizes_and_tool_limits_fail_with_typed_errors(self):
+        for bad in (command(0x32), command(0x32, struct.pack("<4I", 1, 0, 0, 1)),
+                    command(0x32, struct.pack("<4I", 1, 0, 0, 0) + bytes(8)), command(0x24)):
+            self.assert_error("deployment_bounds", macho.thin, image(commands=[bad]))
+        tool_count = 129
+        many = command(0x32, struct.pack("<4I", 1, 0, 0, tool_count) + bytes(8 * tool_count))
+        self.assert_error("deployment_limit", macho.thin, image(commands=[many]), exit_code=7)
+        legacy = command(0x24, bytes(8))
+        self.assert_error("deployment_limit", macho.thin, image(commands=[legacy] * 17), exit_code=7)
+        source = command(0x2a, bytes(8))
+        self.assert_error("source_version_bounds", macho.thin, image(commands=[source, source]))
 
     def test_valid_segment_and_section(self):
         result = macho.thin(segment_image())
         self.assertEqual([{"name": "__text", "segment": "__TEXT", "va": "0x100000100",
                            "size": "0x4", "file_offset": "0xb8", "protections": 5}], result["sections"])
+
+    def test_loader_metadata_decodes_entry_function_starts_and_data_in_code(self):
+        starts = b"\x20\x14\0\0"
+        table = struct.pack("<IHH", 144, 4, 1)
+        segment = command(0x19, struct.pack("<16s4Q4I", b"__TEXT", 0x100000000, 4096,
+                                             0, 160+len(starts)+len(table), 7, 5, 0, 0))
+        main = command(0x80000028, struct.pack("<2Q", 150, 0))
+        fs = command(0x26, struct.pack("<2I", 160, len(starts)))
+        dice = command(0x29, struct.pack("<2I", 160+len(starts), len(table)))
+        data = image(commands=[segment,main,fs,dice],payload=starts+table)
+        loader = macho.thin(data)["loader"]
+        self.assertEqual(loader["entry_point"]["va"], "0x100000096")
+        self.assertEqual(loader["function_starts"]["addresses"], ["0x100000020","0x100000034"])
+        self.assertEqual(loader["data_in_code"]["records"],
+                         [{"slice_file_offset":"0x90","length":4,"kind":"0x1"}])
+        malformed = data[:160]+b"\x80"*4+data[164:]
+        self.assertEqual(macho.thin(malformed)["loader"]["function_starts"]["status"], "malformed")
+        self.assert_error("entry_command",macho.thin,image(commands=[main,main],payload=bytes(100)))
+
+    def test_engine_validates_table_tails_beyond_the_inspection_row_limit(self):
+        record = struct.pack("<IHH", 112, 1, 1)
+        cases = (
+            (0x26, "function_starts", b"\x04\x04\x04\0", b"\x04\x04\x04\x80"),
+            (0x29, "data_in_code", record * 3, record * 2 + bytes(8)),
+        )
+        for command_id, name, valid, malformed in cases:
+            with self.subTest(name=name), patch.object(macho_load, "MAX_TABLE_ROWS", 2):
+                complete = macho.thin(linker_table(command_id, valid), for_engine=True)
+                self.assertEqual(complete["loader"][name]["status"], "partial")
+                broken = linker_table(command_id, malformed)
+                self.assertEqual(macho.thin(broken)["loader"][name]["status"], "malformed")
+                self.assert_error(name + "_malformed", macho.thin, broken, for_engine=True)
+
+    def test_engine_rejects_oversized_tables_and_bad_unselected_slices(self):
+        record = struct.pack("<IHH", 112, 1, 1)
+        for command_id, name, payload in ((0x26, "function_starts", bytes(24)),
+                                           (0x29, "data_in_code", record * 3)):
+            with self.subTest(name=name), patch.object(macho_load, "MAX_LINKER_TABLE_BYTES", 16):
+                self.assert_error(name + "_limit", macho.thin,
+                                  linker_table(command_id, payload), for_engine=True, exit_code=7)
+        bad = linker_table(0x29, bytes(8), cpu=X86_64)
+        fat = universal([image(), bad], fat64=True)
+        self.assertEqual(macho.inspect_bytes(fat)["slices"][1]["loader"]["data_in_code"]["status"], "malformed")
+        self.assert_error("data_in_code_malformed", macho.inspect_bytes, fat, for_engine=True)
+
+    def test_unixthread_uses_architecture_register_and_universal_offsets(self):
+        base, offset = 0x100000000, 0x200
+        text = entry_segment(b"__TEXT", base, 0, 1024)
+        thins = []
+        for cpu, flavor, count, index in ((ARM64, 6, 68, 32), (X86_64, 4, 42, 16)):
+            state = thread_state(flavor, count, index, base + offset)
+            data = image(cpu=cpu, commands=[text, command(5, state)], payload=bytes(1024))
+            thins.append(data)
+            entry = macho.thin(data)["loader"]["entry_point"]
+            self.assertEqual((entry["source"], entry["status"], entry["va"], entry["rva"]),
+                             ("LC_UNIXTHREAD", "complete", hex(base+offset), hex(offset)))
+            self.assertEqual(entry["slice_file_offset"], hex(offset))
+            state_at = int(entry["thread_states"][0]["pc_slice_file_offset"], 16)
+            self.assertEqual(struct.unpack_from("<Q", data, state_at)[0], base + offset)
+        for fat in (False, True):
+            slices = macho.inspect_bytes(universal(thins, fat64=fat))["slices"]
+            for row in slices:
+                entry = row["loader"]["entry_point"]
+                self.assertEqual(int(entry["container_file_offset"], 16), int(row["offset"], 16) + offset)
+
+    def test_invalid_or_unsupported_unixthread_layouts(self):
+        state = thread_state(6, 68, 32, 0x100000200)
+        unix = command(5, state)
+        main = command(0x80000028, struct.pack("<2Q", 0, 0))
+        self.assert_error("entry_command", macho.thin, image(commands=[unix, main]))
+        self.assert_error("entry_command", macho.thin, image(commands=[command(5, state * 2)]))
+        for invalid in (b"", state[:-8], struct.pack("<4I", 6, 2, 0, 0)):
+            self.assert_error("entry_thread_bounds", macho.thin, image(commands=[command(5, invalid)]))
+        unknown = struct.pack("<4I", 99, 2, 0, 0)
+        padded = command(5, state + struct.pack("<4I", 99, 1, 5, 0))
+        parsed = macho.thin(image(commands=[padded]))["loader"]["entry_point"]
+        self.assertEqual([record["word_count"] for record in parsed["thread_states"]], [68, 1])
+        for binary in (image(commands=[command(5, unknown + state)]),
+                       image(subtype=2, commands=[unix])):
+            record = macho.thin(binary, allow_arm64e=True)["loader"]["entry_point"]
+            self.assertEqual(record["status"], "unsupported")
+            self.assertIsNone(record["va"])
+        self.assertIsNone(macho.thin(image(commands=[command(4, state)]))["loader"]["entry_point"])
+
+    def test_main_uses_virtual_base_and_requires_unique_executable_backing(self):
+        base = 0x100000000
+        text = entry_segment(b"__TEXT", base, 0, 256)
+        main = command(0x80000028, struct.pack("<2Q", 0x4000, 0x1000))
+        hot = entry_segment(b"__HOT", base + 0x4000, 256, 16)
+        binary = image(commands=[text, hot, main], payload=bytes(128))
+        entry = macho.thin(binary)["loader"]["entry_point"]
+        self.assertEqual((entry["va"], entry["rva"], entry["slice_file_offset"], entry["stack_size"]),
+                         ("0x100004000", "0x4000", "0x100", "0x1000"))
+        for segments in ([text], [text, hot, hot],
+                         [text, entry_segment(b"__HOT", base + 0x4000, 256, 16, 3)],
+                         [text, entry_segment(b"__HOT", base + 0x4000, 256, 0)]):
+            entry = macho.thin(image(commands=[*segments, main], payload=bytes(128)))["loader"]["entry_point"]
+            self.assertEqual(entry["status"], "unavailable")
+            self.assertIsNone(entry["slice_file_offset"])
+
+    def test_library_and_rpath_strings_are_bounded_and_keep_new_dylib_flags(self):
+        def string_command(kind, fixed, value):
+            payload = fixed+value+b"\0"
+            return command(kind,payload+bytes((-len(payload))%8))
+
+        old = string_command(0xC,struct.pack("<4I",24,2,0x10203,0x10000),b"/usr/lib/libSystem.B.dylib")
+        new = string_command(0xC,struct.pack("<5I",28,0x1A741800,0x10000,0,0x9),b"@rpath/libExample.dylib")
+        rpath = string_command(0x8000001C,struct.pack("<I",12),b"@loader_path/Frameworks")
+        loader = macho.thin(image(commands=[old,new,rpath]))["loader"]
+        self.assertEqual(loader["dylibs"][0]["current_version"],"1.2.3")
+        self.assertEqual(loader["dylibs"][1]["use_flags"],"0x9")
+        self.assertIsNone(loader["dylibs"][1]["timestamp"])
+        self.assertEqual(loader["rpaths"],["@loader_path/Frameworks"])
+        for value in (command(0x8000001C,struct.pack("<I",4)+b"path"),
+                      command(0x8000001C,struct.pack("<I",12)+b"path")):
+            self.assert_error("command_string",macho.thin,image(commands=[value]))
+
+    def test_dyld_extent_and_indirect_symbol_ranges_are_verified(self):
+        dyld = command(0x80000022, struct.pack("<10I", 184, 3, 0, 0, 0, 0, 0, 0, 0, 0))
+        fields = [0] * 18
+        fields[12:14] = [208, 1]
+        dysymtab = command(0xB, struct.pack("<18I", *fields))
+        symtab = command(2, struct.pack("<4I", 188, 1, 204, 4))
+        data = image(commands=[dyld, dysymtab, symtab], payload=bytes(28))
+        loader = macho.thin(data)["loader"]
+        self.assertEqual(loader["dyld_streams"][0]["slice_file_offset"], "0xb8")
+        self.assertEqual(loader["indirect_symbol_table"]["count"], 1)
+        self.assert_error("macho_bounds", macho.thin, data[:-1])
+
+    def test_dynamic_symbol_table_extents_use_the_64_bit_record_widths(self):
+        symtab = command(2, struct.pack("<4I", 136, 3, 184, 8))
+        fields = [0, 1, 1, 1, 2, 1]
+        widths = (8, 56, 4, 4, 8, 8)
+        offset = 192
+        for width in widths:
+            fields.extend((offset, 1))
+            offset += width
+        data = image(commands=[symtab, command(0xB, struct.pack("<18I", *fields))],
+                     payload=bytes(offset - 136))
+        self.assertEqual(macho.thin(data)["loader"]["indirect_symbol_table"]["count"], 1)
+        for index, width in enumerate(widths):
+            field = 32 + len(symtab) + 32 + index * 8
+            with self.subTest(table=index):
+                macho.thin(change32(data, field, len(data) - width))
+                self.assert_error("macho_bounds", macho.thin, change32(data, field, len(data) - width + 1))
+                self.assert_error("macho_bounds", macho.thin, change32(data, field + 4, 0xffffffff))
+
+    def test_dynamic_symbol_groups_require_a_bounded_companion_symbol_table(self):
+        fields = [0, 1, 1, 1, 2, 1] + [0] * 12
+        dysymtab = command(0xB, struct.pack("<18I", *fields))
+        symtab = command(2, struct.pack("<4I", 136, 3, 184, 8))
+        data = image(commands=[dysymtab, symtab], payload=bytes(56))
+        self.assertEqual(macho.thin(data)["loader"]["symbol_table"]["count"], 3)
+        for group in range(3):
+            with self.subTest(group=group):
+                at = 32 + 8 + group * 8
+                self.assert_error("dysymtab_bounds", macho.thin, change32(data, at, 4))
+                self.assert_error("dysymtab_bounds", macho.thin, change32(data, at + 4, 4 - group))
+        self.assert_error("dysymtab_bounds", macho.thin, image(commands=[dysymtab]))
 
     def test_zero_fill_sections_have_no_file_offset(self):
         for flags in (1, 0xC, 0x12):
@@ -208,6 +485,30 @@ class ThinMachOTests(ErrorAssertions):
             with self.subTest(**kwargs):
                 self.assert_error(code, macho.thin, segment_image(**kwargs))
 
+    def test_section_limit_applies_across_segments_and_resets_for_each_slice(self):
+        def zero_fill_segment(index, count):
+            name = f"__ZERO{index}".encode()
+            va = 0x100000000 + index * 0x10000
+            header = struct.pack("<16s4Q4I", name, va, count, 0, 0, 3, 3, count, 0)
+            records = b"".join(
+                struct.pack("<16s16s2Q8I", f"__section{i}".encode(), name, va + i, 1,
+                            0, 0, 0, 0, 1, 0, 0, 0)
+                for i in range(count)
+            )
+            return command(0x19, header + records)
+
+        limit = macho.MAX_SECTIONS_PER_SLICE
+        commands = [zero_fill_segment(index, min(4096, limit - first))
+                    for index, first in enumerate(range(0, limit, 4096))]
+        arm = image(cpu=ARM64, commands=commands)
+        intel = image(cpu=X86_64, commands=commands)
+        fat = macho.inspect_bytes(universal([arm, intel], fat64=True))
+        self.assertEqual([len(row["sections"]) for row in fat["slices"]], [limit, limit])
+
+        over = image(cpu=X86_64, commands=[*commands, zero_fill_segment(len(commands), 1)])
+        self.assert_error("section_limit", macho.thin, over, include_section_linkage=True, exit_code=7)
+        self.assert_error("section_limit", macho.inspect_bytes, universal([arm, over]), exit_code=7)
+
     def test_section_virtual_file_alignment_and_relocation_bounds(self):
         cases = [
             ({"file_offset": 187, "section_size": 4}, "macho_bounds"),
@@ -227,6 +528,10 @@ class ThinMachOTests(ErrorAssertions):
         valid = command(2, struct.pack("<4I", 56, 1, 72, 4))
         self.assertEqual(["0x2"], macho.thin(image(commands=[valid], payload=b"\0" * 20))["load_commands"])
         self.assert_error("symtab_bounds", macho.thin, image(commands=[command(2)]))
+        empty = command(2, bytes(16))
+        dysymtab = command(0xB, bytes(72))
+        self.assert_error("symtab_bounds", macho.thin, image(commands=[empty, empty]))
+        self.assert_error("dysymtab_bounds", macho.thin, image(commands=[dysymtab, dysymtab]))
         for fields in ((61, 1, 72, 4), (56, 0xFFFFFFFF, 72, 4),
                        (56, 1, 73, 4), (56, 1, 72, 0xFFFFFFFF)):
             with self.subTest(fields=fields):
@@ -352,6 +657,24 @@ class PathAndBundleTests(ErrorAssertions):
         binary.write_bytes(image())
         return app, binary
 
+    def test_excessive_binary_plist_nesting_is_typed(self):
+        app, _ = self.make_bundle()
+        depth = sys.getrecursionlimit() + 20
+        # Each one-element array references the next object, ending at a null.
+        objects = b"".join(b"\xa1" + struct.pack(">I", i + 1) for i in range(depth)) + b"\x00"
+        offsets = struct.pack(f">{depth + 1}I", *(8 + 5 * i for i in range(depth + 1)))
+        trailer = struct.pack(">6xBBQQQ", 4, 4, depth + 1, 0, 8 + len(objects))
+        (app / "Contents/Info.plist").write_bytes(b"bplist00" + objects + offsets + trailer)
+        self.assert_error("bundle_plist", macho.resolve_input, app)
+
+    def test_xml_plist_stack_and_encoding_errors_are_typed(self):
+        app, _ = self.make_bundle()
+        for raw in (b'<?xml version="1.0"?><plist><key>name</key></plist>',
+                    b'<?xml version="1.0" encoding="U2F-8"?><plist><dict/></plist>'):
+            with self.subTest(raw=raw):
+                (app / "Contents/Info.plist").write_bytes(raw)
+                self.assert_error("bundle_plist", macho.resolve_input, app)
+
     def test_regular_file_read_and_inspect(self):
         path = self.root / "fixture"
         data = image(cpu=X86_64)
@@ -442,24 +765,49 @@ class PathAndBundleTests(ErrorAssertions):
 
     def test_valid_bundle_resolves_without_execution(self):
         app, binary = self.make_bundle()
-        selected, warnings = macho.resolve_input(app)
-        self.assertEqual(binary, selected)
-        self.assertEqual([], warnings)
+        self.assertEqual(binary, macho.resolve_input(app))
         result, data = macho.inspect_path(app)
         self.assertEqual(image(), data)
         self.assertEqual("Fixture", result["input_name"])
+        self.assertEqual([], result["warnings"])
 
     def test_bundle_suffix_is_case_insensitive(self):
         app, binary = self.make_bundle(name="Fixture.APP")
-        self.assertEqual(binary, macho.resolve_input(app)[0])
+        self.assertEqual(binary, macho.resolve_input(app))
 
     def test_companion_debug_image_is_reported_not_imported(self):
         app, binary = self.make_bundle()
-        binary.with_name("Fixture.debug.dylib").write_bytes(image(filetype=6))
+        companion = binary.with_name("Fixture.debug.dylib")
+        companion.write_bytes(universal([image(filetype=6), image(cpu=X86_64, filetype=6)]))
         result, data = macho.inspect_path(app)
         self.assertEqual(image(), data)
         self.assertEqual(1, len(result["slices"]))
         self.assertTrue(any(".debug.dylib" in warning for warning in result["warnings"]))
+        direct, _ = macho.inspect_path(companion)
+        evidence = result["debug_companion"]
+        self.assertEqual(evidence["relative_path"], "Contents/MacOS/Fixture.debug.dylib")
+        self.assertEqual(evidence["status"], "verified")
+        self.assertEqual(evidence["artifact_sha256"], direct["artifact_sha256"])
+        self.assertEqual(evidence["slices"], [{key: row[key] for key in ("arch", "image_id", "sha256", "uuid")}
+                                               for row in direct["slices"]])
+        main_only, _ = macho.inspect_path(app, include_companion=False)
+        self.assertNotIn("debug_companion", main_only)
+
+    def test_companion_probe_reports_unavailable_without_following_a_link(self):
+        app, binary = self.make_bundle()
+        candidate = binary.with_name("Fixture.debug.dylib")
+        external = self.root / "External.dylib"
+        external.write_bytes(image(filetype=6))
+        candidate.symlink_to(external)
+        with patch.object(macho, "read_regular", wraps=macho.read_regular) as read:
+            result, data = macho.inspect_path(app)
+        self.assertEqual(data, image())
+        self.assertEqual(result["debug_companion"]["error_code"], "symlink")
+        self.assertEqual([call.args[0] for call in read.call_args_list], [app / "Contents/Info.plist", binary])
+        candidate.unlink()
+        candidate.write_bytes(image())
+        result, _ = macho.inspect_path(app)
+        self.assertEqual(result["debug_companion"]["error_code"], "debug_companion_filetype")
 
     def test_bundle_executable_traversal_and_invalid_names(self):
         app, _ = self.make_bundle()

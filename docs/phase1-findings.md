@@ -77,6 +77,115 @@ It is inspectable C-like output, **not compilable C**. Arithmetic spot-reading
 (e.g. `SCARRY8`) is not semantic equivalence. A generic mechanical lowering
 would need its own frozen validation before behavior can be scored.
 
+## Controlled core instruction audit
+
+The separately selected patched Ghidra 12.2 captures match LLVM across
+all 26 public calculator core routines in the owned command-line tool.
+The audit covers arm64 and x86_64 at O0 and O2, both symbol states, and
+both analysis profiles. The 416 routine instances matched all 13,900
+instruction starts and byte sequences, totaling 51,652 instruction bytes.
+All 2,732 encoded direct jump and call targets matched.
+
+Eight apparent flow differences are optimized tail calls. LLVM prints the
+machine branch and Ghidra classifies it as a terminating call with no
+fallthrough. The address matches in every case. LLVM's indirect-symbol
+table independently identifies the destination as the `_bzero` stub on
+arm64 or `___bzero` stub on x86_64.
+
+The complete outgoing-reference facet contained all 256 direct call
+references expected from those instructions, including the eight tail calls.
+All 16 encoded indirect calls had no reported target. The evaluator maps
+the frozen captures by confirmed DWARF and linker entries, decodes their
+exact byte extents, and excludes linker-marked data. Data-reference
+completeness, indirect jump tables and other Mach-O images have separate
+denominators.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 analysis/audit_core_instructions.py \
+  --fixture-build-root /path/to/owned-calculator-build \
+  --profile-matrix /private/tmp/owned-patched-profile-matrix \
+  --output /private/tmp/new-core-instructions.json
+```
+
+The measured report SHA-256 is
+`5859c98f8c2be6664f0bddfca4164dbdd9bb3968fd2af4a0e8c59d552a2d3d0a`.
+
+The same audit with `--kind app` matched 13,872 of 13,900 instruction starts
+and byte records in the owned app main. All 2,732 encoded direct targets
+and all 256 direct call references matched. The stripped arm64 O2 app
+omits 14 instructions from the reported `calc_dispatch_table` function
+in each profile. At `0x100000ebc`, a normal fallthrough enters a block at
+`0x100000ec0` that Ghidra treats as a second function. The linker confirms
+the true entry at `0x100000e9c` and records no function start at the split.
+DWARF and LLVM confirm one contiguous function through `0x100000ef8`
+exclusive. The symbol-bearing counterpart retains the whole body.
+
+The app-main instruction report SHA-256 is
+`7143b3c2d12a0f035c5e58035035291e740524ecec44e1026f7a72a9964d31f9`.
+The separate app-main discovery report matched all 880 independently
+confirmed entries and 870 exact body extents. Its SHA-256 is
+`057e2d05f2ec341417c7ea296691273ebb36e77b0aa20dfe4bf1a049b9f7e8b0`.
+
+### Temporary split-body recovery
+
+A separate planner reproduced the candidate from the binary-only saved
+exports and linker starts. It found the same split in both profiles and
+no candidate in the other 30 app and tool captures. The research script
+`analysis/scripts/JoinUnconfirmedFallthrough.java` ran on read-only
+Program copies. It checked the adjacent fallthrough, the default symbol
+source, the next linker start and incoming references before joining the
+body. It used the next linker start as a bound and derived the joined
+extent from Ghidra's two saved bodies.
+
+The evaluator matched all 23 recovered instruction starts and bytes
+against LLVM in both profiles. Each separate unmodified read-only control
+matched the joined output for the body ranges, disassembly, CFG,
+pseudocode and decompile status of all 196 other functions. The archived
+and disposable Program digests stayed intact. Production queries still
+report the conflicting boundary as partial. A held-out test and a
+production repair policy remain open.
+
+The recovery report SHA-256 is
+`eb4dbc98c09216b083ee0f1f0339f417337dfeb260876f66e5c484bfb86e8ebd`.
+The control report SHA-256 is
+`54298809ec08c85a22847e1db0d72d788b0b0076cadf62295bbecc5b3e2142c8`.
+
+### Controlled data references
+
+The evaluator decoded all PC-relative data-address patterns in the 26
+public core functions for both architectures and optimization levels.
+It checked x86_64 RIP displacements against LLVM's printed targets and
+followed the arm64 ADRP page through contiguous address operations to
+the consuming instruction. The Mach-O section table confirmed the
+destination. Indexed loads contributed a static base reference, with
+the runtime index left unresolved.
+
+Across the 32 patched app and tool captures, the original outgoing
+references matched all 76 tool sites and 74 of 76 app sites. The two
+missing app sites were the same indexed dispatch-table reference in the
+two profiles of the split function. With the guarded repair, all 152
+references matched, including 24 indexed bases. The repaired app
+also matched all 13,900 instruction starts and bytes and all 2,732
+direct targets. Register-derived addresses outside these PC-relative
+patterns and references to runtime objects have separate coverage.
+
+Reproduce the recovery matrix from a new scratch directory:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 tests/integration_boundary_matrix.py \
+  --fixture-build-root /path/to/owned-calculator-build \
+  --profile-matrix /private/tmp/owned-patched-profile-matrix \
+  --ghidra /path/to/recorded/patched/full-ghidra \
+  --output-dir /private/tmp/new-boundary-matrix --experimental-trusted-input
+```
+
+Run `analysis/audit_core_data_references.py` with the same build and
+profile matrix, `--kind app` or `--kind tool`, and a new `--output` file.
+Pass `--recovery-matrix` for the repaired results. The repaired app and
+tool data report SHA-256 values are
+`889dea75862ab4acd728e930745d3dda862efc8c167b4ca905a8ba14afbb7c32`
+and `dac3341aa5dbd66f13762890e131a5bcdf3c4d948081bbdc1dba3b5611a33ced`.
+
 ## Post-review semantics and harness
 
 Semantics **v1.1**, committed separately, fixes controller chain-history
@@ -133,16 +242,112 @@ outputs are neither regenerated in place nor relabeled consistent with v1.1.
   JSON, summary/status rejection, output/log limits, owned timeout with an
   unrelated process left alive, and raw section hashing.
 
+## Isolated binary captures
+
+The current [direct runner](lock-manifest.md#hardened-direct-runner) repeated
+all 16 app and tool captures on owned arm64 and x86_64 inputs at O0 and
+O2. Eight runs used stripped inputs and eight used the permitted symbol
+table. Each staged binary matched its build manifest. All workers verified
+their own input, processor language, and compiler specification.
+
+The same policy used by each worker allowed its staged read, denied
+writes to the staged binary and sibling canary, and denied four reads.
+The blocked files were calculator source, the evaluator dSYM, the
+unstaged binary and a sibling canary. Each worker had its own home,
+settings, cache and temporary directory. The original read allowlist
+pilot also blocked system command startup. The verified policy instead
+denies reads from the protected artifact roots and permits system reads.
+
+The evaluator verified 16 Ghidra and 16 LLVM files against the freeze
+before reading its mapping. Recall and inspectable pseudocode were
+120/120 in each condition. LLVM matched instruction boundaries and bytes
+for the eight sampled arm64 O0 routines within the reported Ghidra
+bodies. These measurements cover discovery and completion. Body accuracy
+and behavioral equivalence have separate checks.
+
+The evaluator was source-aware. The clean-context qualitative review
+remains open. The private freeze SHA-256 is
+`4730eb0f0456ae89ffbba28ac1ea0fc88807514509f85eb94e60224df7942923`.
+The evaluation SHA-256 is
+`f58f0584ca2290f839c5378f86be516bb0bf53079db52f2889ed43d19cfc6748`.
+
+## Clean analyst packets
+
+Prepare an archive for one case from its completed isolated run.
+
+```sh
+python3 analysis/prepare_clean_review.py \
+  --workspace build/baseline-runs/isolated-matrix \
+  --case DebugAnalysis-arm64-stripped-app \
+  --output /private/tmp/DebugAnalysis-arm64-stripped-app.zip
+```
+
+Each archive contains one verified Mach-O input, its exact frozen Ghidra
+JSON, LLVM disassembly with the staged path removed from the header, a
+manifest with SHA-256 hashes, and an address-based review rubric. It
+includes all functions discovered in that case. The packager checks the
+capture and assembly against the freeze, checks the staged binary against
+the case and Ghidra identities, and requires a successful isolation probe.
+
+All 16 archives were verified against the source freeze. The eight
+binary-only packets contain 637 function records and 467 complete
+pseudocode results. The eight symbol-bearing packets contain 636 records
+and 466 complete results. These are engine totals. The packet index has
+SHA-256
+`cf185dadf99aae99f72fd9e5d214e73fffe0bfd2fcb9250fd218d7784c74228c`.
+A repeat reproduced the exact archive bytes. The packager refused both
+an assisted run and a request to replace an existing archive.
+
+Give each fresh analyst context only one archive. Keep the original run,
+the packet index, the other cases and the source mapping in the evaluator
+workspace. Record the packet and analyst report hashes before opening the
+mapping for adjudication. Report observations and coverage separately by
+condition. The analyst reports are still pending.
+
+## dSYM-assisted diagnostic
+
+Use the same owned build and completed isolated binary capture for a
+separately frozen diagnostic.
+
+```sh
+python3 analysis/run_baseline.py --build-root build/review-v2 \
+  --runs-root build/baseline-runs --run-id dsym-diagnostic \
+  --assisted-from build/baseline-runs/isolated-matrix
+```
+
+All eight app and tool inputs matched the frozen stripped captures by
+SHA-256. Each worker received one staged dSYM matched by UUID and
+architecture and verified by SHA-256 before import. A same-architecture
+companion with a different UUID was rejected before Ghidra started.
+Automatic debug discovery stayed disabled. The worker policy also blocked
+the original dSYM, source, unstaged binary, frozen baseline and sibling
+canary. LLVM's disassembly matched the stripped captures after removing
+the staged input path from the header. Four fresh unassisted x86_64 O0
+captures matched the prior entries, names, signatures, pseudocode,
+instructions and control flow across all 254 function records.
+
+Ghidra read 28 compilation units and added 346 function records across
+the eight Programs before autoanalysis. All 120 controlled entries
+decompiled. Each entry's name, signature string and pseudocode text
+differed from its stripped result. Ghidra logged type remappings in four
+captures and unsupported DWARF expressions in six. These counts record
+import and output changes. Semantic quality remains unevaluated in this
+condition.
+
+The diagnostic's 16 frozen Ghidra and LLVM files have their own manifest
+with SHA-256
+`7486a53eb63b4e8203a9a597ec8eec25ae48b3d066aa5d69e77667ad84b20ddf`.
+The separate source-aware comparison has SHA-256
+`45184e80bf8f285fe4bbc40f483f06fbea5fc499a0f17c4c82a57b16b9df4c0b`.
+
 ## Remaining limitations
 
-Seatbelt denies network, **not filesystem access**. Source and dSYM trees
-are on the same readable machine. Disabled analyzers and binary-only input
-directories improve hygiene but do not establish enforced source isolation.
-Only our own fixtures are authorized for this runner; untrusted binaries
-require stronger isolation. User state is isolated in new runner runs, while
-old runs used shared Ghidra state. No x86_64 binary has been executed and no
-Rosetta use is claimed. Neither this review nor the new runner turns partial
-quality gates into a release pass.
+The newer case policy denies network access and reads from the protected
+artifact roots outside the worker's own workspace. It permits system
+reads. Earlier captures used network denial, disabled discovery and
+binary-only input directories with shared Ghidra state. Only owned
+fixtures are authorized for this runner. x86_64 results come from static
+analysis on arm64. Release gates have separate quality checks.
 
 ## Post-baseline display-layout correction
 

@@ -1,0 +1,174 @@
+{
+  "schema": "macscope-decompiler-review-checkpoint/1",
+  "date": "2026-11-09",
+  "base_source_revision": "fc203dead1a3a6dfab6b0666be64cc3973093024",
+  "classification": "Source-aware owned-fixture research; no semantic-equivalence claim",
+  "harness_files_sha256": {
+    "analysis/validate_decompiler_evidence.py": "4e523e6f8cda4ad2aee67573993f6a0af5cabbee3e53b962000e277f2a9b3100",
+    "analysis/prototype_experiment.py": "4cbafb0ab53aaf1a8d5a615f79bc15d7b750c2c5eee5f274085762d80b12ff69",
+    "analysis/scripts/InferCalleeParameters.java": "c04f55b7d7c98aba1d9e58d2ba7996f108e3d99a9b2b4c84270507a9a2ea43c7",
+    "analysis/tests/test_decompiler_review.py": "058e3960828625705bd9d9b5e89f29ed7b6cda43ba2e4e7c7e37415352fee185"
+  },
+  "engine_free_tests": [
+    {
+      "command": "python3 -m unittest discover -s analysis/tests -v",
+      "passed": 53,
+      "log_sha256": "2d7e01b578a9340d3c9491b3ab7641c8b840b93a2ef5441bf82f68fea37f3fa2"
+    },
+    {
+      "command": "PYTHONPATH=src python3 -m unittest discover -s tests -v",
+      "passed": 126,
+      "log_sha256": "f9c64b8b22a6024b5db87b491fbe5c20eae4d3c4ec4108995d262c8204750394"
+    }
+  ],
+  "historical_v10_instruction_checks": [
+    {
+      "arch": "arm64",
+      "report_sha256": "101543a449f036f0fc5d3104f13eb0ea57b605c2faadb6f24c6ca53951530680",
+      "status": "passed",
+      "binary_sha256": "fb14b42d6989506d6ded69cd65ef9a6f33d1a78374b2b7373a990c4fcc6b5c0a",
+      "llvm_text_sha256": "d99df41975d2276a9b11426f65cf36a5d8f6d028dafac3f120f0b67fe31c0d69",
+      "function_ranges_checked": 36,
+      "instructions_checked": 1979,
+      "direct_targets_checked": 487,
+      "direct_targets_unmeasured": 0,
+      "mismatches": [],
+      "scope": "Ghidra-selected ranges and exported file offsets; not independent body discovery, indirect-target completeness or pseudocode equivalence",
+      "export_sha256": "a6c4351ccecb9e816744662207c89883fec7749c8ae10c48db8f7bee2aa6034d"
+    },
+    {
+      "arch": "x86_64",
+      "report_sha256": "2121d7d8b75bbbe4fe8c02a240f76b67c2c9286fea19fae48dd58527971517bd",
+      "status": "passed",
+      "binary_sha256": "e776deabb3bffadbaeffa6cf06780b7c92d96104b07054df39e2a30c812ebeef",
+      "llvm_text_sha256": "9ab68b34b01c691dae75b7d951e4744c3e69d2a30d9e2378f3cd402bbed1118f",
+      "function_ranges_checked": 36,
+      "instructions_checked": 1677,
+      "direct_targets_checked": 326,
+      "direct_targets_unmeasured": 0,
+      "mismatches": [],
+      "scope": "Ghidra-selected ranges and exported file offsets; not independent body discovery, indirect-target completeness or pseudocode equivalence",
+      "export_sha256": "d026ef3a5b300eecacdea809edf85e844bac1319d4ec3c4a1bc406012dfd571e"
+    }
+  ],
+  "v11_prototype_experiment": {
+    "completed_cases": 10,
+    "summary_sha256": "3e161828007bda9c5af23ad96fc588be551bd72b210cbed0a208b39fdcdd9dd4",
+    "independent_resummary_identical": true,
+    "fixture_provenance": {
+      "manifest_sha256": "15effb94a6a2db4b9db26128dd60012d6c937fa6818828c9ca925d82a63cda8b",
+      "semantics_version": "1.1",
+      "git_revision": "816516284f594f100743c1451f4f55cef7b01195",
+      "source_tree_sha256": "7ceb1a7d957269331453f474d81632a7016f093b3d28ed831461c745f015121f"
+    },
+    "decompile_operations": {
+      "complete": 340,
+      "not_requested": 80
+    },
+    "paired_analysis": [
+      {
+        "case": "DebugAnalysis-arm64",
+        "function_count": 44,
+        "complete_pseudocode_count": 36,
+        "unchanged_machine_facets": true,
+        "changed_pseudocode_count": 15,
+        "changed_signature_count": 36,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-arm64",
+        "function_count": 39,
+        "complete_pseudocode_count": 31,
+        "unchanged_machine_facets": true,
+        "changed_pseudocode_count": 6,
+        "changed_signature_count": 31,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        }
+      },
+      {
+        "case": "DebugAnalysis-x86_64",
+        "function_count": 44,
+        "complete_pseudocode_count": 36,
+        "unchanged_machine_facets": true,
+        "changed_pseudocode_count": 13,
+        "changed_signature_count": 36,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        }
+      },
+      {
+        "case": "ReleaseAnalysis-x86_64",
+        "function_count": 39,
+        "complete_pseudocode_count": 31,
+        "unchanged_machine_facets": true,
+        "changed_pseudocode_count": 9,
+        "changed_signature_count": 31,
+        "option_deltas": {
+          "Decompiler Parameter ID": [
+            "false",
+            "true"
+          ]
+        }
+      }
+    ],
+    "callee_only": {
+      "function_count": 44,
+      "unchanged_machine_facets": true,
+      "changed_signatures": [
+        {
+          "entry_va": "0x10000115c",
+          "name": "_calc_latch_error"
+        }
+      ],
+      "changed_pseudocode": [
+        {
+          "entry_va": "0x100001004",
+          "name": "_calc_engine_input_digit"
+        },
+        {
+          "entry_va": "0x100001188",
+          "name": "_calc_engine_input_op"
+        },
+        {
+          "entry_va": "0x100001318",
+          "name": "_calc_engine_equals"
+        },
+        {
+          "entry_va": "0x100001488",
+          "name": "_calc_engine_sign_toggle"
+        }
+      ]
+    },
+    "repeat_identical_measured_facets": true,
+    "result_sha256": {
+      "DebugAnalysis-arm64-default": "f6394985cd8dfa5785a9d5724d784489bff612f6da559a2a5bbd1ca32d089273",
+      "DebugAnalysis-arm64-paramid": "efc9ca4260cf0c82a6ba24ddf26baf67bcbcc5142b355a25963b5a5fc59dcfff",
+      "ReleaseAnalysis-arm64-default": "9150f5ecbf729e29a5114599ad0fd9c60b21c3efa562aeeea833a0341b6aad35",
+      "ReleaseAnalysis-arm64-paramid": "ba38c3d02aa5aaf7828ce5a058863038f08e750c892da8cdbe8ba7cca5dfeb17",
+      "DebugAnalysis-x86_64-default": "b5269cf72ad01cc7f64c8e64c4a742b176708b44aef7a0de3a4f5c302b05829e",
+      "DebugAnalysis-x86_64-paramid": "340afa29aa0bd82c33369790807f99cdfe08da6cab78f45d69e8f4ff6288db55",
+      "ReleaseAnalysis-x86_64-default": "0445d59cebc3eebda9f269ddf77ca5c380b4e64cc48dff7179a821e1b9c17cc2",
+      "ReleaseAnalysis-x86_64-paramid": "f5757ab296fa1f39a7a3ab461964b6ace36061a896f2b93c16b22e95f4623f59",
+      "DebugAnalysis-arm64-callee": "4c1eeb99edc102a42540c2c94fc3bbd20149f9962d8b379b15f5045cf89376a5",
+      "DebugAnalysis-arm64-repeat": "7ad750217f03e85a665cfaf6f2371403a7c4672bb63b5c0cdf2f5fc46fee1b74"
+    }
+  },
+  "limits": [
+    "No input binary or recovered pseudocode was executed.",
+    "Instruction ranges and file offsets originate from the engine export.",
+    "Inference matrix covers symbol-bearing calculator tools only.",
+    "Production defaults and the active main working tree are unchanged."
+  ]
+}

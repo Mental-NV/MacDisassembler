@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""Adjudicate saved binary-only tool discovery using evaluator-side DWARF."""
+import argparse
+import json
+from pathlib import Path
+import re
+import subprocess
+
+from prototype_experiment import fixture_input
+from recovered_compare import PROFILES, matrix_exports
+from validate_decompiler_evidence import (
+    read_bytes, read_json, require_complete_function_inventory, sha, write_new_json,
+)
+from macscope import flow_boundaries
+from macscope.macho import thin
+from macscope.storage import Project
+
+
+DIE = re.compile(r"^0x[0-9a-fA-F]+:\s+DW_TAG_([a-z_]+)")
+ATTRIBUTE = re.compile(r"^\s+DW_AT_([a-z_]+)\s+\((.*)")
+ADDRESS = re.compile(r"^0x[0-9a-fA-F]+")
+
+
+def attributes(text):
+    current = None
+    for line in text.splitlines():
+        die = DIE.match(line)
+        if die:
+            if current is not None:
+                yield current
+            current = {} if die[1] == "subprogram" else None
+        elif current is not None:
+            attr = ATTRIBUTE.match(line)
+            if attr:
+                current[attr[1]] = attr[2]
+    if current is not None:
+        yield current
+
+
+def dwarf_functions(text, linker_starts, text_range):
+    concrete = {}
+    exclusions = {
+        "abstract_or_declaration": 0, "split_range": 0, "outside_text": 0, "unconfirmed_entry": 0,
+    }
+    for attr in attributes(text):
+        if "ranges" in attr:
+            exclusions["split_range"] += 1
+            continue
+        low = ADDRESS.match(attr.get("low_pc", ""))
+        high = ADDRESS.match(attr.get("high_pc", ""))
+        if not low or not high:
+            exclusions["abstract_or_declaration"] += 1
+            continue
+        lo, hi = int(low[0], 16), int(high[0], 16)
+        if not text_range[0] <= lo < hi <= text_range[1]:
+            exclusions["outside_text"] += 1
+            continue
+        if lo not in linker_starts:
+            exclusions["unconfirmed_entry"] += 1
+            continue
+        name = None
+        for key in ("name", "abstract_origin", "specification"):
+            name = re.search(r'"([^"]+)"', attr.get(key, ""))
+            if name:
+                break
+        end, names = concrete.setdefault(lo, (hi, set()))
+        if end != hi:
+            raise ValueError("Conflicting DWARF extents for one entry")
+        names.add(name[1] if name else "<unnamed>")
+    ordered = sorted(concrete.items())
+    if any(end > next_entry for (_, (end, _)), (next_entry, _) in zip(ordered, ordered[1:])):
+        raise ValueError("Overlapping evaluator DWARF function ranges")
+    if not concrete:
+        raise ValueError("No independently confirmed DWARF functions")
+    return concrete, exclusions
+
+
+def merged_ranges(function):
+    facet = function["coverage"]["body_ranges"]
+    body_ranges = function["body_ranges"]
+    if (facet["status"] != "complete" or facet["truncated"] is not False
+            or facet["error"] or facet["emitted"] != len(body_ranges) or not body_ranges):
+        raise ValueError("Incomplete Ghidra function body")
+    ranges = []
+    for lo, hi in sorted((int(a, 16), int(b, 16) + 1) for a, b in body_ranges):
+        if lo >= hi:
+            raise ValueError("Invalid Ghidra function body range")
+        if ranges and lo <= ranges[-1][1]:
+            ranges[-1] = ranges[-1][0], max(hi, ranges[-1][1])
+        else:
+            ranges.append((lo, hi))
+    return ranges
+
+
+def score(snapshot, truth, linker_starts):
+    require_complete_function_inventory(dict(snapshot["engine"], functions=snapshot["functions"]))
+    candidates = {}
+    for function in snapshot["functions"]:
+        if function["is_external"] or function["is_thunk"]:
+            continue
+        va = int(function["entry_va"], 16)
+        if va in candidates:
+            raise ValueError("Duplicate Ghidra function entry")
+        candidates[va] = function
+    exact = 0
+    body_disagreements = []
+    missing = []
+    for lo, (hi, names) in sorted(truth.items()):
+        expected = {"entry_va": hex(lo), "names": sorted(names), "dwarf_end_exclusive": hex(hi)}
+        function = candidates.get(lo)
+        if function is None:
+            missing.append(expected)
+            continue
+        ranges = merged_ranges(function)
+        if ranges == [(lo, hi)]:
+            exact += 1
+            continue
+        intersection = sum(max(0, min(end, hi) - max(start, lo)) for start, end in ranges)
+        body_disagreements.append(dict(
+            expected, ghidra_ranges=[[hex(a), hex(b)] for a, b in ranges],
+            dwarf_only_bytes=hi - lo - intersection,
+            ghidra_only_bytes=sum(b - a for a, b in ranges) - intersection,
+        ))
+    interior = []
+    unscored = []
+    for va in sorted(candidates.keys() - truth.keys()):
+        container = next((lo for lo, (hi, _) in truth.items() if lo < va < hi), None)
+        row = {"entry_va": hex(va), "name": candidates[va]["name"], "linker_confirmed": va in linker_starts}
+        if container is None:
+            unscored.append(row)
+        else:
+            interior.append(dict(row, containing_dwarf_entry=hex(container)))
+    return {
+        "dwarf_functions": len(truth), "ghidra_functions": len(candidates),
+        "exact_entry_and_body": exact, "entry_matches": exact + len(body_disagreements),
+        "body_disagreements": body_disagreements, "missing_entries": missing,
+        "interior_candidates": interior, "outside_cohort": unscored,
+    }
+
+
+def tool_output(*args):
+    proc = subprocess.run(
+        ["/usr/bin/xcrun", "dwarfdump", *map(str, args)], capture_output=True, timeout=60, check=True,
+    )
+    if len(proc.stdout) > 16 * 1024 * 1024:
+        raise ValueError("DWARF tool output exceeds the evidence bound")
+    return proc.stdout.decode("utf-8","backslashreplace")
+
+
+def text_bytes(data, metadata):
+    section, = [s for s in metadata["sections"] if (s["segment"], s["name"]) == ("__TEXT", "__text")]
+    offset, size = int(section["file_offset"], 16), int(section["size"], 16)
+    va = int(section["va"], 16)
+    return (va, va + size), data[offset:offset + size]
+
+
+def verified_captures(build, matrix, *, kind="tool", recovery_matrix=None):
+    build, matrix = build.resolve(), matrix.resolve()
+    repaired = {}
+    if recovery_matrix is not None:
+        recovery_matrix = recovery_matrix.resolve()
+        report = read_json(recovery_matrix / "report.json")
+        if (report["status"] != "passed" or report["matrix_sha256"] != sha(read_bytes(matrix / "report.json"))
+                or len(report["captures"]) != 32):
+            raise ValueError("Recovery matrix does not match the original capture cohort")
+        repaired = {(row["case"], row["profile"]): row for row in report["captures"]}
+        if len(repaired) != 32:
+            raise ValueError("Duplicate recovery matrix capture")
+    states = ("sym", "stripped")
+    paired = {
+        state: {case: (prior, paths) for case, prior, paths in matrix_exports(matrix, symbols=state, kind=kind)}
+        for state in states
+    }
+    if paired["sym"].keys() != paired["stripped"].keys():
+        raise ValueError("Fixture cohort mismatch")
+    for case in paired["sym"]:
+        _, symbol_binary, manifest = fixture_input(build, case, kind=kind)
+        metadata = thin(symbol_binary)
+        text_range, code = text_bytes(symbol_binary, metadata)
+        starts = metadata["loader"]["function_starts"]
+        if not starts or starts["status"] != "complete":
+            raise ValueError("Missing independent linker function starts")
+        linker = {int(va, 16) for va in starts["addresses"]}
+        arch = case.split("-", 1)[1]
+        dwarf_path = ("CorpusFixture.dSYM/Contents/Resources/DWARF/CorpusFixture" if kind == "tool"
+                      else "CalculatorFixture.app.dSYM/Contents/Resources/DWARF/CalculatorFixture")
+        dwarf = build / "evaluator" / case / dwarf_path
+        if dwarf.is_symlink() or not dwarf.resolve().is_relative_to(build):
+            raise ValueError("Evaluator DWARF must remain in the owned build tree")
+        uuid = re.search(r"UUID: ([0-9A-Fa-f-]+) \(([^)]+)\)", tool_output("--uuid", dwarf))
+        if not uuid or uuid[1].replace("-", "").lower() != metadata["uuid"] or uuid[2] != arch:
+            raise ValueError("Evaluator DWARF identity differs from the binary")
+        dwarf_text = tool_output("--debug-info", dwarf)
+        dwarf_sha = sha(read_bytes(dwarf))
+        dwarf_text_sha = sha(dwarf_text.encode())
+        truth, exclusions = dwarf_functions(dwarf_text, linker, text_range)
+        for state in states:
+            prior, exports = paired[state][case]
+            _, binary, _ = fixture_input(build, case, kind=kind, symbols=state)
+            observed = thin(binary)
+            digest = sha(binary)
+            if (prior["input_sha256"] != digest or text_bytes(binary, observed) != (text_range, code)
+                    or observed["uuid"] != metadata["uuid"]):
+                raise ValueError("Symbol/stripped text or build identity mismatch")
+            for profile, path in zip(PROFILES, exports):
+                export = read_bytes(path)
+                snapshot = json.loads(export)["data"]
+                key = "baseline_analysis_id" if profile==PROFILES[0] else "inference_analysis_id"
+                if (snapshot["image"]["sha256"] != digest or snapshot["identity"]["profile"] != profile
+                        or snapshot["analysis_id"] != prior[key]):
+                    raise ValueError("Profile export identity mismatch")
+                provenance = {
+                    "case": case, "symbols": state, "profile": profile, "input_sha256": digest,
+                    "dwarf_sha256": dwarf_sha, "dwarf_text_sha256": dwarf_text_sha,
+                    "export_sha256": sha(export), "evaluator_exclusions": exclusions,
+                }
+                if recovery_matrix is not None:
+                    label = f"{case}-{state}-{kind}"
+                    repair = repaired[label, profile.split("/", 1)[0]]
+                    project = Project(recovery_matrix / label)
+                    image = project.select()
+                    recovered, record = project.snapshot(dict(image, active_analysis=repair["analysis_id"]))
+                    request = {
+                        "policy": flow_boundaries.RECOVERY_POLICY, "request_sha256": repair["request_sha256"],
+                    }
+                    if (recovered["analysis_id"] != repair["analysis_id"] or recovered["image"]["sha256"] != digest
+                            or recovered["identity"]["profile"] != profile
+                            or recovered["identity"]["boundary_recovery"] != request
+                            or recovered["identity"]["engine"]["native_decompiler_sha256"] !=
+                            snapshot["identity"]["engine"]["native_decompiler_sha256"]):
+                        raise ValueError("Repaired snapshot differs from its recorded fixture or policy")
+                    provenance.update(repaired_snapshot_sha256=record["snapshot_sha256"],
+                                      recovery_request_sha256=repair["request_sha256"])
+                    snapshot = recovered
+                yield provenance, snapshot, truth, linker, manifest
+
+
+def run(build, matrix, kind="tool"):
+    population = "calculator tools" if kind == "tool" else "calculator app mains"
+    report = {
+        "schema": "macscope-discovery-dwarf/1", "status": "measured", "cases": [],
+        "scope": "Source-aware evaluator comparison of saved binary-only discovery in " + population,
+        "matrix_report_sha256": sha(read_bytes(matrix / "report.json")),
+    }
+    for provenance, snapshot, truth, linker, _ in verified_captures(build, matrix, kind=kind):
+        report["cases"].append(dict(score(snapshot, truth, linker), **provenance))
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fixture-build-root", type=Path, required=True)
+    parser.add_argument("--profile-matrix", type=Path, required=True)
+    parser.add_argument("--kind", choices=("tool", "app"), default="tool")
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    report = run(args.fixture_build_root, args.profile_matrix, args.kind)
+    write_new_json(args.output, report)
+    print(json.dumps({"status": report["status"], "cases": len(report["cases"])}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -91,10 +91,14 @@ class HardeningTests(unittest.TestCase):
         args = [case, '--build-root', str(self.d / 'build'),
                 '--runs-root', str(self.d / 'runs'), '--run-id', 'deferred-success']
 
-        def identity():
+        def identity(ghidra, java, scripts):
+            self.assertEqual(ghidra, runner.GHIDRA.resolve())
+            self.assertEqual(java, runner.JAVA.resolve())
+            self.assertEqual(scripts, runner.SCRIPTS)
             self.assertEqual((out / ('ghidra-' + case + '-tool') / 'input.bin').read_bytes(), b'owned tool input')
             self.assertFalse((out / 'identity.json').exists())
-            return {'jdk_version': 'owned test identity'}
+            return {'jdk_version': 'owned test identity',
+                    'scripts': {name: runner.sha(ROOT / 'analysis/scripts' / name) for name in scripts}}
 
         def launch(*args, **kwargs):
             recorded = json.loads((out / 'identity.json').read_text())
@@ -103,12 +107,17 @@ class HardeningTests(unittest.TestCase):
             return {'exit_code': 9, 'failure': None}
 
         with patch.object(runner, 'engine_identity', side_effect=identity) as probe, \
+             patch.object(runner, 'verify_case_isolation', return_value={'exit_code': 0, 'failure': None}) as isolation, \
              patch.object(runner, 'bounded_command', side_effect=launch) as worker:
             self.assertEqual(runner.main(args), 1)
         probe.assert_called_once()
+        isolation.assert_called_once()
         worker.assert_called_once()
         records = json.loads((out / 'summary.json').read_text())['records']
-        self.assertIn('FileNotFoundError', records[0]['error'])
+        self.assertEqual(records[0]['status'], 'failed')
+        self.assertIn('No such file or directory', records[0]['error'])
+        self.assertNotIn('input_sha256', records[0])
+        self.assertNotIn('engine', records[0])
         self.assertEqual(records[1]['error'], 'ValueError: engine process failed')
 
     def test_bounded_process_success(self):
@@ -133,6 +142,15 @@ class HardeningTests(unittest.TestCase):
         r = runner.bounded_command([sys.executable, '-c', 'print("a"*50000)'], self.d / 'log', 5, max_log_bytes=100)
         self.assertEqual(r['failure'], 'log_size_limit'); self.assertEqual((self.d / 'log').stat().st_size, 100)
 
+    def test_owned_cleanup_accepts_an_exited_unreaped_leader(self):
+        with subprocess.Popen([sys.executable, '-c', 'pass'], start_new_session=True) as proc:
+            deadline = time.monotonic() + 5
+            while os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.01)
+            runner.stop_owned(proc)
+            self.assertEqual(proc.returncode, 0)
+
     def test_output_limit(self):
         code = 'from pathlib import Path;import time;Path(' + repr(str(self.d / 'large.partial')) + ').write_bytes(b"x"*1000);time.sleep(5)'
         r = runner.bounded_command([sys.executable, '-c', code], self.d / 'log', 5, watch=self.d, max_output_bytes=100)
@@ -156,6 +174,23 @@ class HardeningTests(unittest.TestCase):
     def test_valid_summary(self):
         p = self.d / 'base'; p.write_text(json.dumps(self.baseline()))
         self.assertEqual(runner.validate_baseline(p)['complete'], 1)
+
+    def test_assisted_profile_requires_matching_import_evidence(self):
+        p = self.d / 'assisted'
+        baseline = self.baseline()
+        baseline['blind_profile'] = 'dsym-assisted-v1'
+        baseline['dsym'] = {'sha256': 'a' * 64, 'compilation_units': 2,
+                            'functions_before': 3, 'functions_after': 7}
+        p.write_text(json.dumps(baseline))
+        self.assertEqual(runner.validate_baseline(p, 'a' * 64)['complete'], 1)
+        with self.assertRaisesRegex(ValueError, 'pre-script'):
+            runner.validate_baseline(p)
+        with self.assertRaisesRegex(ValueError, 'dSYM import evidence'):
+            runner.validate_baseline(p, 'b' * 64)
+        baseline['dsym']['functions_after'] = 3
+        p.write_text(json.dumps(baseline))
+        with self.assertRaisesRegex(ValueError, 'dSYM import evidence'):
+            runner.validate_baseline(p, 'a' * 64)
 
     def test_each_invalid_status_and_summary_rejected(self):
         for field, value in [('decompiler_opened', False), ('analysis_timeout_occurred', True),

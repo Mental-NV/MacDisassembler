@@ -12,7 +12,17 @@
   "names":{"type":"array","items":{"type":"object","required":["name","origin"]}},
   "signature":{"type":["string","null"]},
   "pseudocode":{"type":["string","null"]},
-  "address_spans":{"type":"array"},
+  "address_spans":{"type":"array","items":{
+   "type":"object",
+   "required":["text_start","text_end","ranges"],
+   "properties":{
+    "text_start":{"type":"integer","minimum":0},
+    "text_end":{"type":"integer","minimum":1},
+    "ranges":{"type":"array","minItems":1,"items":{
+     "type":"array","minItems":2,"maxItems":2,"items":{"type":"string","pattern":"^0x[a-f0-9]{1,16}$"}
+    }}
+   }
+  }},
   "facets":{"type":"object"},
   "origin":{"type":"object"}
  },

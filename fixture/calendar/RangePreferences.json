@@ -1,0 +1,6 @@
+{
+  "scenario": "OwnedCalendar.RangePreferences",
+  "transition_utc": "2026-03-08T07:00:00Z",
+  "offset_seconds_before": -18000,
+  "offset_seconds_after": -14400
+}
