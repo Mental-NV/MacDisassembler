@@ -2,7 +2,7 @@
 from unittest.mock import patch
 
 from macscope import cli, engine, import_state, jobs, macho, storage
-from test_core import TemporaryCase
+from test_core import TemporaryCase, synthetic_program
 from test_macho import image
 
 
@@ -40,8 +40,7 @@ class ImportResumeTests(TemporaryCase):
         return cli.execute(self.args("jobs", "resume", job_id or self.prior, "--experimental-trusted-input"))
 
     def worker(self, *args, **kwargs):
-        self.source.mkdir(parents=True)
-        (self.source / "image.gpr").write_bytes(b"owned prepared Program")
+        synthetic_program(self.source, b"owned prepared Program")
         job = dict(self.record, job_id=self.producer, status="complete", resumed_from=self.prior,
                    sandbox_sha256=engine.job_sandbox_sha256(self.workspace, self.deps, self.producer))
         storage.write_json(self.source.parent / "job.json", job)
@@ -150,3 +149,20 @@ class ImportResumeTests(TemporaryCase):
             self.error("input_integrity", self.resume)
         self.assertEqual(self.workspace.images(), [])
         run.assert_not_called()
+
+    def test_incomplete_worker_program_does_not_prepare_an_import(self):
+        def worker(*args, **kwargs):
+            result = self.worker(*args, **kwargs)
+            database, = self.source.rglob("*.gbf")
+            database.write_bytes(b"")
+            return result
+
+        with patch.object(engine, "dependencies", return_value=self.deps), \
+             patch.object(engine, "run", side_effect=worker):
+            failure = self.error("baseline_integrity", self.resume)
+        self.assertEqual(failure.partial, {"job_id": self.prior, "attempt_job_id": self.producer})
+        self.assertFalse(self.baseline.exists())
+        self.assertFalse(self.baseline.with_suffix(".import.json").exists())
+        self.assertEqual(self.workspace.images(), [])
+        saved = jobs.load(self.source.parent / "job.json")
+        self.assertEqual((saved["status"], saved["error"]["code"]), ("failed", "baseline_integrity"))

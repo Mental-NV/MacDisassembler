@@ -7,7 +7,7 @@ import sqlite3
 
 from . import engine, engine_checks, jobs
 from .errors import Error
-from .macho import checked_path, inspect_bytes, read_regular
+from .macho import inspect_bytes, read_regular
 from .storage import atomic, canonical, strict_json, write_json
 
 
@@ -114,9 +114,8 @@ def publish(project, image, journal, destination, resumed_from):
     if destination.exists() and source.exists():
         raise Error("import_baseline_conflict", "Both staged and promoted import Programs exist", 8)
     baseline = destination if destination.exists() else source
-    checked_path(baseline, directory=True)
     digest = journal["program_sha256"]
-    if any(path.is_symlink() for path in baseline.rglob("*")) or engine.tree_digest(baseline) != digest:
+    if engine.saved_program_digest(baseline, "baseline_integrity") != digest:
         raise Error("baseline_integrity", "The prepared import Program differs from its recorded digest")
     try:
         if baseline == source:
@@ -192,8 +191,11 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
         if raw.get("validation", {}).get("headless_analysis_enabled") is not False:
             raise Error("import_analysis", "Import did not disable autoanalysis", 10)
         source = project.path / "jobs" / job["job_id"] / "program"
-        checked_path(source, directory=True)
-        program_digest = engine.tree_digest(source)
+        try:
+            program_digest = engine.saved_program_digest(source, "baseline_integrity")
+        except Error as error:
+            jobs.fail(source.parent / "job.json", job, error)
+            raise
         job["import_program_sha256"] = program_digest
         write_json(source.parent / "job.json", job, force=True)
         journal = {

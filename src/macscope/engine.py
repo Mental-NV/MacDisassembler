@@ -21,7 +21,7 @@ from . import focused
 from .annotations import MAX_TYPE_HINTS, structure_definitions
 from .errors import Error
 from .storage import canonical, identity, is_digest, strict_json, write_json
-from .macho import read_regular
+from .macho import checked_path, read_regular
 
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
@@ -136,6 +136,32 @@ def tree_digest(root, *, ignore=()):
         elif p.is_file():
             h.update(str(relative).encode()+b'\0'+digest(p).encode()+b'\n')
     return h.hexdigest()
+
+
+def saved_program_digest(root, error_code):
+    """Check the pinned local Ghidra project layout before using its tree digest."""
+    try:
+        root = checked_path(root, directory=True)
+        repository = root/'image.rep'
+        data = repository/'idata'
+        checked_path(root/'image.gpr')
+        for required in (repository/'project.prp', data/'~index.dat'):
+            if checked_path(required).stat().st_size == 0:
+                raise ValueError('Empty Ghidra project metadata')
+        has_database = False
+        for path in root.rglob('*'):
+            info = path.lstat()
+            if stat.S_ISDIR(info.st_mode):
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError('Nonregular Ghidra project entry')
+            if path.is_relative_to(data) and path.suffix == '.gbf' and info.st_size:
+                has_database = True
+        if not has_database:
+            raise ValueError('Missing Ghidra Program database')
+        return tree_digest(root)
+    except (Error, OSError, ValueError) as error:
+        raise Error(error_code, 'Saved Ghidra Program is missing or incomplete') from error
 
 
 def copy_program(source, destination, expected_digest, integrity_error):

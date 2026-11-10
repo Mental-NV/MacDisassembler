@@ -54,6 +54,18 @@ SYNTHETIC_IMAGE_ID = 'c' * 64
 SYNTHETIC_ANALYSIS_ID = 'd' * 64
 
 
+def synthetic_program(path, payload=b'owned fixture Program'):
+    repository = path / 'image.rep'
+    data = repository / 'idata'
+    database = data / '00' / '~00000000.db' / 'db.1.gbf'
+    database.parent.mkdir(parents=True)
+    database.write_bytes(payload)
+    (path / 'image.gpr').write_bytes(payload)
+    (repository / 'project.prp').write_bytes(b'project metadata')
+    (data / '~index.dat').write_bytes(b'local repository index')
+    return database
+
+
 def synthetic_snapshot(project, aid=SYNTHETIC_ANALYSIS_ID, *, slice_bytes=None):
     """Commit a deterministic, engine-independent snapshot through the public DB."""
     image = {'image_id': SYNTHETIC_IMAGE_ID, 'arch': 'arm64', 'sha256': '0' * 64,
@@ -2015,8 +2027,7 @@ class CliTests(TemporaryCase):
             self.assertEqual(image['image_id'], first_id)
             self.assertEqual(request['import_request']['image_id'], first_id)
             baseline = p.path / 'jobs' / ('a' * 32) / 'program'
-            baseline.mkdir(mode=0o700, parents=True)
-            (baseline / 'image.gpr').write_bytes(b'synthetic imported baseline')
+            synthetic_program(baseline, b'synthetic imported baseline')
             return ({'validation': {'headless_analysis_enabled': False},
                      'executable_format': 'Mac OS X Mach-O',
                      'language_id': 'AARCH64:LE:64:AppleSilicon', 'compiler_spec_id': 'default',

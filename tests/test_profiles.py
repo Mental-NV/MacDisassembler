@@ -437,6 +437,12 @@ class ProfileRunnerTests(unittest.TestCase):
                 record = json.loads(job_path.read_bytes())
                 self.assertEqual((record["status"], record["error"]["code"]), ("failed", code))
         with mock.patch.object(engine, "dependencies", return_value=self.deps), \
+             mock.patch.object(engine, "run", return_value=(raw, job)):
+            with self.assertRaises(Error) as caught:
+                cli.execute(self.args("parameter-inference"))
+        self.assertEqual(caught.exception.code, "analysis_program_integrity")
+        self.assertEqual(json.loads(job_path.read_bytes())["status"], "failed")
+        with mock.patch.object(engine, "dependencies", return_value=self.deps), \
              mock.patch.object(engine, "run", return_value=(wrong, job)), \
              mock.patch.object(cli, "normalize", return_value={"analysis_id": "too-large"}), \
              mock.patch.object(cli, "MAX_SNAPSHOT_BYTES", 1):

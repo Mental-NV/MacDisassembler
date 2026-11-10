@@ -1989,6 +1989,13 @@ job status, declared function count, function rows and shared coverage
 containers before the CLI publishes evidence. A rejected report remains
 in the private job directory with a typed failed job record.
 
+Import and analysis also check the saved local Ghidra project layout
+before publishing. The project marker, repository metadata and index,
+and a nonempty Program database must be present. The CLI records the
+existing tree digest after this check. Missing or incomplete Programs
+return `baseline_integrity` for import or `analysis_program_integrity`
+for analysis and keep the previous committed state available.
+
 ### Targeted malformed Mach-O payloads
 
 The installed data-only parsers processed 20,480 seeded mutations in

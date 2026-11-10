@@ -103,6 +103,11 @@ def load(path):
     return record
 
 
+def fail(path, record, error):
+    record.update(status='failed', error={'code':error.code,'message':str(error)})
+    write_json(path, record, force=True)
+
+
 def token_for(record):
     token = record.get("ownership_token")
     return token if isinstance(token, str) and JOB_ID.fullmatch(token) else None

@@ -799,12 +799,12 @@ def analyze_image(project, image, args, deps, command, *, resumed_from=None, man
 
 
 def publish_analysis(project, image, deps, command, raw, job, resumed_from):
+    worker_dir=project.path/'jobs'/job['job_id']
     try:
         normalized=normalize(raw,image,deps,job)
     except (Error, AttributeError, KeyError, TypeError, ValueError) as error:
         failure = error if isinstance(error,Error) else Error('snapshot_format','Worker evidence could not be normalized')
-        job.update(status='failed',error={'code':failure.code,'message':str(failure)})
-        write_json(project.path/'jobs'/job['job_id']/'job.json',job,force=True)
+        jobs.fail(worker_dir/'job.json',job,failure)
         if failure is error:
             raise
         raise failure from error
@@ -815,13 +815,18 @@ def publish_analysis(project, image, deps, command, raw, job, resumed_from):
         payload=canonical(normalized)+b'\n'
     if len(payload)>MAX_SNAPSHOT_BYTES:
         raise Error('snapshot_limit','Normalized snapshot exceeds its read limit; analyze fewer functions',7)
+    try:
+        program_digest=engine.saved_program_digest(worker_dir/'program','analysis_program_integrity')
+    except Error as error:
+        jobs.fail(worker_dir/'job.json',job,error)
+        raise
     if out.exists():
         if read_regular(out,MAX_SNAPSHOT_BYTES)!=payload:
             raise Error('nondeterministic_snapshot','Identical analysis identity produced different output; previous snapshot retained',5)
     else:
         atomic(out,payload,mode=0o400)
     record={'snapshot_sha256':hashlib.sha256(payload).hexdigest(),'job_id':job['job_id'],
-            'analysis_program_sha256':engine.tree_digest(project.path/'jobs'/job['job_id']/'program')}
+            'analysis_program_sha256':program_digest}
     try:
         with project.db(False) as db:
             db.execute('BEGIN IMMEDIATE')

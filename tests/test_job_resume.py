@@ -4,7 +4,7 @@ import json
 from unittest.mock import patch
 
 from macscope import cli, engine, jobs, storage
-from test_core import TemporaryCase
+from test_core import TemporaryCase, synthetic_program
 
 
 class JobResumeTests(TemporaryCase):
@@ -18,8 +18,7 @@ class JobResumeTests(TemporaryCase):
         data = b"owned test input"
         digest = hashlib.sha256(data).hexdigest()
         baseline = self.workspace.path / "engine" / self.image_id
-        baseline.mkdir()
-        (baseline / "program").write_bytes(b"untouched import")
+        synthetic_program(baseline, b"untouched import")
         self.image = {
             "image_id": self.image_id, "arch": "arm64", "sha256": digest, "artifact_sha256": digest,
             "engine_baseline_sha256": engine.tree_digest(baseline),
@@ -54,7 +53,7 @@ class JobResumeTests(TemporaryCase):
 
     def fake_worker(self, job_id):
         attempt = self.workspace.path / "jobs" / job_id
-        (attempt / "program").mkdir(parents=True)
+        synthetic_program(attempt / "program")
         storage.write_json(attempt / "job.json", dict(self.record, job_id=job_id, resumed_from=self.prior))
         snapshot = {
             "analysis_id": self.output_id, "image": self.image, "functions": [], "engine": {},

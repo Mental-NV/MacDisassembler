@@ -554,6 +554,13 @@ collections exceed documented bounds despite successful pseudocode output.
   Calendar state matched. Clean import and signature retries replayed
   their receipts, a fresh arm64 rehearsal passed, and five archived
   x86_64 import and query reports passed the new checks.
+- [x] Require a saved Ghidra Program before publishing import or analysis.
+  An owned x86_64 import with its database set aside failed before
+  preparing a journal. An owned arm64 analysis with its Program set aside
+  failed before writing a snapshot and preserved the previous export.
+  Both clean retries replayed their receipts, and a fresh query reopened
+  the recovered analysis. The layout check matched 89 archived Program
+  tree digests.
 - [x] Verify the [deep analysis profile](cli.md#deep-analysis-profile) with
   installed full Ghidra 12.2 on owned arm64 and x86_64 fixtures. Deep
   added three byte-checked data references per architecture, preserved

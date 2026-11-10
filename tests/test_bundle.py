@@ -11,6 +11,7 @@ from unittest.mock import patch
 from macscope import bundle, cli, engine
 from macscope.errors import Error
 from macscope.storage import Project
+from test_core import synthetic_program
 from test_macho import X86_64, image
 
 
@@ -278,7 +279,7 @@ class BundleInventoryTests(unittest.TestCase):
         def worker(workspace, imported, mode, options, dependencies, **request):
             self.assertEqual(mode, "import")
             job_id = imported["image_id"][:32]
-            (workspace.path / "jobs" / job_id / "program").mkdir(parents=True)
+            synthetic_program(workspace.path / "jobs" / job_id / "program")
             language, compiler = {"arm64": ("AARCH64:LE:64:AppleSilicon", "default"),
                                   "x86_64": ("x86:LE:64:default", "gcc")}[imported["arch"]]
             result = {"validation": {"headless_analysis_enabled": False},
