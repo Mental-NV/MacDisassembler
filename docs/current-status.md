@@ -129,6 +129,15 @@ decision. Reuse recorded observations for gestures already covered.
   query ran offline and rejected a cursor after recompilation. Of 1,200
   seeded mutations, 386 produced typed failures and 129 produced partial
   declaration coverage.
+- [x] **Rehearse the compiled resources and exact handler together.** The
+  [owned Calendar rehearsal](cli.md#owned-calendar-evidence-rehearsal)
+  compiled the XIB, generated its localization table and verified both
+  resource digests and the nib pages. It matched the archived action to
+  the exact method and Ghidra function while recording the fixture's
+  executed date-range control separately. The v2 private report replayed
+  byte for byte twice with the bundle and engine unavailable. The v1
+  handoff also reproduced, and the v2 checks rejected a mismatched digest
+  and receiver class.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

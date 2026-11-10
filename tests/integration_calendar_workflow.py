@@ -17,9 +17,14 @@ from macscope.storage import atomic
 
 
 SOURCE = Path(__file__).resolve().parents[1] / 'fixture' / 'calendar'
+XIB = SOURCE / 'CalendarWiring.xib'
 MAIN = 'Contents/MacOS/OwnedCalendar'
 KIT = 'Contents/Frameworks/OwnedCalendarKit.framework/Versions/A/OwnedCalendarKit'
-RESOURCE = 'Contents/Resources/Calendar/RangePreferences.json'
+RESOURCE_DIRECTORY = 'Contents/Resources/Calendar'
+RESOURCE = RESOURCE_DIRECTORY + '/RangePreferences.json'
+NIB = RESOURCE_DIRECTORY + '/Calendar.nib'
+STRINGS = RESOURCE_DIRECTORY + '/Calendar.strings'
+TITLE_KEY = 'aA0-ab-002.title'
 LEAD = 'OwnedCalendar.RangePreferences'
 SELECTOR = 'calendarDayDuration:'
 METHOD = '-[OwnedCalendarController calendarDayDuration:]'
@@ -38,6 +43,12 @@ def cli(*args, expected=(0, 6)):
     return envelope
 
 
+def ibtool(*args):
+    result = subprocess.run(['/usr/bin/xcrun', 'ibtool', *map(str, args)], capture_output=True, timeout=60)
+    assert result.returncode == 0, (args, result.stdout, result.stderr)
+    return result.stdout
+
+
 def build_fixture(app):
     for path in (MAIN, KIT, RESOURCE):
         (app / path).parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +65,8 @@ def build_fixture(app):
                     SOURCE / 'OwnedCalendarKit.c', '-o', kit], check=True, timeout=60)
     subprocess.run([*clang, '-framework', 'Foundation', '-Wl,-rpath,@executable_path/../Frameworks',
                     SOURCE / 'OwnedCalendar.m', kit, '-o', app / MAIN], check=True, timeout=60)
+    ibtool('--compile', app / NIB, XIB)
+    ibtool('--generate-strings-file', app / STRINGS, XIB)
 
 
 def digest(path):
@@ -71,17 +84,56 @@ def native_addresses(path, names):
     return addresses
 
 
+def capture_resources(app, inputs):
+    inventory = cli('resources', 'list', app, '--under', RESOURCE_DIRECTORY, expected=(0,))
+    records = {row['relative_path']: row for row in inventory['data']}
+    assert records.keys() == {RESOURCE, NIB, STRINGS}
+    for path, row in records.items():
+        assert row['sha256'] == inputs[path] and row['size'] == (app / path).stat().st_size
+
+    args = ('resources', 'nib', app, '--file', NIB)
+    nib = cli(*args, expected=(0,))
+    assert nib['data']['sha256'] == inputs[NIB]
+    assert nib['coverage']['known_total'] == len(nib['data']['records']) == 4
+    first = cli(*args, '--limit', '2', expected=(0,))
+    cursor = first['coverage']['next_cursor']
+    assert cursor and first['coverage']['truncation_reason'] == 'page_limit'
+    second = cli(*args, '--cursor', cursor, expected=(0,))
+    assert first['data']['records'] + second['data']['records'] == nib['data']['records']
+
+    localized = cli('resources', 'strings', app, '--file', STRINGS, '--key', TITLE_KEY, expected=(0,))
+    assert localized['data']['sha256'] == inputs[STRINGS]
+    oracle = plistlib.loads(ibtool('--connections', '--objects', '--localizable-strings', XIB))
+    declared = oracle['com.apple.ibtool.document.connections']
+    source_objects = oracle['com.apple.ibtool.document.objects']
+    source_titles = oracle['com.apple.ibtool.document.localizable-strings']['aA0-ab-002']
+    action, = (row for row in nib['data']['records'] if row['kind'] == 'action')
+    outlet, = (row for row in nib['data']['records'] if row['kind'] == 'outlet')
+    labels = {row['field']: row for row in nib['data']['records'] if row['kind'] == 'button_label'}
+    assert action['label'] == declared['aA0-ab-003']['label'] == SELECTOR
+    assert outlet['label'] == declared['aA0-ab-004']['label'] == 'weekButton'
+    assert action['source'] == outlet['destination'] and action['destination'] == outlet['source']
+    assert action['destination']['declared_class'] == source_objects['-2']['custom-class']
+    assert action['source']['archive_class'] == source_objects['aA0-ab-001']['class']
+    for archived, authored in (('NSContents', 'title'), ('NSAlternateContents', 'alternateTitle')):
+        assert labels[archived]['label'] == source_titles[authored]
+        assert labels[archived]['control'] == action['source']
+    assert localized['data']['records'] == [{'key': TITLE_KEY, 'value': source_titles['title']}]
+    print('Owned interface declarations and localization verified against ibtool', flush=True)
+    interface = {'authority': 'compiled_owned_fixture', 'inventory': [records[NIB], records[STRINGS]],
+                 'nib': nib, 'localization': localized}
+    return records[RESOURCE], interface
+
+
 def prepare(project, app):
     build_fixture(app)
-    inputs = {path: digest(app / path) for path in (MAIN, KIT, RESOURCE)}
+    inputs = {path: digest(app / path) for path in (MAIN, KIT, RESOURCE, NIB, STRINGS)}
     marker, *durations = subprocess.check_output([app / MAIN], text=True, timeout=30).splitlines()
     assert marker == LEAD and durations == ['86400', '82800', '86400'], (marker, durations)
     assert json.loads((app / RESOURCE).read_bytes())['scenario'] == marker
     entries = native_addresses(app / MAIN, (METHOD, ROUTE, '_main'))
     entries.update(native_addresses(app / KIT, (DURATION, MIDNIGHT)))
-    resource, = cli('resources', 'list', app, '--type', 'json', expected=(0,))['data']
-    assert resource['relative_path'] == RESOURCE and resource['sha256'] == inputs[RESOURCE]
-    assert resource['size'] == (app / RESOURCE).stat().st_size
+    resource, interface = capture_resources(app, inputs)
     cli('project', 'create', project, expected=(0,))
     imported = cli('import', app, '--project', project, '--arch', 'arm64',
                    '--include-images', KIT, TRUST, expected=(0,))
@@ -101,7 +153,7 @@ def prepare(project, app):
     assert recovered['data']['origin']['callee_parameter_recovery']['status'] == 'applied'
     assert {path: digest(app / path) for path in inputs} == inputs
     print('Owned app oracle and both full Ghidra analyses verified', flush=True)
-    return {'entries': entries, 'images': images, 'resource': resource,
+    return {'entries': entries, 'images': images, 'resource': resource, 'interface': interface,
             'durations_seconds': [int(value) for value in durations],
             'recovered_job': recovered['data']['origin']['job_id']}
 
@@ -134,6 +186,33 @@ def function_evidence(scope, image, entry):
             'analysis_id': row['analysis_id'], 'arch': row['arch'], 'instructions': instructions,
             'pseudocode': code, 'address_spans': spans, 'references': refs['data'], 'trace': trace['data'],
             'coverage': {name: result['coverage'] for name, result in facets.items()}}
+
+
+def correlate_interface(interface, method, handler, image):
+    nib, localization = (interface[key] for key in ('nib', 'localization'))
+    hashes = {row['relative_path']: row['sha256'] for row in interface['inventory']}
+    for capture, command, path in ((nib, 'resources nib', NIB), (localization, 'resources strings', STRINGS)):
+        validate_envelope(capture)
+        assert capture['command'] == command and capture['data']['relative_path'] == path
+        assert capture['status'] == capture['coverage']['status'] == 'complete'
+        assert capture['data']['sha256'] == hashes[path]
+    action, = (row for row in nib['data']['records'] if row['kind'] == 'action' and row['label'] == method['name'])
+    outlet, = (row for row in nib['data']['records'] if row['kind'] == 'outlet' and row['destination'] == action['source'])
+    title, = (row for row in nib['data']['records'] if row['kind'] == 'button_label'
+              and row['field'] == 'NSContents' and row['control'] == action['source'])
+    label, = localization['data']['records']
+    assert title['label'] == label['value'] and label['key'] == TITLE_KEY
+    assert action['destination']['declared_class'] == method['class_name']
+    assert method['image_id'] == handler['image_id'] == image['image_id']
+    assert method['implementation_va'] == handler['entry_va'] and handler['analysis_id'] == image['analysis_id']
+    return dict(interface, match={
+        'basis': 'archived receiver class and selector match an exact Objective-C method entry',
+        'action_object_index': action['object_index'], 'outlet_object_index': outlet['object_index'],
+        'control_object_index': action['source']['object_index'], 'title_key': label['key'],
+        'image_id': handler['image_id'], 'analysis_id': handler['analysis_id'], 'arch': handler['arch'],
+        'artifact_sha256': image['artifact_sha256'], 'slice_sha256': image['sha256'],
+        'function_id': handler['function_id'], 'entry_va': handler['entry_va'],
+    })
 
 
 def handoff(project, context):
@@ -189,7 +268,7 @@ def handoff(project, context):
     assert len(rendered_calls) == 2 and all(len(call.split(',')) == 4 for call in rendered_calls)
     missing = cli('functions', 'show', *main, '--address', '0x1', expected=(2,))
     assert missing['error']['code'] == 'function_selector' and missing['error']['partial_results'] == []
-    return {
+    report = {
         'schema': 'macscope-owned-calendar-handoff/1', 'images': images, 'functions': functions,
         'leads': {'selector': method, 'string': string, 'string_references': string_refs,
                   'resource': context['resource']},
@@ -202,6 +281,10 @@ def handoff(project, context):
         'static_inference': 'The declared date-range path computes two local midnights using the offset change.',
         'open_questions': ['The computed Objective-C dispatch target remains unresolved in the static trace.'],
     }
+    if 'interface' in context:
+        report['schema'] = 'macscope-owned-calendar-handoff/2'
+        report['interface'] = correlate_interface(context['interface'], method, handler, images[MAIN])
+    return report
 
 
 def verify_selected_handoff(project, context, control):
