@@ -5,7 +5,7 @@ from pathlib import PurePosixPath
 import re
 import sqlite3
 
-from . import engine, engine_checks, jobs
+from . import engine, engine_checks, jobs, loader_mapping
 from .errors import Error
 from .macho import inspect_bytes, read_regular
 from .storage import atomic, canonical, identity, is_digest, json_object, program_history, strict_json, write_json
@@ -89,6 +89,20 @@ def stage_inputs(project, image, original):
         raise Error("input_integrity", "Existing immutable slice is corrupt")
 
 
+def prepared_bridge_report(path, journal):
+    raw = engine.read_worker_object(path.with_name("bridge.json"), 64 * 1024 * 1024)
+    validation = raw.get("validation")
+    if (raw.get("schema") != "macscope-bridge/1" or raw.get("mode") != "import"
+            or raw.get("status") not in ("complete", "partial")
+            or raw.get("bridge_version") != engine.BRIDGE_VERSION
+            or raw.get("ghidra_version") != engine_checks.GHIDRA_VERSION
+            or not isinstance(validation, dict) or validation.get("headless_analysis_enabled") is not False
+            or any(raw.get(key) != journal["loader_evidence"][key] for key in LOADER_FIELDS)
+            or b"Skipping unsupported -loader-" in read_regular(path.with_name("launcher.log"), 8 * 1024 * 1024)):
+        raise ValueError("The prepared import lacks matching loader evidence")
+    return raw
+
+
 def verify_prepared_job(project, image, journal):
     try:
         path, job = jobs.get(project, journal["job_id"])
@@ -102,19 +116,15 @@ def verify_prepared_job(project, image, journal):
         if "schema" in journal or "import_program_sha256" in job:
             if journal.get("schema") != JOURNAL_SCHEMA or job.get("import_program_sha256") != journal["program_sha256"]:
                 raise ValueError("The Program digest differs from the completed job")
+            mapping = job.get("loader_mapping")
+            if mapping is not None and (not isinstance(mapping, dict) or "entry_point" not in mapping):
+                # Existing 1.14.0 workers already recorded the entry's source block.
+                job["loader_mapping"] = loader_mapping.verify(prepared_bridge_report(path, journal), image)
+                write_json(path, job, force=True)
             return
 
         # Earlier prepared imports recorded the Program digest in the journal only.
-        raw = engine.read_worker_object(path.with_name("bridge.json"), 64 * 1024 * 1024)
-        validation = raw.get("validation")
-        if (raw.get("schema") != "macscope-bridge/1" or raw.get("mode") != "import"
-                or raw.get("status") not in ("complete", "partial")
-                or raw.get("bridge_version") != engine.BRIDGE_VERSION
-                or raw.get("ghidra_version") != engine_checks.GHIDRA_VERSION
-                or not isinstance(validation, dict) or validation.get("headless_analysis_enabled") is not False
-                or any(raw.get(key) != journal["loader_evidence"][key] for key in LOADER_FIELDS)
-                or b"Skipping unsupported -loader-" in read_regular(path.with_name("launcher.log"), 8 * 1024 * 1024)):
-            raise ValueError("The legacy journal lacks matching loader evidence")
+        prepared_bridge_report(path, journal)
     except (Error, OSError, ValueError, RecursionError) as error:
         raise Error("import_journal", "Prepared import provenance does not match its completed worker") from error
 

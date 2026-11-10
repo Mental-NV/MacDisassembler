@@ -736,6 +736,21 @@ A conflicting base, source file or section offset fails import with
 `loader_mapping_mismatch` before Program publication. Invalid worker
 evidence returns `loader_mapping_evidence`.
 
+For a mapped `LC_MAIN` or `LC_UNIXTHREAD` entry, the import also checks
+that Ghidra maps the exact slice offset in an executable block. A complete
+capture missing the entry fails with `loader_mapping_mismatch`. An
+incomplete capture without that source records the entry as `unverified`
+in `loader_mapping.entry_point`. The status is `not_declared` when the
+image has no process entry command. On resume, a prepared import from an
+earlier 1.14.0 build gains the entry check from its original worker report
+before promotion. The recorded engine and isolation policy still apply.
+
+The installed CLI verified both entry command types on owned arm64 and
+x86_64 slices. It rejected an omitted entry in a complete capture and
+recorded the same omission as unverified in a truncated capture. An older
+prepared import rejected an altered report, recovered with the restored
+report, and replayed its receipt without an engine.
+
 The installed CLI verified 31 file-backed sections across the owned arm64
 and x86_64 calculator slices and the Calendar app and framework. A control
 shifted one source offset in a live worker result. The import recorded a

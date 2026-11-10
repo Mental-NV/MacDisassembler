@@ -57,6 +57,12 @@ decision. Reuse recorded observations for gestures already covered.
   recovered six exact Week functions from a read-only copy of the import.
   A second copy reproduced all six pseudocode outputs byte for byte.
   The installed worker keeps its owned-input policy.
+- [ ] **Validate the current CLI on a small, approved TickTick lead set.**
+  Pin the exact images and selected entry addresses. Check targeted
+  references, focused code and the private handoff, then replay the saved
+  results and exercise recovery on a disposable workspace. Keep gaps in
+  dispatch and caller coverage explicit. This requires the separately
+  scoped private-input validation.
 - [x] **Decompile one exact function without whole-image analysis.**
   [`decompile --from-import`](cli.md#decompile-one-function-from-an-import)
   verifies the linker extent and each emitted instruction against the slice.
@@ -492,6 +498,12 @@ collections exceed documented bounds despite successful pseudocode output.
   framework images. A shifted live worker offset failed before publication.
   Both calculator slices completed full headless analysis, disassembly
   and fresh decompilation.
+- [x] Verify [process entry mappings before import publication](cli.md#imported-program-mapping).
+  Owned arm64 and x86_64 slices verified `LC_MAIN` and `LC_UNIXTHREAD`
+  entries. A complete capture omitting the entry failed. A truncated
+  capture recorded an unverified entry. An interrupted import from the
+  previous build rejected altered evidence and resumed with its restored
+  report and the original isolation policy.
 - [x] List and inspect worker jobs and request cancellation through their
   live owner. A second CLI process cancelled an owned calculator analysis
   while preserving its previously committed snapshot.

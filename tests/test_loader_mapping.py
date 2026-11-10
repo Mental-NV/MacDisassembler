@@ -23,7 +23,7 @@ class LoaderMappingTests(unittest.TestCase):
             "coverage": {"sections": {"status": "complete", "emitted": 1, "total": 1,
                                       "truncated": False, "error": None}},
             "sections": [{
-                "type": "Default", "loaded": True, "initialized": True,
+                "type": "Default", "loaded": True, "initialized": True, "x": True,
                 "start": "0x1100", "end": "0x110f", "sources_truncated": False,
                 "sources": [
                     {"start": "0x1100", "end": "0x1107", "file_name": filename, "file_offset": 0x100},
@@ -36,7 +36,7 @@ class LoaderMappingTests(unittest.TestCase):
         report = loader_mapping.verify(self.result, self.image)
         self.assertEqual(report, {
             "status": "verified", "image_base": "0x1000", "declared_file_backed_sections": 1,
-            "verified_sections": 1, "coverage_gaps": [],
+            "verified_sections": 1, "coverage_gaps": [], "entry_point": {"status": "not_declared"},
         })
 
     def test_source_gaps_and_truncation_are_explicit(self):
@@ -47,6 +47,29 @@ class LoaderMappingTests(unittest.TestCase):
         self.assertEqual(report["status"], "partial")
         self.assertEqual(report["verified_sections"], 0)
         self.assertEqual(report["coverage_gaps"], ["worker_mapping_incomplete", "declared_sections_unmapped"])
+
+    def test_process_entry_requires_executable_file_backing(self):
+        entry = {"source": "LC_MAIN", "status": "complete", "va": "0x1108", "slice_file_offset": "0x108"}
+        self.image["loader"]["entry_point"] = entry
+        report = loader_mapping.verify(self.result, self.image)
+        self.assertEqual(report["entry_point"], dict(entry, status="verified"))
+
+        block = self.result["sections"][0]
+        block["x"] = False
+        with self.assertRaises(Error) as error:
+            loader_mapping.verify(self.result, self.image)
+        self.assertEqual(error.exception.code, "loader_mapping_mismatch")
+
+        block["x"] = True
+        block["sources"].pop()
+        with self.assertRaises(Error) as error:
+            loader_mapping.verify(self.result, self.image)
+        self.assertEqual(error.exception.code, "loader_mapping_mismatch")
+
+        block["sources_truncated"] = True
+        report = loader_mapping.verify(self.result, self.image)
+        self.assertEqual(report["entry_point"], dict(entry, status="unverified", reason="worker_mapping_incomplete"))
+        self.assertIn("entry_mapping_unverified", report["coverage_gaps"])
 
     def test_wrong_base_or_file_backing_is_rejected(self):
         for field, value in (("image_base", "0x2000"), ("file_name", "other.macho"), ("file_offset", 0x109)):
