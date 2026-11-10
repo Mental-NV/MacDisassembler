@@ -106,6 +106,13 @@ decision. Reuse recorded observations for gestures already covered.
   analyzed arm64 and x86_64 handoffs and a focused arm64 handoff. Both
   partial and complete results replayed byte for byte with Ghidra
   unavailable, and output files had owner-only permissions.
+- [x] **Select a physical Calendar resource directory before scanning.**
+  [`resources list --under`](cli.md#bundle-resources) listed the app's
+  localized strings and nib resource and the framework's strings in an
+  owned bundle with 10,005 unrelated entries. The full scan hit its entry
+  limit before Calendar. Scoped hashes matched file bytes, cursors survived
+  edits outside the selection, and a replaced directory returned partial
+  coverage. The installed query ran with Ghidra unavailable.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

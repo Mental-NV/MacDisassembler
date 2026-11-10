@@ -611,10 +611,22 @@ and inventory ID. The query reads files in place and works without Ghidra.
 
 Use `--type TYPE` to match a case-insensitive filename extension without
 the dot, or `--type file` for extensionless resources. Filtering happens
-before hashing. `--limit` and `--cursor` page by relative path within the
-selected inventory and filter. JSONL emits an envelope for each row. The
-same scan and hash bounds apply as for `bundle list`. An incomplete scan
-reports its coverage gaps and exits 6.
+before hashing. Use `--under DIRECTORY` to start scanning inside an exact
+physical bundle-relative directory. This leaves unrelated directories out
+of the entry and hash budgets. Framework resources can be selected using
+their physical `Versions/A` path. Missing directories, symlinks and paths
+that cross a mount return a typed selection error.
+
+```sh
+macscope resources list 'Owned Calendar.app' --under Contents/Resources/Calendar \
+  --type strings --limit 25 --json
+```
+
+`--limit` and `--cursor` page by relative path and bind to the selected
+directory, filter and inventory. Paths in each row are relative to the app.
+JSONL emits an envelope for each row. The same scan and hash bounds apply
+as for `bundle list`. An incomplete scan reports its coverage gaps and
+exits 6.
 
 The installed CLI matched all six resource sizes and hashes in an owned
 app and framework and reproduced the three text rows across paginated

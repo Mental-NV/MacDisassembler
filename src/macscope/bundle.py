@@ -1,6 +1,7 @@
 """Bounded, data-only inventory of an application bundle."""
 import hashlib
 from collections import deque
+from contextlib import ExitStack, contextmanager
 from itertools import islice
 import os
 from pathlib import Path, PurePosixPath
@@ -34,10 +35,45 @@ def fingerprint(info):
     return info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
-def inventory(path, kind, *, resource_type=None):
+@contextmanager
+def resource_scope(root, relative, gaps):
+    """Pin every directory in the selected path while inventorying its subtree."""
+    with ExitStack() as opened:
+        directories = [root]
+        try:
+            device = os.fstat(root).st_dev
+            for part in relative.parts:
+                parent = directories[-1]
+                info = os.stat(part, dir_fd=parent, follow_symlinks=False)
+                if not stat.S_ISDIR(info.st_mode) or info.st_dev != device:
+                    raise Error("resource_directory", "Resource scope must be a physical directory within the bundle filesystem", 5)
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                opened.callback(os.close, child)
+                if fingerprint(os.fstat(child)) != fingerprint(info):
+                    raise Error("resource_directory", "Resource directory changed during selection", 5)
+                directories.append(child)
+        except OSError as error:
+            raise Error("resource_directory", "Resource directory is missing, unreadable or changed during selection", 5) from error
+        yield directories[-1]
+        for parent, part, child in zip(directories, relative.parts, directories[1:]):
+            try:
+                current = os.stat(part, dir_fd=parent, follow_symlinks=False)
+                if not os.path.samestat(current, os.fstat(child)):
+                    gaps.add("bundle_changed")
+            except OSError:
+                gaps.add("bundle_changed")
+
+
+def inventory(path, kind, *, resource_type=None, resource_directory=None):
     path = Path(os.path.abspath(path))
     if path.suffix.lower() != ".app":
         raise Error("bundle_required", "Select a macOS .app bundle", 2)
+    if resource_directory is not None:
+        relative = PurePosixPath(resource_directory)
+        if (not relative.parts or relative.is_absolute() or relative.as_posix() != resource_directory
+                or ".." in relative.parts or "\0" in resource_directory or len(relative.parts) > MAX_DEPTH
+                or len(os.fsencode(resource_directory)) > 4096):
+            raise Error("resource_directory", "Select an exact bundle-relative resource directory", 2)
     executable = resolve_input(path)
     main = executable.relative_to(path).as_posix()
     companion = debug_companion_path(executable).relative_to(path).as_posix()
@@ -146,15 +182,21 @@ def inventory(path, kind, *, resource_type=None):
     except OSError as error:
         raise Error("bundle_path_changed", "Bundle directory changed before inventory") from error
     try:
-        walk(root, PurePosixPath(), 0)
+        if resource_directory is None:
+            walk(root, PurePosixPath(), 0)
+        else:
+            with resource_scope(root, relative, gaps) as directory:
+                walk(directory, relative, len(relative.parts))
     except OSError as error:
         raise Error("bundle_unavailable", "Unable to enumerate the bundle directory") from error
     finally:
         os.close(root)
     rows.sort(key=lambda row: row["relative_path"])
-    return {"bundle_name": path.name, "main_executable": main, "kind": kind,
-            "entries_scanned": seen, "bytes_hashed": hashed, "warnings": warnings,
-            "records": rows}, sorted(gaps)
+    result = {"bundle_name": path.name, "main_executable": main, "kind": kind,
+              "entries_scanned": seen, "bytes_hashed": hashed, "warnings": warnings, "records": rows}
+    if resource_directory is not None:
+        result["resource_directory"] = resource_directory
+    return result, sorted(gaps)
 
 
 def physical_image(root, requested):

@@ -113,6 +113,65 @@ class BundleInventoryTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "output_input_conflict")
         self.assertEqual(self.asset.read_bytes(), b"changed")
 
+    def test_resource_directory_starts_within_scope_and_binds_pages(self):
+        calendar = self.assets / "Calendar"
+        calendar.mkdir()
+        (calendar / "A.strings").write_text("one")
+        (calendar / "B.STRINGS").write_text("two")
+        (calendar / "Screen.nib").write_bytes(b"nib")
+        scoped = ("--under", "Contents/Resources/Calendar", "--type", "strings")
+        with patch.object(bundle, "MAX_ENTRIES", 4):
+            full = self.run_resources("--type", "strings")
+            self.assertEqual((full["status"], full["data"], full["diagnostics"]), ("partial", [], ["entry_limit"]))
+            first = self.run_resources(*scoped, "--limit", "1")
+            cursor = first["coverage"]["next_cursor"]
+            self.asset.write_bytes(b"unrelated edit outside the selected directory")
+            second = self.run_resources(*scoped, "--cursor", cursor)
+            self.assertEqual(second["coverage"]["known_total"], 2)
+            self.assertEqual(second["status"], "complete")
+            self.assertEqual([row["relative_path"] for row in first["data"] + second["data"]], [
+                "Contents/Resources/Calendar/A.strings", "Contents/Resources/Calendar/B.STRINGS"])
+            self.assertEqual(second["data"][0]["sha256"], hashlib.sha256(b"two").hexdigest())
+            with self.assertRaises(Error) as caught:
+                self.run_resources("--under", "Contents/Resources", "--type", "strings", "--cursor", cursor)
+            self.assertEqual(caught.exception.code, "stale_cursor")
+            (calendar / "A.strings").write_text("changed")
+            with self.assertRaises(Error) as caught:
+                self.run_resources(*scoped, "--cursor", cursor)
+            self.assertEqual(caught.exception.code, "stale_cursor")
+        with patch.object(bundle, "MAX_ENTRIES", 1):
+            partial = self.run_resources(*scoped)
+        self.assertEqual(partial["status"], "partial")
+        self.assertIsNone(partial["coverage"]["known_total"])
+        self.assertEqual(partial["coverage"]["truncation_reason"], "entry_limit")
+
+    def test_resource_directory_rejects_nonphysical_and_noncanonical_paths(self):
+        (self.contents / "Alias").symlink_to(self.assets, target_is_directory=True)
+        for requested, code in (("", 2), ("/Contents/Resources", 2), ("Contents/../Resources", 2),
+                                ("Contents/./Resources", 2), ("Contents/Resources/", 2),
+                                ("Contents/Alias", 5), ("Contents/Resources/Greeting.txt", 5),
+                                ("Contents/Missing", 5)):
+            with self.subTest(requested=requested), self.assertRaises(Error) as caught:
+                self.run_resources("--under", requested)
+            self.assertEqual((caught.exception.code, caught.exception.exit_code), ("resource_directory", code))
+
+    def test_resource_directory_replacement_keeps_inventory_partial(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "Private.txt").write_bytes(b"outside the bundle")
+        real_scandir = os.scandir
+
+        def replace_directory(directory):
+            self.assets.rename(self.contents / "Moved")
+            self.assets.symlink_to(outside, target_is_directory=True)
+            return real_scandir(directory)
+
+        with patch.object(bundle.os, "scandir", side_effect=replace_directory):
+            result = self.run_resources("--under", "Contents/Resources")
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["diagnostics"], ["bundle_changed"])
+        self.assertEqual([row["relative_path"] for row in result["data"]], ["Contents/Resources/Greeting.txt"])
+
     def test_inventory_lists_symlinks_and_special_files_without_following_them(self):
         outside = self.root / "outside"
         outside.mkdir()
