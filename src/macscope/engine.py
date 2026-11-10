@@ -184,6 +184,14 @@ def import_program_path(project, image):
     return project.path/'jobs'/provider/'program'
 
 
+def imported_program(project, image):
+    source = import_program_path(project, image)
+    expected = image.get('engine_baseline_sha256')
+    if not is_digest(expected) or saved_program_digest(source, 'baseline_integrity') != expected:
+        raise Error('baseline_integrity', 'Saved import Program is missing or changed')
+    return source
+
+
 def copy_program(source, destination, expected_digest, integrity_error):
     if source.is_symlink():
         raise Error('analysis_program_integrity', 'Saved Program directory is a symbolic link')

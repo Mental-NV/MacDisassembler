@@ -524,6 +524,14 @@ collections exceed documented bounds despite successful pseudocode output.
   focused receipt and handoff replayed. The replacement supported focused
   decompilation, full analysis and a fresh query. An unfinished focused
   query still required its original digest.
+- [x] Check saved Ghidra Programs independently of cached snapshots with
+  [`status --verify-programs`](cli.md#project-and-job-status). The installed
+  CLI checked three owned arm64 and x86_64 images with Ghidra and Java
+  unavailable, including an import repair provider. Missing and changed
+  Programs returned separate errors while cached exports stayed byte
+  identical. A full-headless x86_64 import repair and reanalysis restored
+  both checks. Repeating the same analysis repaired a missing Program,
+  reproduced the export byte for byte and supported fresh decompilation.
 - [x] Verify [workspace manifest error handling](cli.md#envelopes-errors-and-explicit-omissions)
   and a byte-identical export from an earlier schema 1.0 workspace.
 - [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)

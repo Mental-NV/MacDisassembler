@@ -23,6 +23,7 @@ from . import body_ownership, engine_checks, evidence, focused, handoff_diff, ht
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
+STATUS_PROGRAM_LIMIT = 8
 
 
 def coverage(scope='requested command', count=1, total=1, partial=False, cursor=None, reason=None):
@@ -116,6 +117,8 @@ def parser():
     boundaries.add_argument('--repair-split-boundaries',action='store_true',help='Apply guarded linker-derived function joins to this analysis copy')
     boundaries.add_argument('--with-boundary-edits',action='store_true',help='Apply explicitly accepted function bodies to this analysis copy')
     s=sub.add_parser('status');project(s);common(s)
+    s.add_argument('--verify-programs',action='store_true',
+                   help='Check saved import and analysis Program digests without starting Ghidra')
     s=sub.add_parser('jobs');ss=s.add_subparsers(dest='action',required=True)
     for action in ('list','show','cancel','resume'):
         s=ss.add_parser(action);s.add_argument('--project',required=True);common(s)
@@ -680,8 +683,7 @@ def job_command(args, project, command):
     return envelope(command,redact(rows),status='partial' if gaps else 'complete',cov=cov)
 
 
-def analysis_status(project, image, pins):
-    snapshot, record = project.snapshot(image)
+def analysis_status(snapshot, record, pins):
     raw = snapshot['engine']
     analysis_identity = snapshot.get('identity')
     saved = analysis_identity.get('engine') if isinstance(analysis_identity, dict) else None
@@ -713,6 +715,14 @@ def analysis_status(project, image, pins):
             'freshness':{'status':freshness,'scope':'packaged_worker','changed':changed,'missing':missing}}
 
 
+def program_status(check, *args):
+    try:
+        check(*args)
+    except Error as error:
+        return {'status':'unavailable','error':error.code}
+    return {'status':'verified'}
+
+
 def project_status(args, project):
     images = [row for row in project.images() if (args.image is None or row['image_id'] == args.image)
               and (args.arch is None or row['arch'] == args.arch)]
@@ -720,9 +730,10 @@ def project_status(args, project):
         raise Error('image_selector','No image matches the status selection',2)
     pins = {'ghidra_version':engine_checks.GHIDRA_VERSION,'bridge_version':engine.BRIDGE_VERSION,
             'bridge_sha256':engine.bridge_digest()}
-    gaps, checked = set(), 0
+    gaps, checked, programs_checked = set(), 0, 0
     for row in images:
         aid = row['active_analysis']
+        record = None
         if aid is None:
             row['analysis'] = {'status':'not_analyzed','analysis_id':None}
         elif checked == STATUS_SNAPSHOT_LIMIT:
@@ -731,11 +742,36 @@ def project_status(args, project):
         else:
             checked += 1
             try:
-                row['analysis'] = redact(analysis_status(project,row,pins))
+                snapshot, record = project.snapshot(row)
+                row['analysis'] = redact(analysis_status(snapshot,record,pins))
             except (Error, OSError) as error:
                 code = error.code if isinstance(error, Error) else 'snapshot_unavailable'
                 row['analysis'] = {'status':'unavailable','analysis_id':aid,'error':code}
                 gaps.add('snapshot_unavailable')
+        if not args.verify_programs:
+            continue
+        programs = {'import':{'status':'not_imported'}, 'analysis':{'status':'not_analyzed'}}
+        row['programs'] = programs
+        if not row['imported'] and aid is None:
+            continue
+        if programs_checked == STATUS_PROGRAM_LIMIT:
+            limited = {'status':'unverified','reason':'program_check_limit'}
+            if row['imported']:
+                programs['import'] = limited
+            if aid is not None:
+                programs['analysis'] = limited
+            gaps.add('program_check_limit')
+            continue
+        programs_checked += 1
+        if row['imported']:
+            programs['import'] = program_status(engine.imported_program,project,row)
+        if record is not None:
+            programs['analysis'] = program_status(engine.analyzed_program,project,record)
+        elif aid is not None:
+            reason = row['analysis'].get('reason','snapshot_unavailable')
+            programs['analysis'] = {'status':'unverified','reason':reason}
+        if any(value['status'] == 'unavailable' for value in programs.values()):
+            gaps.add('program_unavailable')
     job_rows, job_gaps = jobs.recent(project)
     data = {'project_id':project.project_id,'images':images,'jobs':redact(job_rows),
             'job_history_limit':jobs.RECENT,'job_history_gaps':job_gaps}
@@ -1117,11 +1153,10 @@ def repair_import(project, image, committed, original, args, deps):
     if not is_digest(repair['sha256']):
         raise Error('baseline_integrity','The committed import has no valid Program digest')
     try:
-        source = engine.import_program_path(project,committed)
-        healthy = engine.saved_program_digest(source,'baseline_integrity') == repair['sha256']
+        engine.imported_program(project,committed)
     except Error:
-        healthy = False
-    if healthy:
+        pass
+    else:
         return {'status':'already_imported'}
     job_id = import_state.import_slice(project,committed,original,args,deps,repair=repair)
     return {'status':'repaired','job_id':job_id}

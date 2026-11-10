@@ -1713,6 +1713,61 @@ class CliTests(TemporaryCase):
                     self.assertEqual(analysis['freshness']['scope'], 'packaged_worker')
                     self.assertEqual(analysis['freshness']['changed'], ['bridge_sha256'] if freshness == 'stale' else [])
 
+    def test_status_verifies_current_programs_independently_of_cached_analysis(self):
+        image = self.workspace.select()
+        import_job, analysis_job = 'a' * 32, 'b' * 32
+        baseline = self.workspace.path / 'jobs' / import_job / 'program'
+        analyzed = self.workspace.path / 'jobs' / analysis_job / 'program'
+        baseline_db = synthetic_program(baseline)
+        analyzed_db = synthetic_program(analyzed)
+        _, record = self.workspace.snapshot(image)
+        image.update(engine_baseline_job_id=import_job, engine_baseline_sha256=engine.tree_digest(baseline))
+        record.update(job_id=analysis_job, analysis_program_sha256=engine.tree_digest(analyzed))
+        with self.workspace.db(False) as db:
+            db.execute('UPDATE images SET metadata=?', (json.dumps(image),))
+            db.execute('UPDATE analyses SET payload=?', (json.dumps(record),))
+        with mock.patch.object(engine, 'dependencies', side_effect=AssertionError('unexpected engine preflight')), \
+             mock.patch.object(engine, 'run', side_effect=AssertionError('unexpected worker')), \
+             mock.patch.object(engine, 'saved_program_digest', wraps=engine.saved_program_digest) as digest:
+            default = cli.execute(self.args('status'))
+            self.assertNotIn('programs', default['data']['images'][0])
+            digest.assert_not_called()
+            result = cli.execute(self.args('status', '--verify-programs'))
+            self.assertEqual(result['status'], 'complete')
+            verified = {'status':'verified'}
+            self.assertEqual(result['data']['images'][0]['programs'], {'import':verified, 'analysis':verified})
+            self.assertEqual([call.args[0] for call in digest.call_args_list], [baseline, analyzed])
+
+            baseline_bytes = baseline_db.read_bytes()
+            baseline_db.unlink()
+            result = cli.execute(self.args('status', '--verify-programs'))
+            self.assertEqual(result['status'], 'partial')
+            self.assertEqual(result['coverage']['truncation_reason'], 'program_unavailable')
+            row, = result['data']['images']
+            self.assertEqual(row['analysis'], default['data']['images'][0]['analysis'])
+            self.assertEqual(row['programs'], {'import':{'status':'unavailable','error':'baseline_integrity'},
+                                               'analysis':verified})
+            baseline_db.write_bytes(baseline_bytes)
+            analyzed_db.write_bytes(b'changed Program')
+            result = cli.execute(self.args('status', '--verify-programs'))
+            self.assertEqual(result['status'], 'partial')
+            self.assertEqual(result['data']['images'][0]['programs'],
+                             {'import':verified,
+                              'analysis':{'status':'unavailable','error':'analysis_program_integrity'}})
+            self.assertEqual(cli.execute(self.args('status')), default)
+            self.assertEqual(cli.execute(self.args('export'))['status'], 'complete')
+
+            snapshot = self.workspace.path / 'snapshots' / (image['active_analysis'] + '.json')
+            storage.atomic(snapshot, b'changed snapshot', force=True)
+            digest.reset_mock()
+            result = cli.execute(self.args('status', '--verify-programs'))
+            self.assertEqual(result['status'], 'partial')
+            self.assertEqual(result['coverage']['truncation_reason'], 'snapshot_unavailable')
+            self.assertEqual(result['data']['images'][0]['programs'],
+                             {'import':verified,
+                              'analysis':{'status':'unverified','reason':'snapshot_unavailable'}})
+            digest.assert_called_once_with(baseline, 'baseline_integrity')
+
     def test_status_bounds_snapshot_checks_and_keeps_healthy_image_visible(self):
         aid = 'e' * 64
         image = dict(self.snapshot['image'], image_id='f' * 64, arch='x86_64')
@@ -1731,6 +1786,21 @@ class CliTests(TemporaryCase):
             selected = cli.execute(self.args('status', '--image', image['image_id']))
             self.assertEqual(selected['status'], 'complete')
             self.assertEqual(selected['data']['images'][0]['analysis']['function_count'], 0)
+        with mock.patch.object(cli, 'STATUS_PROGRAM_LIMIT', 1), \
+             mock.patch.object(engine, 'imported_program') as imported, \
+             mock.patch.object(engine, 'analyzed_program') as analyzed:
+            result = cli.execute(self.args('status', '--verify-programs'))
+            self.assertEqual(result['status'], 'partial')
+            self.assertEqual(result['coverage']['truncation_reason'], 'program_check_limit')
+            skipped = {'status':'unverified','reason':'program_check_limit'}
+            self.assertEqual(result['data']['images'][1]['programs'], {'import':skipped,'analysis':skipped})
+            self.assertEqual(result['data']['images'][1]['analysis']['status'], 'complete')
+            imported.assert_called_once()
+            analyzed.assert_called_once()
+            selected = cli.execute(self.args('status', '--verify-programs', '--image', image['image_id']))
+            self.assertEqual(selected['status'], 'complete')
+            verified = {'status':'verified'}
+            self.assertEqual(selected['data']['images'][0]['programs'], {'import':verified,'analysis':verified})
         storage.atomic(self.workspace.path / 'snapshots' / (self.snapshot['analysis_id'] + '.json'),
                        b'invalid snapshot', force=True)
         result = cli.execute(self.args('status'))

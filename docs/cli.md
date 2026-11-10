@@ -1376,6 +1376,20 @@ The command verifies at most eight active snapshots per request, up to
 integrity check reports `unavailable` with its error code. Both make the
 status result partial and exit 6 while preserving the other image rows.
 
+Add `--verify-programs` to check the local Ghidra project layout and
+recorded tree digest for the import Program and the active analysis Program.
+Their results appear separately under each image's `programs` field.
+The check reads at most eight selected images with a saved import or an
+active analysis. It uses the current import provider, including any
+replacement committed by `import --repair`. An unavailable snapshot leaves
+its analysis Program unverified and the import Program can still be checked.
+An unavailable Program or a skipped check makes the result partial and
+exits 6. Use the error to choose `import --repair` for an unavailable import
+Program or `analyze` for an unavailable analysis Program. Cached snapshot
+queries remain available while the snapshot passes its own integrity checks.
+Status checks run without Ghidra or Java. Program checks can read the full
+saved project trees.
+
 The installed CLI reported seven saved functions per slice after owned
 arm64 and x86_64 import, analysis and fresh decompilation. It reported an
 archived 44-function analysis as partial and stale, and surfaced distinct
