@@ -1894,6 +1894,22 @@ request returned the saved receipt. The validation report SHA-256 is
 
 ## Limits and safety boundaries
 
+Mach-O preflight accepts up to 4,096 sections in a segment and 8,192
+across all segments of a slice. The per-slice cap applies independently
+to every universal slice, including slices outside the requested import
+architecture. Exceeding the per-slice cap returns `section_limit` and
+exits 7 before the CLI stages that input. A bundle import that has already
+committed an earlier image reports the failed companion in a partial result.
+
+The installed CLI accepted exactly 8,192 sections on both architectures
+and in a two-slice universal fixture. A 204,800-section control increased
+peak RSS by 101.5 MiB in the previous parser and by 3.8 MiB before the
+new parser rejected it. The measurements began after reading the input.
+In an owned Calendar bundle, the valid main image remained committed when
+the framework exceeded the cap. Restoring the original framework allowed
+import to reuse the main image. Both images completed full headless
+analysis and returned matching cached and fresh pseudocode.
+
 The defaults are one worker, a 300-second total wall deadline, a 300-second
 startup deadline, 15 seconds per decompilation, 1000 functions and a
 1024 MiB Java heap. Help lists the allowed ranges.

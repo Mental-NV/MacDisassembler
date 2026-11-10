@@ -480,6 +480,12 @@ collections exceed documented bounds despite successful pseudocode output.
   Three import controls staged no inputs and created no worker jobs.
   Both valid owned slices passed full headless import, analysis, exact
   instruction-byte checks and fresh decompilation.
+- [x] Bound [section records across each Mach-O slice](cli.md#limits-and-safety-boundaries).
+  Exact-limit thin and universal fixtures passed. An excess failed before
+  staging, including in an unselected slice. An owned Calendar bundle
+  retained its main image when the framework exceeded the cap. Restoring
+  the framework allowed both images to complete headless analysis and
+  fresh decompilation.
 - [x] List and inspect worker jobs and request cancellation through their
   live owner. A second CLI process cancelled an owned calculator analysis
   while preserving its previously committed snapshot.

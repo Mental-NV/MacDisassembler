@@ -424,6 +424,30 @@ class ThinMachOTests(ErrorAssertions):
             with self.subTest(**kwargs):
                 self.assert_error(code, macho.thin, segment_image(**kwargs))
 
+    def test_section_limit_applies_across_segments_and_resets_for_each_slice(self):
+        def zero_fill_segment(index, count):
+            name = f"__ZERO{index}".encode()
+            va = 0x100000000 + index * 0x10000
+            header = struct.pack("<16s4Q4I", name, va, count, 0, 0, 3, 3, count, 0)
+            records = b"".join(
+                struct.pack("<16s16s2Q8I", f"__section{i}".encode(), name, va + i, 1,
+                            0, 0, 0, 0, 1, 0, 0, 0)
+                for i in range(count)
+            )
+            return command(0x19, header + records)
+
+        limit = macho.MAX_SECTIONS_PER_SLICE
+        commands = [zero_fill_segment(index, min(4096, limit - first))
+                    for index, first in enumerate(range(0, limit, 4096))]
+        arm = image(cpu=ARM64, commands=commands)
+        intel = image(cpu=X86_64, commands=commands)
+        fat = macho.inspect_bytes(universal([arm, intel], fat64=True))
+        self.assertEqual([len(row["sections"]) for row in fat["slices"]], [limit, limit])
+
+        over = image(cpu=X86_64, commands=[*commands, zero_fill_segment(len(commands), 1)])
+        self.assert_error("section_limit", macho.thin, over, include_section_linkage=True, exit_code=7)
+        self.assert_error("section_limit", macho.inspect_bytes, universal([arm, over]), exit_code=7)
+
     def test_section_virtual_file_alignment_and_relocation_bounds(self):
         cases = [
             ({"file_offset": 187, "section_size": 4}, "macho_bounds"),

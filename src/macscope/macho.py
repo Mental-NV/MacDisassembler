@@ -16,6 +16,7 @@ from .macho_load import ENCRYPTION_COMMANDS, bounded, details, encryption_region
 
 MAX_INPUT = 256 * 1024 * 1024
 MAX_COMMANDS = 8192
+MAX_SECTIONS_PER_SLICE = 8192
 MAX_PLIST = 1024 * 1024
 ARCHES = {0x100000c: 'arm64', 0x1000007: 'x86_64'}
 
@@ -152,6 +153,8 @@ def thin(data, *, allow_arm64e=False, include_section_linkage=False):
             bounded(off, filesize, len(data), 'Segment file bytes')
             if filesize > vmsize or nsects > 4096 or 72 + nsects * 80 != size or va + vmsize > 2**64:
                 raise Error('section_bounds', 'Invalid segment/section table')
+            if len(sections) + nsects > MAX_SECTIONS_PER_SLICE:
+                raise Error('section_limit', f'Mach-O slice exceeds {MAX_SECTIONS_PER_SLICE} sections', 7)
             segments.append({'name': name.split(b'\0')[0].decode('utf-8','backslashreplace'),
                              'va': hex(va), 'size': hex(vmsize),
                              'file_offset': hex(off) if filesize else None,
