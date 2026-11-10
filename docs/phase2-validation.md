@@ -148,6 +148,34 @@ The private matrix comparison SHA-256 is
 The tail-branch adjudication SHA-256 is
 `bac713b613d0fd8b5e219853b5d1092a58696f1b8ba09e1acb6a5bf2a2f1d209`.
 
+## Experimental wheel revalidation after loader preflight changes
+
+A fresh local install of the wheel built from `af2950d` completed the
+same 32 owned cases with full Ghidra 12.2 and JDK 25.0.5.0.3. All
+normalized exports matched the prior wheel. Five cases reported complete
+coverage and 27 reported partial coverage. All 2,263 native pseudocode
+requests completed. The comparison reproduced all eight exact-slice
+FAT64 pairs and the same 1,273 RAM function entries in the frozen direct
+captures. The known inferred Objective-C override remained the sole
+direct pseudocode and CFG difference. LLVM again matched 30,296
+instructions and 5,570 direct targets over 933 selected ranges.
+
+The installed entry point also passed the live doctor probe. Four
+symbol-bearing tool cases covered both architectures and optimization
+levels. Cached disassembly matched 52 instruction records to original
+bytes, and each fresh query reproduced its cached pseudocode. With
+dependency paths unavailable, cached exports reproduced byte for byte
+and each saved receipt replayed without creating another job. An import
+without the trusted-input opt-in returned `isolation_required` before
+staging. All 522 CLI and research tests passed.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Test wheel | `27d41024b5b76259d6528d2ca4c997858b6e568a94f6ca6e415e923580f94e07` |
+| Candidate matrix report | `d547075e585d41176182c544fc02d797da6f425ee6e71f0484206b90e85ae0f8` |
+| Frozen direct comparison | `b2f2a58088fbcaed03886afc1cd3dee337eb0b800e580f8164149f4f7e7737df` |
+| Live and offline command report | `6f381e2d3eadcbc3c9e6aa8b016c13d70a990b0a572b1eb36ba50f3ef18ffb27` |
+
 ## Remaining phase-2 and release gates
 
 Public uncached refresh, token/address spans, exhaustive Mach-O/dyld metadata,

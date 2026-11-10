@@ -487,6 +487,10 @@ collections exceed documented bounds despite successful pseudocode output.
   selected ranges. The one pseudocode and CFG difference preserved the
   decoded stub and labeled the inferred Objective-C target separately.
   Eight byte-identical thin/FAT64 pairs matched after identity remapping.
+- [x] Rerun the [full owned matrix after loader preflight changes](phase2-validation.md#experimental-wheel-revalidation-after-loader-preflight-changes).
+  All 32 normalized exports matched the prior wheel and all 2,263
+  native pseudocode requests completed. The live doctor probe and four
+  fresh queries with offline receipt replay passed.
 - [x] Run the [dSYM-assisted diagnostic](phase1-findings.md#dsym-assisted-diagnostic)
   on the same eight stripped inputs. Ghidra imported all eight matched
   companions and decompiled all 120 controlled entries in the separately
