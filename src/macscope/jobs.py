@@ -336,7 +336,8 @@ def analysis_request(project, image, recovery=None):
     return request
 
 
-def query_request(project, image, function, source, revision, hints, *, signature_recovery=None):
+def query_request(project, image, function, source, revision, hints, *, signature_recovery=None,
+                  address_selection=None):
     program_sha256 = source.get("analysis_program_sha256")
     if not isinstance(program_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", program_sha256):
         raise Error("analysis_program_integrity", "Saved analyzed Program identity is missing; rerun analyze")
@@ -358,6 +359,8 @@ def query_request(project, image, function, source, revision, hints, *, signatur
     if signature_recovery is not None:
         key, recovery = signature_recovery
         request[key] = recovery
+    if address_selection is not None:
+        request["address_selection"] = address_selection
     return request
 
 
@@ -380,6 +383,7 @@ def query_receipt(project, job_id, request):
             or result["data"].get("image_id") != request.get("image_id")
             or result["data"].get("function_id") != request.get("function_id")
             or result["data"].get("entry_va") != request.get("entry_va")
+            or result.get("address_selection") != request.get("address_selection")
             or result.get("analysis_id") != request.get("source_analysis_id")):
         raise Error("query_receipt", "Recorded query result differs from its request")
     for field in SIGNATURE_RECOVERY_FIELDS:

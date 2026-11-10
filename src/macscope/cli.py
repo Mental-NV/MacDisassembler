@@ -50,14 +50,16 @@ def parser():
         s.add_argument('--project',required=True)
         s.add_argument('--image')
         s.add_argument('--arch',choices=('arm64','x86_64'))
-    def address_options(g):
+    def address_options(s,g):
         g.add_argument('--address',help='Unslid hexadecimal virtual address')
         g.add_argument('--rva',help='Hexadecimal offset from the preferred Mach-O image base')
         g.add_argument('--file-offset',help='Hexadecimal offset within the selected Mach-O slice')
+        g.add_argument('--runtime-address',help='Runtime hexadecimal virtual address with --load-slide')
+        s.add_argument('--load-slide',help='Runtime VA minus unslid VA (use --load-slide=-0x... for negative slides)')
     def selector(s, required=True, all_option=False):
         g=s.add_mutually_exclusive_group(required=required)
         g.add_argument('--function-id')
-        address_options(g)
+        address_options(s,g)
         g.add_argument('--name')
         if all_option:g.add_argument('--all',action='store_true')
         return g
@@ -131,7 +133,7 @@ def parser():
     s=sub.add_parser('demangle');common(s);s.add_argument('name')
     s.add_argument('--experimental-trusted-input',action='store_true')
     s=sub.add_parser('bytes');project(s);common(s)
-    address_options(s.add_mutually_exclusive_group(required=True))
+    address_options(s,s.add_mutually_exclusive_group(required=True))
     s.add_argument('--length',type=int,required=True,dest='byte_length')
     for c in (*metadata.PREFLIGHT_LISTS,*metadata.ENGINE_LISTS):
         s=sub.add_parser(c);project(s);common(s);pagination(s)
@@ -410,13 +412,14 @@ def check_engine_access(args, project):
 
 
 def fresh_decompile(args, project, image, function, source, revision, hints=None, *,
-                    deps=None, resumed_from=None, signature_plan=None):
+                    deps=None, resumed_from=None, signature_plan=None, address_selection=None):
     if function['entry_va'] is None or function['is_external'] or function['is_thunk']:
         raise Error('fresh_function_unsupported','Fresh decompilation requires a non-thunk function in this image',3)
     if deps is None:
         deps = engine.dependencies(args.ghidra,args.java_home,full=True)
     recovery = engine.signature_request(signature_plan) if signature_plan is not None else None
-    request = jobs.query_request(project,image,function,source,revision,hints,signature_recovery=recovery)
+    request = jobs.query_request(project,image,function,source,revision,hints,signature_recovery=recovery,
+                                 address_selection=address_selection)
     options = {} if signature_plan is None else {'signature_plan': signature_plan}
     result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'],hints=hints,
                              query_request=request,resumed_from=resumed_from,**options)
@@ -450,11 +453,13 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
                         coverage('fresh selected function pseudocode',int(bool(fresh['pseudocode'])),1,
                                  not complete,reason=None if complete else reason),
                         redact(diagnostics))
+    if address_selection is not None:
+        response['address_selection'] = address_selection
     with jobs.result_publication('query',job['job_id'],resumed_from):
         return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
 
 
-def revise_annotation(args, project, command):
+def revise_annotation(args, project, command, address_selection):
     if args.command == 'rename':
         if (args.label is not None) == args.clear:
             raise Error('annotation_value','Supply a user label or --clear',2)
@@ -477,6 +482,8 @@ def revise_annotation(args, project, command):
     author = annotations.valid_text(args.author,'author',128)
     with project.writer():
         image = project.select(args.image,args.arch)
+        if address_selection is not None:
+            address_selection.update(image_id=image['image_id'],arch=image['arch'])
         snapshot,_ = project.snapshot(image)
         args = resolve_selector(args,project,image,snapshot)
         _,rows = annotations.read(project,image['image_id'])
@@ -525,6 +532,8 @@ def job_command(args, project, command):
             request = jobs.restart_request(record)
             receipt = None
             if mode == 'query' and request is not None:
+                if 'address_selection' in request:
+                    data['address_selection'] = request['address_selection']
                 result = jobs.query_receipt(project,record.get('resumed_from',args.job_id),request)
                 receipt = ({'job_id':result['data']['origin']['job_id'],'analysis_id':result['analysis_id']}
                            if result else None)
@@ -746,6 +755,15 @@ def resume_query(args, project, command, record, request):
             or record.get('source_analysis_id') != aid or record.get('selected_entry') != entry):
         raise Error('job_resume_inputs','The recorded fresh query belongs to different inputs',8)
     image = dict(project.select(image_id),active_analysis=aid)
+    address_selection = request.get('address_selection')
+    if address_selection is not None:
+        try:
+            observed = metadata.runtime_selection(address_selection['runtime_va'],address_selection['load_slide'])
+        except (Error, KeyError, TypeError) as error:
+            raise Error('job_manifest','Invalid recorded runtime address selection') from error
+        if (observed is None or dict(observed,image_id=image_id,arch=image['arch']) != address_selection
+                or observed['va'] != entry):
+            raise Error('job_resume_inputs','The recorded runtime address differs from the selected function',8)
     snapshot,source = project.snapshot(image)
     snapshot = flow_evidence.snapshot_view(snapshot)
     observed_revision,rows = annotations.read(project,image_id,at_revision=revision)
@@ -762,7 +780,8 @@ def resume_query(args, project, command, record, request):
         policy, _ = engine.SIGNATURE_RECOVERIES[fields[0]]
         signature_plan = policy.request(metadata.verified_slice(project,image),image,function,functions)
         recovery = engine.signature_request(signature_plan)
-    if (jobs.query_request(project,image,function,source,revision,hints,signature_recovery=recovery) != request
+    if (jobs.query_request(project,image,function,source,revision,hints,signature_recovery=recovery,
+                           address_selection=address_selection) != request
             or record.get('type_hint_view_id') != request['type_hint_view_id']
             or record.get('type_hints') != hints
             or any(record.get(key) != request.get(key) for key in jobs.SIGNATURE_RECOVERY_FIELDS)):
@@ -779,7 +798,8 @@ def resume_query(args, project, command, record, request):
         if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
             raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
         response = fresh_decompile(replay,project,image,function,source,revision,hints,
-                                   deps=deps,resumed_from=args.job_id,signature_plan=signature_plan)
+                                   deps=deps,resumed_from=args.job_id,signature_plan=signature_plan,
+                                   address_selection=address_selection)
     response = flow_evidence.query_view(response,function)
     data = response['data']
     reused = reused or data['origin']['job_id'] == args.job_id
@@ -1080,6 +1100,14 @@ def verify_doctor_worker(deps):
 
 
 def execute(a):
+    selection = metadata.runtime_selection(getattr(a,'runtime_address',None),getattr(a,'load_slide',None))
+    if selection is None:
+        return execute_command(a)
+    args = argparse.Namespace(**dict(vars(a),address=selection['va']))
+    return dict(execute_command(args,selection),address_selection=selection)
+
+
+def execute_command(a, address_selection=None):
     limits(a)
     xref_address = None
     if a.command == 'xrefs':
@@ -1186,7 +1214,7 @@ def execute(a):
     if a.command == 'jobs':
         return job_command(a,p,command)
     if a.command == 'rename' or (a.command in ('comment','type') and a.action != 'list'):
-        return revise_annotation(a,p,command)
+        return revise_annotation(a,p,command,address_selection)
     if a.command == 'annotations' and a.action == 'import':
         return import_annotations(a,p)
     if fresh or a.command in ('import','analyze'):
@@ -1201,6 +1229,8 @@ def execute(a):
                 return import_inputs(a,p,deps)
             return analyze_image(p,p.select(a.image,a.arch),a,deps,command)
     image=p.select(a.image,a.arch)
+    if address_selection is not None:
+        address_selection.update(image_id=image['image_id'],arch=image['arch'])
     if a.command=='headers':
         data=metadata.headers(p,image)
         gaps=metadata.loader_gaps([data])
@@ -1327,7 +1357,8 @@ def execute(a):
         policy = next((policy for enabled, policy in ((recover_switch, switch_tables), (recover_forwarded, forwarded_returns), (recover_parameters, callee_parameters),
                       (recover_scalar, scalar_signatures), (recover_direct, direct_signatures), (recover_dispatch, dispatch_returns)) if enabled), None)
         plan = policy.request(metadata.verified_slice(p,image),image,f,functions) if policy else None
-        return flow_evidence.query_view(fresh_decompile(a,p,image,f,record,revision,hints,signature_plan=plan),f)
+        return flow_evidence.query_view(fresh_decompile(a,p,image,f,record,revision,hints,signature_plan=plan,
+                                                       address_selection=address_selection),f)
     if a.command=='calls':
         data,gaps=calls.graph(dict(snapshot,functions=functions),f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])
@@ -1385,6 +1416,8 @@ def render(result,fmt):
         return html_export.render(result)
     if fmt=='dot':
         rows=['digraph cfg {','  // status: '+result['status']+'; bounded static evidence, not exhaustive runtime flow']
+        if selection := result.get('address_selection'):
+            rows.append(f"  // runtime VA {selection['runtime_va']} with slide {selection['load_slide']} selects {selection['va']}")
         for b in result['data']['blocks']:
             rows.append('  '+json.dumps(b['min'])+' [label='+json.dumps(b['min']+'..'+b['max'])+'];')
             for edge in b['dsts']:rows.append('  '+json.dumps(b['min'])+' -> '+json.dumps(edge['to'])+' [label='+json.dumps(edge['flow'])+'];')

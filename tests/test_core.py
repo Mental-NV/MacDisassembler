@@ -822,6 +822,21 @@ class CliTests(TemporaryCase):
                 self.error('file_offset_base_mismatch', cli.execute,
                            self.args('functions', 'show', '--file-offset', '0x100'))
 
+    def test_runtime_function_selection_uses_the_saved_entry_and_annotation_identity(self):
+        runtime = ('--runtime-address', '0x100004020', '--load-slide', '+0x4000')
+        unslid = ('--address', '0x100000020')
+        renamed = cli.execute(self.args('rename', 'Runtime review', *runtime))
+        self.assertEqual(renamed['data']['revision']['engine_entry'], '0x100000020')
+        for command in (('functions', 'show'), ('decompile',), ('disasm',), ('cfg',),
+                        ('calls',), ('xrefs',), ('annotations', 'history')):
+            with self.subTest(command=command):
+                result = cli.execute(self.args(*command, *runtime))
+                self.assertEqual(result.pop('address_selection'), {
+                    'runtime_va': '0x100004020', 'load_slide': '0x4000', 'va': '0x100000020',
+                    'image_id': self.workspace.select()['image_id'], 'arch': 'arm64', 'address_space': 'ram',
+                })
+                self.assertEqual(result, cli.execute(self.args(*command, *unslid)))
+
     def test_search_finds_literal_names_symbols_strings_and_pseudocode_without_engine(self):
         with mock.patch.object(engine, 'dependencies') as deps, mock.patch.object(engine, 'run') as run:
             anchors = cli.execute(self.args('search', 'REFERENCE+ANCHOR'))

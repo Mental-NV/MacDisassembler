@@ -99,9 +99,24 @@ def records(args, project, image, snapshot):
 
 
 def hex_address(value, label):
-    if not VA.fullmatch(value):
+    if not isinstance(value, str) or not VA.fullmatch(value):
         raise Error("address", f"{label} must be a hexadecimal 64-bit value", 2)
     return int(value, 16)
+
+
+def runtime_selection(address, slide):
+    if address is None and slide is None:
+        return None
+    if address is None or slide is None:
+        raise Error("load_slide", "Use --runtime-address and --load-slide together", 2)
+    runtime = hex_address(address, "Runtime virtual address")
+    if not isinstance(slide, str) or not re.fullmatch(r"[+-]?0x[0-9a-fA-F]{1,16}", slide):
+        raise Error("load_slide", "Load slide must be a signed or unsigned hexadecimal value", 2)
+    offset = int(slide, 16)
+    va = runtime - offset
+    if not 0 <= va < 2**64:
+        raise Error("address", "Runtime address minus load slide is outside the unslid 64-bit address space", 2)
+    return {"runtime_va": hex(runtime), "load_slide": hex(offset), "va": hex(va), "address_space": "ram"}
 
 
 def preferred_base(project, image, data=None):

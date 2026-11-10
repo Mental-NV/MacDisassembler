@@ -119,6 +119,33 @@ class QueryResumeTests(TemporaryCase):
         self.assertEqual((detail["status"], detail["publication_status"]), ("complete", "not_published"))
         self.assertEqual(self.workspace.select()["active_analysis"], self.latest)
 
+    def test_runtime_selection_is_verified_and_replayed_with_the_receipt(self):
+        selection = {"runtime_va": "0x100004000", "load_slide": "0x4000", "va": self.entry,
+                     "address_space": "ram", "image_id": self.image_id, "arch": "arm64"}
+        self.request["address_selection"] = dict(selection, runtime_va="0x100004001")
+        storage.write_json(self.prior_path, self.record, force=True)
+        with patch.object(engine, "run") as run:
+            self.error("job_resume_inputs", self.resume)
+            run.assert_not_called()
+
+        self.request["address_selection"] = selection
+        storage.write_json(self.prior_path, self.record, force=True)
+        with (patch.object(engine, "dependencies", return_value=self.deps),
+              patch.object(engine, "run", side_effect=self.worker) as run):
+            self.assertEqual(self.resume()["address_selection"], selection)
+            repeated = self.resume()
+            self.assertEqual(repeated["address_selection"], selection)
+            self.assertTrue(repeated["data"]["reused_restart"])
+            run.assert_called_once()
+        detail = cli.execute(self.args("jobs", "show", self.prior))["data"]
+        self.assertEqual(detail["address_selection"], selection)
+        path = self.prior_path.with_name("query-result.json")
+        receipt = json.loads(path.read_bytes())
+        receipt["result"]["address_selection"]["load_slide"] = "0x5000"
+        receipt["result_sha256"] = storage.identity(receipt["result"])
+        storage.write_json(path, receipt, force=True)
+        self.error("query_receipt", self.resume)
+
     def test_unconfirmed_exit_and_changed_hints_refuse_replay(self):
         with patch.object(engine, "run") as run:
             storage.write_json(self.prior_path, dict(self.record, status="running"), force=True)

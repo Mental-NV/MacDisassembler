@@ -187,6 +187,10 @@ def render(result):
     report.line(f"macscope {safe(command)}  [{safe(result['status'])}]")
     if result.get("analysis_id"):
         report.field("Analysis", result["analysis_id"])
+    if selection := result.get("address_selection"):
+        report.field("Runtime VA", selection["runtime_va"])
+        report.field("Load slide", selection["load_slide"])
+        report.field("Unslid VA", selection["va"])
     cov = result["coverage"]
     total = cov["known_total"] if cov["known_total"] is not None else "unknown"
     report.line(f"Coverage  {safe(cov['scope'])}  ({safe(cov['status'])})")

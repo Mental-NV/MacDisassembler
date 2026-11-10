@@ -94,6 +94,10 @@ collections exceed documented bounds despite successful pseudocode output.
   The installed CLI verified equivalent selections, annotation history,
   and fresh receipt replay on owned thin and universal images. Four
   owned dylib and bundle probes also passed with a zero image base.
+- [x] Select functions and bytes by [runtime address and load slide](cli.md#implemented-commands).
+  All 28 runtime queries matched the unslid evidence on owned arm64 and
+  x86_64 thin and universal slices. Fresh queries retained the supplied
+  slide on receipt replay, including an x86_64 publication retry.
 - [x] Link available Ghidra pseudocode tokens to machine addresses. The
   arm64/x86_64 thin and universal integration checked cached and fresh links.
 - [x] Measure 20 rounds of CLI latency on the development Mac. See the

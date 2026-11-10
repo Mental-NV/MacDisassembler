@@ -92,6 +92,33 @@ class MetadataQueryTests(unittest.TestCase):
         self.assertIsNone(metadata.mapped_location(image, 0x8, 8, from_file=True))
         self.assertIsNone(metadata.mapped_location(image, 0x14, 1, from_file=False))
 
+    def test_runtime_byte_selection_preserves_the_unslid_evidence(self):
+        expected = self.query("bytes", "--address", "0x100000100", "--length", "4")
+        for runtime, slide in (("0x100010100", "0x10000"), ("0xfff00100", "-0x100000"),
+                               ("0x100000100", "0x0")):
+            with self.subTest(runtime=runtime, slide=slide):
+                observed = self.query("bytes", "--runtime-address", runtime, "--load-slide=" + slide,
+                                      "--length", "4")
+                self.assertEqual(observed.pop("address_selection"), {
+                    "runtime_va": runtime, "load_slide": slide, "va": "0x100000100",
+                    "image_id": expected["data"]["image_id"], "arch": "arm64", "address_space": "ram",
+                })
+                self.assertEqual(observed, expected)
+
+        for selector, code in (
+            (("--runtime-address", "0x1"), "load_slide"),
+            (("--address", "0x100000100", "--load-slide", "0x0"), "load_slide"),
+            (("--runtime-address", "1", "--load-slide", "0x0"), "address"),
+            (("--runtime-address", "0x1", "--load-slide", "4096"), "load_slide"),
+            (("--runtime-address", "0x0", "--load-slide", "0x1"), "address"),
+            (("--runtime-address", "0xffffffffffffffff", "--load-slide=-0x1"), "address"),
+            (("--runtime-address", "0x1", "--load-slide", "0x10000000000000000"), "load_slide"),
+            (("--runtime-address", "0x1", "--load-slide", "0x0", "--rva", "0x100"), "usage"),
+        ):
+            with self.subTest(selector=selector), self.assertRaises(Error) as rejected:
+                self.query("bytes", *selector, "--length", "4")
+            self.assertEqual(rejected.exception.code, code)
+
     def test_string_encoding_cursors_and_verified_byte_evidence(self):
         payload = b"abc\0"
         data = self.input.read_bytes()[:-len(payload)] + payload

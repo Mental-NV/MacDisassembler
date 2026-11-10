@@ -169,16 +169,36 @@ and refuses an existing path. For a universal input import requires explicit
 Ghidra. Reimporting an already imported immutable identity is idempotent.
 An image operation requires a unique `--image ID` and/or `--arch` when the
 workspace has multiple images. A function selector accepts one of
-`--name EXACT`, `--function-id ID`, `--address 0xUNSLID_VA`, `--rva 0xRVA`, or
-`--file-offset 0xOFFSET`. Duplicate names return candidates. Address-based
-selectors identify **function entries**.
+`--name EXACT`, `--function-id ID`, `--address 0xUNSLID_VA`, `--rva 0xRVA`,
+`--file-offset 0xOFFSET`, or `--runtime-address 0xRUNTIME_VA --load-slide SLIDE`.
+Duplicate names return candidates. Address-based selectors identify
+**function entries**.
 
 `--rva` is relative to the Mach-O's preferred image base. `--file-offset`
 is relative to the selected Mach-O slice, including in a universal
 binary. A function offset must map to one file-backed section and a
 saved entry. Both selectors reject a disagreement between the Mach-O
-and recorded Ghidra image bases. All three address forms use hexadecimal
-numbers.
+and recorded Ghidra image bases. Address selectors use hexadecimal numbers.
+
+Use a supplied slide to select a function or read file-backed bytes from a
+runtime address. The CLI subtracts the slide and uses the resulting unslid
+address. Use `--load-slide=-0x4000` for a negative slide. The result's
+`address_selection` records the runtime VA, slide, unslid VA, image and
+architecture. Instructions, references and byte offsets still use their
+saved coordinates. Fresh decompilation records the selection in the job
+and receipt so `jobs show` and `jobs resume` can return it.
+
+```sh
+macscope bytes --project workspaces/calculator --arch arm64 \
+  --runtime-address 0x100004100 --load-slide 0x4000 --length 4 --json
+```
+
+The installed wheel matched 28 runtime and unslid query pairs after full
+Ghidra analysis of owned arm64 and x86_64 thin and universal slices. Byte
+reads matched the source files. Both universal slices preserved the slide
+on receipt replay, including an x86_64 retry after a controlled write
+failure. The validation report SHA-256 is
+`d061bdc5622fc8978e357f347e48cbc6db2e117e38acf6843ec216b2895dccf7`.
 
 Use `disasm --range START:END` to read committed Ghidra instructions
 across function boundaries. Both addresses are unslid hexadecimal VAs
@@ -740,11 +760,12 @@ matched `nm` on all 38 reported candidates. All eight retained names in the
 imported stripped arm64 library demangled before Ghidra analysis.
 
 `bytes` reads 1–4096 bytes from the immutable selected slice before or after
-analysis. Use `--address 0xVA` or `--rva 0xRVA` for a range within one
-unambiguous file-backed section. Use `--file-offset 0xOFFSET` for any byte
-range within the slice, including its header. The response includes both
-slice and container offsets. VA, RVA, and address space are null where the
-file range has no unambiguous section mapping.
+analysis. Use `--address 0xVA`, `--rva 0xRVA`, or `--runtime-address` with
+`--load-slide` for a range within one unambiguous file-backed section. Use
+`--file-offset 0xOFFSET` for any byte range within the slice, including its
+header. The response includes both slice and container offsets. VA, RVA,
+and address space are null where the file range has no unambiguous section
+mapping.
 
 The installed CLI compared VA, RVA, and slice-offset selection on six
 owned stock Ghidra calculator captures. All selectors returned the same
