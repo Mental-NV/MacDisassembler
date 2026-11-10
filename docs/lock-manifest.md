@@ -63,12 +63,19 @@ Do not compare these fields as if their definitions were the same.
 
 ## Isolation (tested)
 
-- `sandbox-exec -f analysis/nonet.sb` (`(deny network*)`, `(allow default)`)
-  verified: sandboxed TCP connect fails with EPERM, unsandboxed times out.
-  All 16 baselines ran under this profile.
-- Not claimed: filesystem confinement (none), sandboxing of untrusted
-  inputs in general (inputs limited to our own fixtures by runner design).
-- Outputs written with umask 077 (owner-only) under ignored `build/`.
+- The historical 16 captures used `analysis/nonet.sb`. Its network
+  control denied a sandboxed TCP connection with EPERM.
+- The current runner creates a Seatbelt profile, home, settings, cache
+  and temporary directory per capture. It denies network access,
+  confines writes to the case directory and `/dev/null`, and blocks
+  reads outside the case within the repository, build, sibling run and
+  private home and temporary roots. It denies execution from the case
+  directory. The worker reads a staged binary and two pinned scripts.
+- Before each launch, the same profile checks a successful staged read,
+  denied writes to the input and sibling canary, and denied reads of the
+  source, original binary, sibling canary and evaluator dSYM when present.
+  This is a fixture isolation policy for trusted owned binaries.
+- Outputs use umask 077 and a new private run directory.
 
 ## Hardened direct runner
 
@@ -78,7 +85,8 @@ Do not compare these fields as if their definitions were the same.
   analyzes the selected matrix and freezes a new isolated experiment.
 - Full Ghidra 12.2 remains the only selected engine. Loader class is
   `MachoLoader`, with `-loader-loadLibraries false` and
-  `-loader-linkExistingProjectLibraries false`. Trusted pre/post scripts
+  `-loader-linkExistingProjectLibraries false` and `-loader-reexport false`.
+  Trusted pre/post scripts
   only; no scripts or library paths discovered from input directories.
 - Trusted pre-script explicitly disables DWARF/PDB/source/external symbol
   discovery, including when an analyzer is inapplicable/unregistered.

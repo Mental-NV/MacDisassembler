@@ -226,14 +226,14 @@ The installed-command audit record SHA-256 is
 
 The [calculator baseline](phase1-findings.md#historical-experiment-semantics-v10)
 froze its outputs before source-aware evaluation by the same developer.
-The source-denied [diagnostic run](direct-signatures.md#installed-cli-validation)
-covers selected binary-derived queries. Evidence for the separately blinded
-analyst comparison across the three
-[specified conditions](specification.md#84-blind-analysis-and-controlled-assistance)
-is still open. The [optimized baseline measurement](wide-division.md#paired-evidence)
+The [isolated rerun](phase1-findings.md#isolated-binary-captures) now verifies
+machine-level source separation for the stripped and symbol-bearing
+conditions. The separately labeled source/dSYM-assisted diagnostic and
+clean-context qualitative review remain open under the
+[specified conditions](specification.md#84-blind-analysis-and-controlled-assistance).
+The [optimized baseline measurement](wide-division.md#paired-evidence)
 also records a shortfall against the proposed 90% instruction-byte
-threshold. These are separate from the installed command and selected
-Calendar acceptance checks.
+threshold.
 
 ## Phase-2 boundaries still open
 
@@ -429,6 +429,10 @@ collections exceed documented bounds despite successful pseudocode output.
   with tool provenance. Broader Swift metadata decoding remains open.
 - [x] Run source-aware recovered-C calibration for the two scalar comparison
   functions. [Measured scope and results](parameter-inference.md#recovered-scalar-behavior-calibration).
+- [x] Freeze and score [isolated binary-only and symbol-bearing captures](phase1-findings.md#isolated-binary-captures).
+  All 16 owned captures passed their source, dSYM and sibling isolation
+  probes. Each condition recovered and decompiled all 120 controlled
+  entries. The evaluator verified the freeze before opening its mapping.
 - [x] Measure 100% branch-direction coverage for the owned reference core
   with directed and seeded stateful tests. See
   [reference coverage](semantics.md#reference-core-coverage).

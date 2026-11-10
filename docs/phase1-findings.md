@@ -242,6 +242,35 @@ outputs are neither regenerated in place nor relabeled consistent with v1.1.
   JSON, summary/status rejection, output/log limits, owned timeout with an
   unrelated process left alive, and raw section hashing.
 
+## Isolated binary captures
+
+The current [direct runner](lock-manifest.md#hardened-direct-runner) repeated
+all 16 app and tool captures on owned arm64 and x86_64 inputs at O0 and
+O2. Eight runs used stripped inputs and eight used the permitted symbol
+table. Each staged binary matched its build manifest. All workers verified
+their own input, processor language, and compiler specification.
+
+The same policy used by each worker allowed its staged read, denied
+writes to the staged binary and sibling canary, and denied four reads.
+The blocked files were calculator source, the evaluator dSYM, the
+unstaged binary and a sibling canary. Each worker had its own home,
+settings, cache and temporary directory. The original read allowlist
+pilot also blocked system command startup. The verified policy instead
+denies reads from the protected artifact roots and permits system reads.
+
+The evaluator verified 16 Ghidra and 16 LLVM files against the freeze
+before reading its mapping. Recall and inspectable pseudocode were
+120/120 in each condition. LLVM matched instruction boundaries and bytes
+for the eight sampled arm64 O0 routines within the reported Ghidra
+bodies. These measurements cover discovery and completion. Body accuracy
+and behavioral equivalence have separate checks.
+
+The evaluator was source-aware. The explicitly assisted diagnostic and
+separate qualitative review remain open. The private freeze SHA-256 is
+`4730eb0f0456ae89ffbba28ac1ea0fc88807514509f85eb94e60224df7942923`.
+The evaluation SHA-256 is
+`f58f0584ca2290f839c5378f86be516bb0bf53079db52f2889ed43d19cfc6748`.
+
 ## Remaining limitations
 
 Seatbelt denies network, **not filesystem access**. Source and dSYM trees
