@@ -871,6 +871,34 @@ class CliTests(TemporaryCase):
         rejected = cli.execute(self.args('evidence','--leads',str(path)))['data']
         self.assertTrue(all(row['reason']=='evidence_image_mismatch' for row in rejected['leads']))
 
+    def test_evidence_html_preserves_all_leads_and_escapes_evidence(self):
+        image = self.snapshot['image']
+        pin = dict(image_id=image['image_id'], arch=image['arch'], artifact_sha256=image['artifact_sha256'],
+                   slice_sha256=image['sha256'], analysis_id=self.snapshot['analysis_id'])
+        hostile = '</pre><script>alert(1)</script><img src="https://example.invalid/leak">'
+        leads = [dict(id=key, image_id=image['image_id'], kind=kind, value=value) for key, kind, value in (
+            ('chosen', 'address', '0x100000020'), ('missing', 'name', hostile))]
+        manifest = self.root / 'leads.json'
+        storage.write_json(manifest, dict(schema=evidence.LEADS_SCHEMA, images=[pin], leads=leads))
+        self.snapshot['functions'][2]['pseudocode'] = hostile + ' /Users/private/fixture \x1b\u202e'
+        source = {'snapshot_sha256': 'a' * 64}
+        destination = self.root / 'evidence.html'
+        args = ['evidence', '--project', str(self.workspace.path), '--leads', str(manifest), '--format', 'html']
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(self.snapshot, source)), \
+             mock.patch.object(engine, 'dependencies', side_effect=AssertionError('handoff launched Ghidra')):
+            code, html, stderr = self.invoke(args)
+            self.assertEqual((code, stderr), (6, ''))
+            self.assertEqual(self.invoke([*args, '--output', str(destination)]), (6, b'', ''))
+        self.assertEqual(destination.read_bytes(), html)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o600)
+        for expected in (b'<dt>Status</dt><dd>partial</dd>', b'href="#lead-1">chosen', b'href="#lead-2">missing',
+                         b'function-2', b'0x100000020  c0035fd6  ret', b'lead_not_found', b'Pinned images',
+                         b'&lt;/pre&gt;&lt;script&gt;alert(1)&lt;/script&gt;', b'$HOME/fixture \\u001b\\u202e',
+                         b'Content-Security-Policy'):
+            self.assertIn(expected, html)
+        for unsafe in (b'<script', b'<img', b'/Users/private', b'\x1b', '\u202e'.encode()):
+            self.assertNotIn(unsafe, html)
+
     def test_focused_receipt_binds_result_digest_to_its_producing_job(self):
         image = self.snapshot['image']
         proof = {'entry_va':'0x100000020','end_va_exclusive':'0x100000024',

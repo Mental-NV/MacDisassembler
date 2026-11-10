@@ -1,4 +1,4 @@
-"""Render a private, standalone view of a committed analysis envelope."""
+"""Render private, standalone views of committed evidence."""
 import base64
 import hashlib
 from html import escape
@@ -38,8 +38,30 @@ def function_label(function):
 
 
 class Report:
-    def __init__(self):
+    def __init__(self, title, heading, fields, coverage):
         self.buffer = io.BytesIO()
+        self.add(f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-{STYLE_HASH}'; base-uri 'none'; form-action 'none'">
+<title>{text(title)}</title>
+<style>{STYLE}</style>
+</head>
+<body>
+<main>
+<header>
+<p>{text(title)}</p>
+<h1>{text(heading)}</h1>
+<p>Private analysis data. The report may contain recovered code and strings.</p>
+<dl>
+""")
+        for label, value in (*fields, ("Coverage", coverage["status"])):
+            self.add(f"<dt>{label}</dt><dd>{text(value)}</dd>\n")
+        if reason := coverage.get("truncation_reason"):
+            self.add(f"<dt>Coverage gap</dt><dd>{text(reason)}</dd>\n")
+        self.add("</dl>\n</header>\n")
 
     def add(self, markup):
         encoded = markup.encode("utf-8")
@@ -52,6 +74,10 @@ class Report:
         for chunk in JSON.iterencode(value):
             self.add(escape(chunk))
         self.add("</pre></details>\n")
+
+    def finish(self):
+        self.add("</main>\n</body>\n</html>\n")
+        return self.buffer.getvalue()
 
     def function(self, index, function):
         status = text(function.get("decompile_status"))
@@ -82,35 +108,16 @@ class Report:
 def render(result):
     snapshot = result["data"]
     image, engine, functions = (snapshot[key] for key in ("image", "engine", "functions"))
-    report = Report()
-    report.add(f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-{STYLE_HASH}'; base-uri 'none'; form-action 'none'">
-<title>Macscope analysis report</title>
-<style>{STYLE}</style>
-</head>
-<body>
-<main>
-<header>
-<p>Macscope analysis report</p>
-<h1>{text(image.get("input_name") or "Committed image")}</h1>
-<p>Private analysis data. The report may contain recovered code and strings.</p>
-<dl>
-""")
-    for label, value in (
+    fields = (
         ("Analysis ID", result["analysis_id"]), ("Image ID", image["image_id"]),
         ("Architecture", image["arch"]), ("Slice SHA-256", image.get("sha256")),
         ("Ghidra version", engine.get("ghidra_version")),
         ("Profile", snapshot.get("identity", {}).get("profile")), ("Status", result["status"]),
-        ("Functions shown", len(functions)), ("Coverage", result["coverage"]["status"]),
-    ):
-        report.add(f"<dt>{label}</dt><dd>{text(value)}</dd>\n")
-    if reason := result["coverage"].get("truncation_reason"):
-        report.add(f"<dt>Coverage gap</dt><dd>{text(reason)}</dd>\n")
-    report.add("</dl>\n</header>\n<h2>Analysis evidence</h2>\n")
+        ("Functions shown", len(functions)),
+    )
+    report = Report("Macscope analysis report", image.get("input_name") or "Committed image",
+                    fields, result["coverage"])
+    report.add("<h2>Analysis evidence</h2>\n")
     report.evidence("Manifest, coverage and diagnostics",
                     dict(result, data={key: value for key, value in snapshot.items()
                                        if key not in ("image", "engine", "functions", "annotations")}))
@@ -128,5 +135,44 @@ def render(result):
             report.function(index, function)
     else:
         report.add("<p>The snapshot contains zero function records.</p>\n")
-    report.add("</main>\n</body>\n</html>\n")
-    return report.buffer.getvalue()
+    return report.finish()
+
+
+def render_handoff(result):
+    data = result["data"]
+    leads = data["leads"]
+    fields = (("Manifest SHA-256", data["manifest_sha256"]), ("Authority", data["authority"]),
+              ("Status", result["status"]), ("Leads shown", len(leads)))
+    report = Report("Macscope evidence handoff", "Pinned evidence leads", fields, result["coverage"])
+    report.evidence("Handoff metadata", dict(result, data={key: value for key, value in data.items()
+                                                          if key not in ("images", "leads")}))
+    report.evidence("Pinned images", data["images"])
+    report.add('<nav aria-label="Lead index"><ol>\n')
+    for index, row in enumerate(leads, 1):
+        report.add(f'<li><a href="#lead-{index}">{text(row["lead"]["id"])}</a> '
+                   f'({text(row["status"])})</li>\n')
+    report.add("</ol></nav>\n")
+    for index, row in enumerate(leads, 1):
+        lead = row["lead"]
+        report.add(f'<section id="lead-{index}">\n<h2>{text(lead["id"])}</h2>\n'
+                   f'<p><code>{text(lead["kind"])}</code> <code>{text(lead["value"])}</code> '
+                   f'<span class="status">({text(row["status"])})</span></p>\n')
+        if row["reason"]:
+            report.add(f'<p><strong>Reason</strong> <code>{text(row["reason"])}</code></p>\n')
+        if row["gaps"]:
+            report.add("<p>Coverage gaps</p>\n<ul>\n")
+            for gap in row["gaps"]:
+                report.add(f"<li><code>{text(gap)}</code></li>\n")
+            report.add("</ul>\n")
+        report.evidence("Selection and match evidence", {key: row[key] for key in
+                        ("lead", "matches", "match_references", "candidates")})
+        if row["function"] is not None:
+            report.function(index, row["function"])
+        if "declared_imports" in row:
+            report.evidence("Declared imports", row["declared_imports"])
+        if query := row["query"]:
+            if pseudocode := query.get("pseudocode"):
+                report.add(f"<details><summary>Saved query pseudocode</summary><pre>\n{text(pseudocode)}</pre></details>\n")
+            report.evidence("Saved query evidence", {key: value for key, value in query.items() if key != "pseudocode"})
+        report.add("</section>\n")
+    return report.finish()

@@ -99,6 +99,13 @@ decision. Reuse recorded observations for gestures already covered.
   caller and declared library link. Recapturing the original with new
   worker jobs changed provenance only. The comparison and cursor replayed
   with the engine unavailable.
+- [x] **Render the pinned Calendar handoff as private HTML.**
+  [`evidence --format html`](cli.md#selected-evidence-handoff) retained
+  every lead and its image, selected code, references, declared linkage
+  and coverage from JSON. The installed wheel verified ten leads across
+  analyzed arm64 and x86_64 handoffs and a focused arm64 handoff. Both
+  partial and complete results replayed byte for byte with Ghidra
+  unavailable, and output files had owner-only permissions.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

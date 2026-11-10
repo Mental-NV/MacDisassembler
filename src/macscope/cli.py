@@ -242,8 +242,8 @@ def parser():
             s.add_argument('--parameters',action='store_true',help='Clear the parameter list hint')
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl','html'))
     s.add_argument('--include-annotations',action='store_true')
-    s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed analyses')
-    common(s,('json',));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
+    s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed evidence')
+    common(s,('json','html'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left JSON export or evidence handoff')
@@ -1718,6 +1718,8 @@ def render(result,fmt):
     if fmt=='text':
         return terminal.render(result)
     if fmt=='html':
+        if result['command']=='evidence':
+            return html_export.render_handoff(result)
         return html_export.render(result)
     if fmt=='dot':
         rows=['digraph cfg {','  // status: '+result['status']+'; bounded static evidence, not exhaustive runtime flow']

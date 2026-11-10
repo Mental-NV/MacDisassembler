@@ -1490,7 +1490,13 @@ becomes active. It reads saved evidence without starting Ghidra or a JDK.
 ```sh
 macscope evidence --project workspaces/calendar --leads calendar-leads.json \
   --output private-calendar-evidence.json --json
+macscope evidence --project workspaces/calendar --leads calendar-leads.json \
+  --output private-calendar-evidence.html --format html
 ```
+
+The HTML view has a lead index and includes the same pinned images,
+selection outcomes, saved code and coverage as the JSON. It uses local
+links and expandable evidence records. Use JSON for cross-build comparison.
 
 The lead file uses schema `macscope-evidence-leads/1`. Copy the image ID,
 architecture, artifact SHA-256 and slice `sha256` from `headers`. Use the
