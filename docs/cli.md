@@ -81,6 +81,11 @@ Successful `--output` writes only the file, not a duplicate stdout response.
 Output must be separate from selected input files and outside selected app
 bundles and managed project storage. An output conflict exits 8 even with
 `--force`. Reports may be written to a separate file at the project root.
+Publication uses the directory opened without following symlinks. A
+replacement of that directory detected before publication aborts the write.
+If the path changes at commit time, the report stays in the original
+directory and the `output_directory_changed` error reports
+`published_in_original_directory` in its partial results.
 The `export` command also supports a [standalone HTML report](#private-html-export).
 
 The installed CLI rejected 19 conflicting destinations, including hard
@@ -90,6 +95,14 @@ and all 162 managed project files retained their hashes. Separate exports
 inside and outside the project were private and supported explicit replacement.
 The validation report SHA-256 is
 `15457e87d395ed33006f75d8c972615c96a0a5b608787cc8ab5d9f2e85c6e0e2`.
+
+A second installed run repeated the headless workflow and swapped the
+report directory for a symlink to the analyzed workspace before staging
+and during commit. Both swaps returned exit 8 and preserved all 163 files
+in the workspace. The late swap left a complete report in the original
+directory and reported that publication in the error response.
+The validation report SHA-256 is
+`78759dd7264a6e0337947a4ab970da531fa656f02980381966c313ea4e93855f`.
 
 ```sh
 macscope --version

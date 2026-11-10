@@ -348,6 +348,10 @@ collections exceed documented bounds despite successful pseudocode output.
   after validating both owned architectures through full headless Ghidra.
   Input and project hashes matched, and separate reports supported private
   creation and explicit replacement.
+- [x] Bind [atomic output publication](cli.md#implemented-commands) to the
+  opened directory. The installed CLI detected early and late directory
+  swaps after full headless analysis of both owned architectures, preserved
+  all 163 workspace files and reported the late publication explicitly.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

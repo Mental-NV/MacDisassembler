@@ -7,10 +7,10 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-import tempfile
+import stat
 import uuid
 from .errors import Error
-from .macho import checked_path, read_regular
+from .macho import checked_path, open_directory, read_regular
 
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
 WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
@@ -26,35 +26,65 @@ def identity(value):
     return hashlib.sha256(canonical(value)).hexdigest()
 
 
-def atomic(path, data, force=False, mode=0o600):
-    path = Path(path)
-    checked_path(path.parent, directory=True)
-    if path.is_symlink():
-        raise Error('symlink', 'Output must not be a symlink')
-    if path.exists() and not force:
-        raise Error('output_exists', 'Output exists; use --force to replace', 8)
-    fd, tmp = tempfile.mkstemp(prefix='.macscope-', dir=path.parent)
+def output_directory_matches(parent, directory):
     try:
-        os.fchmod(fd, mode)
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if force:
-            os.replace(tmp, path)
-        else:
-            os.link(tmp, path)  # atomic no-replace publication
-            os.unlink(tmp)
-        dfd = os.open(path.parent, os.O_RDONLY)
+        current = open_directory(parent)
         try:
-            os.fsync(dfd)
+            return os.path.samestat(os.fstat(directory), os.fstat(current))
         finally:
-            os.close(dfd)
-    except FileExistsError as e:
-        raise Error('output_exists', 'Output appeared during publication', 8) from e
+            os.close(current)
+    except OSError:
+        return False
+
+
+def check_output_entry(directory, name, force):
+    try:
+        current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(current.st_mode):
+        raise Error('symlink', 'Output must not be a symlink')
+    if not force:
+        raise Error('output_exists', 'Output exists; use --force to replace', 8)
+
+
+def atomic(path, data, force=False, mode=0o600):
+    path = Path(os.path.abspath(path))
+    parent = checked_path(path.parent, directory=True)
+    try:
+        directory = open_directory(parent)
+    except OSError as error:
+        raise Error('output_directory_changed', 'Output directory changed before publication', 8) from error
+    try:
+        check_output_entry(directory, path.name, force)
+        tmp = '.macscope-' + uuid.uuid4().hex
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                os.fchmod(stream.fileno(), mode)
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if not output_directory_matches(parent, directory):
+                raise Error('output_directory_changed', 'Output directory changed before publication', 8)
+            if force:
+                check_output_entry(directory, path.name, force)
+                os.replace(tmp, path.name, src_dir_fd=directory, dst_dir_fd=directory)
+            else:
+                os.link(tmp, path.name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+        except FileExistsError as error:
+            raise Error('output_exists', 'Output appeared during publication', 8) from error
+        finally:
+            try:
+                os.unlink(tmp, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+        os.fsync(directory)
+        if not output_directory_matches(parent, directory):
+            raise Error('output_directory_changed', 'Output was published in the original directory, but its path changed',
+                        8, partial={'published_in_original_directory': True})
     finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+        os.close(directory)
 
 
 def write_json(path, value, force=False, mode=0o600):

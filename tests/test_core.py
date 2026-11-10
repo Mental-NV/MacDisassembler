@@ -125,7 +125,7 @@ class AtomicStorageTests(TemporaryCase):
         target = self.root / 'output'
         real_link = os.link
         def race(src, dst, *args, **kwargs):
-            Path(dst).write_bytes(b'concurrent writer')
+            target.write_bytes(b'concurrent writer')
             return real_link(src, dst, *args, **kwargs)
         with mock.patch.object(storage.os, 'link', side_effect=race):
             self.error('output_exists', storage.atomic, target, b'ours')
@@ -156,6 +156,48 @@ class AtomicStorageTests(TemporaryCase):
         link.symlink_to(real, target_is_directory=True)
         self.error('symlink', storage.atomic, link / 'output', b'new')
         self.assertFalse((real / 'output').exists())
+
+    def test_replaced_directory_is_detected_before_publication(self):
+        directory = self.root / 'reports'
+        directory.mkdir()
+        target = directory / 'report.json'
+        moved = self.root / 'moved'
+        real_fsync = os.fsync
+
+        def replace_directory(fd):
+            directory.rename(moved)
+            directory.mkdir()
+            target.write_bytes(b'other report')
+            return real_fsync(fd)
+
+        with mock.patch.object(storage.os, 'fsync', side_effect=replace_directory):
+            error = self.error('output_directory_changed', storage.atomic, target, b'ours', force=True)
+        self.assertEqual(error.exit_code, 8)
+        self.assertEqual(target.read_bytes(), b'other report')
+        self.assertEqual(list(moved.iterdir()), [])
+
+    def test_replacement_stays_in_pinned_directory_at_commit(self):
+        directory = self.root / 'reports'
+        directory.mkdir()
+        outside = self.root / 'outside'
+        outside.mkdir()
+        victim = outside / 'report.json'
+        victim.write_bytes(b'preserve')
+        moved = self.root / 'moved'
+        real_replace = os.replace
+
+        def redirect(src, dst, **kwargs):
+            directory.rename(moved)
+            directory.symlink_to(outside, target_is_directory=True)
+            return real_replace(src, dst, **kwargs)
+
+        with mock.patch.object(storage.os, 'replace', side_effect=redirect):
+            error = self.error('output_directory_changed', storage.atomic, directory / victim.name, b'ours', force=True)
+        self.assertEqual(error.exit_code, 8)
+        self.assertEqual(error.partial, {'published_in_original_directory': True})
+        self.assertEqual(victim.read_bytes(), b'preserve')
+        self.assertEqual((moved / victim.name).read_bytes(), b'ours')
+        self.assertEqual(list(moved.glob('.macscope-*')), [])
 
 
 class ProjectTests(TemporaryCase):
@@ -1234,6 +1276,29 @@ class CliTests(TemporaryCase):
         self.assertEqual(code, 8)
         self.assertEqual(json.loads(output)['error']['code'], 'output_input_conflict')
         self.assertTrue(target.samefile(binary))
+
+    def test_output_directory_symlink_swap_preserves_selected_workspace(self):
+        workspace = self.workspace.path
+        manifest = workspace / 'project.json'
+        original = manifest.read_bytes()
+        directory = self.root / 'reports'
+        directory.mkdir()
+        moved = self.root / 'moved'
+        real_open = os.open
+
+        def redirect(path, flags, *args, **kwargs):
+            if isinstance(path, str) and path.startswith('.macscope-'):
+                directory.rename(moved)
+                directory.symlink_to(workspace, target_is_directory=True)
+            return real_open(path, flags, *args, **kwargs)
+
+        with mock.patch.object(storage.os, 'open', side_effect=redirect):
+            code, output, _ = self.invoke(['status', '--project', str(workspace), '--output',
+                                           str(directory / manifest.name), '--force', '--json'])
+        self.assertEqual(code, 8)
+        self.assertEqual(json.loads(output)['error']['code'], 'output_directory_changed')
+        self.assertEqual(manifest.read_bytes(), original)
+        self.assertEqual(list(moved.iterdir()), [])
 
     def test_partial_facet_returns_partial_status_and_exit_six(self):
         self.snapshot['functions'][0]['instructions_truncated'] = True

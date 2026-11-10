@@ -1297,18 +1297,19 @@ def main(argv=None):
     os.umask(0o077)
     args=None
     output=None
-    target=None
     try:
         args=parser().parse_args(argv)
         result=execute(args)
         validate_envelope(result)
         code=6 if result['status']=='partial' else 0
+        fmt=getattr(args,'format','json')
+        payload=render(result,fmt if not result.get('error') else 'json')
         if getattr(args,'output',None):
             destination=Path(os.path.abspath(args.output))
             protect_output(args,destination)
-            target=destination
-        fmt=getattr(args,'format','json')
-        output=render(result,fmt if not result.get('error') else 'json')
+            atomic(destination,payload,args.force)
+            return code
+        output=payload
     except Error as e:
         command=getattr(args,'command','unknown') if args else 'unknown'
         status = 'cancelled' if e.exit_code == 130 else 'failed'
@@ -1325,11 +1326,6 @@ def main(argv=None):
     if output is None:
         validate_envelope(result)
         output=render(result,'json')
-    try:
-        if target is not None and code in (0,6):atomic(target,output,args.force)
-        else:sys.stdout.buffer.write(output)
-    except Error as e:
-        sys.stderr.write(terminal.safe(e.code)+': '+terminal.safe(e)+'\n')
-        return e.exit_code
+    sys.stdout.buffer.write(output)
     if code not in (0,6):sys.stderr.write(terminal.safe(result.get('error',{}).get('message','Command failed'))+'\n')
     return code
