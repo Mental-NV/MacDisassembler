@@ -532,6 +532,13 @@ collections exceed documented bounds despite successful pseudocode output.
   owned Calendar fixture. Each failure recorded a job before launch.
   Clean retries and receipt replay passed in all three cases. The saved
   input, Program and snapshot digests and cached pseudocode matched.
+- [x] Reject [malformed worker reports](cli.md#validating-worker-reports)
+  before publication. Four owned Calendar jobs ran through full headless
+  Ghidra, then the CLI rejected injected damage to an import result, an
+  analysis result, a focused proof and a signature decision. The saved
+  Calendar state matched. Clean import and signature retries replayed
+  their receipts, a fresh arm64 rehearsal passed, and five archived
+  x86_64 import and query reports passed the new checks.
 - [x] Verify the [deep analysis profile](cli.md#deep-analysis-profile) with
   installed full Ghidra 12.2 on owned arm64 and x86_64 fixtures. Deep
   added three byte-checked data references per architecture, preserved

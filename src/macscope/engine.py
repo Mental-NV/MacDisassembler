@@ -20,7 +20,7 @@ from . import callee_parameters, direct_signatures, dispatch_returns, engine_che
 from . import focused
 from .annotations import MAX_TYPE_HINTS, structure_definitions
 from .errors import Error
-from .storage import canonical, identity, is_digest, write_json
+from .storage import canonical, identity, is_digest, strict_json, write_json
 from .macho import read_regular
 
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
@@ -376,6 +376,52 @@ def decompiler_timing(result, max_functions):
             'total_call_ns': sum(call['elapsed_ns'] for call in calls)}
 
 
+def read_worker_object(path, maximum):
+    result = strict_json(read_regular(path, maximum))
+    if not isinstance(result, dict):
+        raise ValueError('Expected a worker result object')
+    return result
+
+
+def record_array(value):
+    return isinstance(value, list) and all(isinstance(row, dict) for row in value)
+
+
+def validate_bridge_shape(result, max_functions, *, full_functions):
+    error = Error('bridge_result', 'Worker result has invalid status or evidence structure', 10)
+    status = result.get('status')
+    if status == 'failed':
+        return  # The bridge can fail before collecting its facets.
+    if status not in ('complete', 'partial'):
+        raise error
+    for key in ('coverage', 'validation', 'analysis_profile', 'effective_analysis_options'):
+        if not isinstance(result.get(key), dict):
+            raise error
+    if any(not isinstance(facet, dict) for facet in result['coverage'].values()):
+        raise error
+    for key in ('address_references', 'computed_flow_sites', 'imports', 'exports', 'sections', 'strings', 'symbols'):
+        if key in result and not record_array(result[key]):
+            raise error
+    functions = result.get('functions')
+    count = result.get('function_count_enumerated')
+    if (not record_array(functions) or type(count) is not int or count != len(functions)
+            or count > max_functions or (result['mode'] == 'import' and count)):
+        raise error
+    for function in functions:
+        coverage = function.get('coverage')
+        if (not isinstance(function.get('entry_va'), str) or not isinstance(coverage, dict)
+                or any(not isinstance(facet, dict) for facet in coverage.values())
+                or not isinstance(coverage.get('pseudocode', {}).get('status'), str)
+                or not isinstance(function.get('decompile_status'), str)
+                or type(function.get('pseudocode_truncated')) is not bool
+                or 'pseudocode' not in function or not isinstance(function['pseudocode'], (str, type(None)))):
+            raise error
+        if full_functions and (not isinstance(function.get('name'), str)
+                or not record_array(function.get('instructions')) or not record_array(function.get('blocks'))
+                or not isinstance(function.get('body_ranges'), list)):
+            raise error
+
+
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
         import_request=None, query_request=None, resumed_from=None, boundary_request=None, signature_plan=None,
         manual_request=None, from_import=False):
@@ -560,8 +606,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     try:
         if b'Skipping unsupported -loader-' in read_regular(job/'launcher.log',8*1024*1024):
             raise Error('loader_option_unsupported','Pinned loader rejected a requested safety option',4)
-        result = json.loads(read_regular(outfile,64*1024*1024))
-    except (ValueError, Error) as e:
+        result = read_worker_object(outfile,64*1024*1024)
+    except (ValueError, RecursionError, OSError, Error) as e:
         if isinstance(e,Error) and e.code=='loader_option_unsupported':
             manifest.update(status='failed',error={'code':e.code,'message':str(e)})
             write_json(job/'job.json',manifest,force=True)
@@ -576,6 +622,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                 or result.get('ghidra_version') != engine_checks.GHIDRA_VERSION
                 or result.get('bridge_version') != BRIDGE_VERSION):
             raise Error('bridge_contract', 'Bridge result version or mode mismatch', 4)
+        validate_bridge_shape(result,max_functions,full_functions=entry is None or from_import)
         runtime = result.pop('java_runtime', None)
         engine_checks.verify_runtime(runtime,deps['java_home'])
         manifest['java_runtime'] = runtime
@@ -607,8 +654,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             if result.get('validation', {}).get('headless_analysis_enabled') is not False:
                 raise Error('query_analysis', 'Focused query unexpectedly enabled autoanalysis', 10)
             try:
-                report = json.loads(read_regular(focus_report, 4096))
-            except (ValueError, Error) as error:
+                report = read_worker_object(focus_report, 4096)
+            except (ValueError, RecursionError, OSError, Error) as error:
                 raise Error('focused_worker_proof', 'Worker did not publish the selected range proof', 10) from error
             focused.verify(proof, payload, report, rows[0])
             if (tree_digest(source) != source_digest or
@@ -639,8 +686,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             report = None
             if signature_plan['requests'] or recovery_report.exists():
                 try:
-                    report = json.loads(read_regular(recovery_report,64*1024))
-                except (Error,ValueError) as error:
+                    report = read_worker_object(recovery_report,64*1024)
+                except (Error, ValueError, RecursionError, OSError) as error:
                     raise Error('signature_recovery_result', 'Worker did not publish a valid signature decision', 10) from error
             result[recovery_field] = dict(recovery_identity, **recovery_policy.decision(signature_plan,report))
         if mode == 'import' and result.get('validation',{}).get('headless_analysis_enabled') is not False:

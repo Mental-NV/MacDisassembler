@@ -31,6 +31,7 @@ def raw_result(name="baseline", mode="analyze"):
                 "body_ranges": [["0x100000000", "0x100000003"]],
                 "signature": "long function(long value)", "pseudocode": "return value + 1;",
                 "decompile_status": "complete", "is_external": False, "is_thunk": False,
+                "pseudocode_truncated": False, "coverage": {"pseudocode": {"status": "complete"}},
                 "blocks": [], "instructions": [{"addr": "0x100000000", "bytes": "c0035fd6",
                                               "text": "ret", "flow": "TERMINATOR", "fallthrough": None}]}
     return {"schema": "macscope-bridge/1", "mode": mode, "ghidra_version": "12.2",
@@ -38,6 +39,7 @@ def raw_result(name="baseline", mode="analyze"):
             "executable_format": "Mac OS X Mach-O", "executable_sha256": "b" * 64,
             "language_id": "AARCH64:LE:64:AppleSilicon", "compiler_spec_id": "default",
             "image_base": "0x100000000", "status": "complete", "functions": [function],
+            "function_count_enumerated": 1,
             "decompile_summary": {"attempted": 1},
             "decompiler_timing": {"open_program": {"opened": True, "elapsed_ns": 20},
                                   "calls": [{"entry": function["entry_va"], "elapsed_ns": 10}]},
@@ -302,6 +304,39 @@ class ProfileRunnerTests(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(json.loads(jobs[0].read_text())["status"], "failed")
         self.assertEqual(list((self.project.path / "snapshots").glob("*")), [])
+
+    def test_invalid_bridge_json_and_evidence_shape_record_failed_jobs(self):
+        raw = raw_result()
+        raw['java_runtime'] = {'home': self.deps['java_home'], 'version': '25.0.5.0.3', 'arch': 'aarch64'}
+        valid = storage.canonical(raw)
+        function = raw['functions'][0]
+        invalid = {
+            'nonobject': b'[]',
+            'duplicate': b'{"status":"failed",' + valid[1:],
+            'nonfinite': b'{"unexpected":1e999,' + valid[1:],
+            'deep': b'{"unexpected":' + b'[' * 65 + b'0' + b']' * 65 + b',' + valid[1:],
+            'status': storage.canonical(dict(raw, status='unknown')),
+            'coverage': storage.canonical(dict(raw, coverage={'effective_analysis_options': []})),
+            'functions': storage.canonical(dict(raw, functions=[None])),
+            'function_count': storage.canonical(dict(raw, function_count_enumerated=0)),
+            'pseudocode_facet': storage.canonical(dict(raw, functions=[dict(function, coverage={})])),
+            'instructions': storage.canonical(dict(raw, functions=[dict(function, instructions=[None])])),
+        }
+
+        def reply(argv, *, cwd, **kwargs):
+            (cwd / 'launcher.log').write_bytes(b'')
+            (cwd / 'bridge.json').write_bytes(payload)
+
+        with mock.patch.object(engine, 'run_process', side_effect=reply):
+            for name, payload in invalid.items():
+                with self.subTest(name=name):
+                    with self.assertRaises(Error) as caught:
+                        engine.run(self.project, self.image, 'analyze', self.args(), self.deps)
+                    self.assertEqual(caught.exception.code, 'bridge_result')
+                    job = self.project.path / 'jobs' / caught.exception.partial['job_id'] / 'job.json'
+                    record = json.loads(job.read_bytes())
+                    self.assertEqual((record['status'], record['error']['code']), ('failed', 'bridge_result'))
+        self.assertEqual(list((self.project.path / 'snapshots').glob('*')), [])
 
     def test_query_uses_saved_profile_not_analyze_argument_default(self):
         old = "c" * 32

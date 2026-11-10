@@ -1975,6 +1975,15 @@ network symbol fetches, input execution, remote model calls, or automatic
 installs are part of the CLI. Installed dependencies themselves remain a
 trusted part of the execution environment.
 
+### Validating worker reports
+
+The main bridge result, focused range proof and signature decision must
+each be a bounded JSON object. The reader rejects duplicate fields,
+nonfinite numbers and excessive nesting. The main result also checks the
+job status, declared function count, function rows and shared coverage
+containers before the CLI publishes evidence. A rejected report remains
+in the private job directory with a typed failed job record.
+
 ### Targeted malformed Mach-O payloads
 
 The installed data-only parsers processed 20,480 seeded mutations in
