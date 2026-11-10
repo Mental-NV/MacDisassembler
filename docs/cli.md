@@ -2187,6 +2187,33 @@ slice bytes and both fresh pseudocode queries matched their saved
 results. The private validation report SHA-256 is
 `a0ba00d185151554914834856347301b1c2b2957964e0324a5a533178712e331`.
 
+### Function-start and data-in-code preflight
+
+Imports validate the `LC_FUNCTION_STARTS` and `LC_DATA_IN_CODE` tables
+before staging any slices of an artifact. New analysis jobs apply the
+same check to the verified slice, including imports created with an
+earlier build. Ambiguous or malformed tables return
+`function_starts_malformed` or `data_in_code_malformed` with exit 5.
+The engine admission budget is 1 MiB per table. Exceeding it returns
+`function_starts_limit` or `data_in_code_limit` with exit 7.
+Data-only inspection keeps its diagnostics. Its 10,000-row display limit
+is independent of validation, which checks the whole in-budget table.
+Completed import receipts remain replayable without a worker.
+[Mach-O load-command definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+
+The isolated test wheel reproduced inspection output byte for byte for
+all 20 intact owned artifacts. It rejected 29 import controls before
+staging or worker launch. The cases covered broken terminators, invalid
+data ranges, duplicate and oversized tables, malformed records beyond
+the display limit, and a malformed unselected universal slice.
+
+Intact arm64 and x86_64 calculator tools completed full headless
+analysis and fresh decompilation. The x86_64 Program came from an
+earlier wheel. All 39 selected instructions matched the original bytes,
+and both fresh results matched the saved pseudocode. The private
+validation report SHA-256 is
+`9e96703339b683eaeb10ed7198d1dc7c7d79769bcab6bfee254cb7174183505e`.
+
 ## Envelopes, errors and explicit omissions
 
 Workspace opens validate the manifest structure, schema version, and

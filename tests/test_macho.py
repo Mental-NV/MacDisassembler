@@ -61,6 +61,13 @@ def segment_image(*, file_offset=184, section_size=4, section_address=0x10000010
     return image(commands=[command(0x19, segment + section)], payload=b"\x1f\x20\x03\xd5")
 
 
+def linker_table(kind, payload, *, cpu=ARM64):
+    offset = 32 + 72 + 16
+    text = entry_segment(b"__TEXT", 0x100000000, 0, offset + len(payload))
+    table = command(kind, struct.pack("<II", offset, len(payload)))
+    return image(cpu=cpu, commands=[text, table], payload=payload)
+
+
 def universal(images=None, *, endian=">", fat64=False):
     if images is None:
         images = [image(cpu=ARM64), image(cpu=X86_64)]
@@ -317,6 +324,32 @@ class ThinMachOTests(ErrorAssertions):
         malformed = data[:160]+b"\x80"*4+data[164:]
         self.assertEqual(macho.thin(malformed)["loader"]["function_starts"]["status"], "malformed")
         self.assert_error("entry_command",macho.thin,image(commands=[main,main],payload=bytes(100)))
+
+    def test_engine_validates_table_tails_beyond_the_inspection_row_limit(self):
+        record = struct.pack("<IHH", 112, 1, 1)
+        cases = (
+            (0x26, "function_starts", b"\x04\x04\x04\0", b"\x04\x04\x04\x80"),
+            (0x29, "data_in_code", record * 3, record * 2 + bytes(8)),
+        )
+        for command_id, name, valid, malformed in cases:
+            with self.subTest(name=name), patch.object(macho_load, "MAX_TABLE_ROWS", 2):
+                complete = macho.thin(linker_table(command_id, valid), for_engine=True)
+                self.assertEqual(complete["loader"][name]["status"], "partial")
+                broken = linker_table(command_id, malformed)
+                self.assertEqual(macho.thin(broken)["loader"][name]["status"], "malformed")
+                self.assert_error(name + "_malformed", macho.thin, broken, for_engine=True)
+
+    def test_engine_rejects_oversized_tables_and_bad_unselected_slices(self):
+        record = struct.pack("<IHH", 112, 1, 1)
+        for command_id, name, payload in ((0x26, "function_starts", bytes(24)),
+                                           (0x29, "data_in_code", record * 3)):
+            with self.subTest(name=name), patch.object(macho_load, "MAX_LINKER_TABLE_BYTES", 16):
+                self.assert_error(name + "_limit", macho.thin,
+                                  linker_table(command_id, payload), for_engine=True, exit_code=7)
+        bad = linker_table(0x29, bytes(8), cpu=X86_64)
+        fat = universal([image(), bad], fat64=True)
+        self.assertEqual(macho.inspect_bytes(fat)["slices"][1]["loader"]["data_in_code"]["status"], "malformed")
+        self.assert_error("data_in_code_malformed", macho.inspect_bytes, fat, for_engine=True)
 
     def test_unixthread_uses_architecture_register_and_universal_offsets(self):
         base, offset = 0x100000000, 0x200

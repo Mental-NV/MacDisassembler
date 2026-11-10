@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from macscope import cli, engine, import_state, jobs, macho, storage
 from test_core import TemporaryCase, synthetic_program
-from test_macho import image
+from test_macho import image, linker_table
 
 
 class ImportResumeTests(TemporaryCase):
@@ -140,6 +140,28 @@ class ImportResumeTests(TemporaryCase):
             self.assertEqual(self.workspace.images(), [])
             storage.atomic(bridge_path, raw, force=True)
             self.assertEqual(self.resume()["data"]["job_id"], self.producer)
+            run.assert_called_once()
+
+    def test_legacy_malformed_table_cannot_launch_but_durable_import_replays(self):
+        original = linker_table(0x29, bytes(8))
+        info = macho.inspect_bytes(original)
+        self.image = dict(info["slices"][0], artifact_sha256=info["artifact_sha256"], input_name="legacy")
+        import_state.stage_inputs(self.workspace, self.image, original)
+        self.record.update(image_id=self.image["image_id"],
+                           import_request=import_state.request_for(self.workspace, self.image))
+        storage.write_json(self.prior_path, self.record, force=True)
+
+        with patch.object(engine, "dependencies", return_value=self.deps), \
+             patch.object(engine, "run", side_effect=self.worker) as run:
+            self.error("data_in_code_malformed", self.resume)
+            run.assert_not_called()
+            # Simulate a durable import completed before table admission was added.
+            args = self.args("import", "legacy", "--timeout", "75", "--heap-mib", "768")
+            import_state.import_slice(self.workspace, self.image, original, args, self.deps,
+                                      resumed_from=self.prior)
+            self.assertTrue(self.resume()["data"]["reused_restart"])
+            self.error("data_in_code_malformed", cli.execute,
+                       self.args("analyze", "--experimental-trusted-input"))
             run.assert_called_once()
 
     def test_changed_artifact_is_rejected_without_a_worker(self):

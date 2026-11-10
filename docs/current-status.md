@@ -571,6 +571,10 @@ collections exceed documented bounds despite successful pseudocode output.
   The test wheel rejected 80 previously accepted owned mutations. Five
   public import controls stopped before staging, and intact arm64 and
   x86_64 fixtures completed the full headless path.
+- [x] Validate [function-start and data-in-code tables](cli.md#function-start-and-data-in-code-preflight)
+  before engine work. All 29 owned malformed or oversized import controls
+  stopped before staging. An intact Program imported by the prior wheel
+  completed analysis and fresh decompilation with the new wheel.
 - [x] Bound [section records across each Mach-O slice](cli.md#limits-and-safety-boundaries).
   Exact-limit thin and universal fixtures passed. An excess failed before
   staging, including in an unselected slice. An owned Calendar bundle

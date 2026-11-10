@@ -13,7 +13,7 @@ import tempfile
 from unicodedata import normalize as normalize_unicode
 from . import __version__, SCHEMA_VERSION
 from .errors import Error
-from .macho import inspect_bytes, inspect_path, read_regular
+from .macho import inspect_bytes, inspect_path, read_regular, thin
 from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
@@ -817,6 +817,7 @@ def boundary_edit_request(project, image, *, at_revision=None):
 def analyze_image(project, image, args, deps, command, *, resumed_from=None, manual_plan=None):
     """Run analysis and publish its snapshot and receipt under the project writer lock."""
     data = metadata.verified_slice(project,image)
+    thin(data, for_engine=True)
     boundary_request = recovery = None
     if getattr(args,'repair_split_boundaries',False):
         boundary_request = flow_boundaries.recovery_request(data,image)
@@ -1113,9 +1114,10 @@ def resume_analysis(args, project, command, record, request):
 
 
 def resume_import(args, project, command, record, request):
-    image, original = import_state.restore_request(project,request,record.get('image_id'))
-    repair = request.get('repair_baseline')
     receipt = jobs.publication(project,args.job_id,'import')
+    image, original = import_state.restore_request(project, request, record.get('image_id'),
+                                                   for_engine=receipt is None)
+    repair = request.get('repair_baseline')
     if receipt:
         if receipt['resumed_from'] != args.job_id:
             raise Error('job_completed','The original job already published an import',8,partial=receipt)
@@ -1181,11 +1183,11 @@ def import_inputs(args, project, deps):
                 size_total += len(original)
                 if size_total > bundle.MAX_HASH_BYTES:
                     raise Error('bundle_input_limit','Selected bundle images exceed the 512 MiB aggregate limit',7)
-                meta = dict(inspect_bytes(original,allow_arm64e=True),input_name=path.name)
+                meta = dict(inspect_bytes(original,allow_arm64e=True,for_engine=True),input_name=path.name)
                 if expected_sha and meta['artifact_sha256'] != expected_sha:
                     raise Error('bundle_image_changed','Bundle image changed after inventory',5)
             else:
-                meta,original = inspect_path(path,allow_arm64e=True,include_companion=False)
+                meta,original = inspect_path(path,allow_arm64e=True,include_companion=False,for_engine=True)
             if len(meta['slices'])>1 and args.arch is None:
                 raise Error('arch_required','Universal input requires explicit --arch arm64|x86_64|all',2)
             selected = [s for s in meta['slices'] if args.arch in (None,'all',s['arch'])]

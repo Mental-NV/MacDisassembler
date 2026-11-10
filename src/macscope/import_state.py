@@ -35,7 +35,7 @@ def request_for(project, image, repair=None):
     return request
 
 
-def restore_request(project, request, image_id):
+def restore_request(project, request, image_id, *, for_engine=False):
     if (request.get("project_id") != project.project_id or request.get("image_id") != image_id
             or not all(isinstance(request.get(k), str) and SHA256.fullmatch(request[k])
                        for k in ("image_id", "artifact_sha256", "slice_sha256"))):
@@ -55,7 +55,7 @@ def restore_request(project, request, image_id):
     original = read_regular(project.path / "inputs" / (request["artifact_sha256"] + ".artifact"))
     if hashlib.sha256(original).hexdigest() != request["artifact_sha256"]:
         raise Error("input_integrity", "Immutable artifact digest differs from the recorded import")
-    inspected = inspect_bytes(original, allow_arm64e=True)
+    inspected = inspect_bytes(original, allow_arm64e=True, for_engine=for_engine)
     matching = [s for s in inspected["slices"] if s["image_id"] == image_id]
     if len(matching) != 1:
         raise Error("job_resume_inputs", "The recorded slice is absent from the immutable artifact", 8)

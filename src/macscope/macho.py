@@ -12,7 +12,7 @@ import struct
 from xml.parsers.expat import ExpatError
 from pathlib import Path
 from .errors import Error
-from .macho_load import ENCRYPTION_COMMANDS, bounded, details, encryption_region
+from .macho_load import ENCRYPTION_COMMANDS, bounded, details, encryption_region, require_engine_tables
 
 MAX_INPUT = 256 * 1024 * 1024
 MAX_COMMANDS = 8192
@@ -109,7 +109,7 @@ def debug_companion_path(executable):
     return executable.with_name(executable.name + '.debug.dylib')
 
 
-def thin(data, *, allow_arm64e=False, include_section_linkage=False):
+def thin(data, *, allow_arm64e=False, include_section_linkage=False, for_engine=False):
     if len(data) < 32 or data[:4] != b'\xcf\xfa\xed\xfe':
         raise Error('unsupported_format', 'Only little-endian 64-bit Mach-O images are supported', 3)
     _, cpu, subtype, filetype, ncmds, cmdbytes, flags, reserved = struct.unpack_from('<8I', data)
@@ -179,6 +179,8 @@ def thin(data, *, allow_arm64e=False, include_section_linkage=False):
     if cursor != end:
         raise Error('command_size', 'Load-command count and byte size disagree')
     loader = details(data,command_records,segments,arch)
+    if for_engine:
+        require_engine_tables(loader, arch)
     if encryption is not None:
         loader['encryption'] = encryption
     return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,
@@ -198,7 +200,7 @@ def with_loader_container_offsets(image):
     return dict(image, loader=dict(loader, **locations)) if locations else image
 
 
-def inspect_bytes(data, *, allow_arm64e=False):
+def inspect_bytes(data, *, allow_arm64e=False, for_engine=False):
     if len(data) > MAX_INPUT:
         raise Error('input_limit', 'Input exceeds 256 MiB')
     digest = hashlib.sha256(data).hexdigest()
@@ -224,13 +226,13 @@ def inspect_bytes(data, *, allow_arm64e=False):
             if any(off < b and a < off+size for a,b in spans):
                 raise Error('fat_overlap', 'Universal slices overlap')
             spans.append((off, off+size))
-            meta = thin(data[off:off+size], allow_arm64e=allow_arm64e)
+            meta = thin(data[off:off+size], allow_arm64e=allow_arm64e, for_engine=for_engine)
             if (cpu, subtype) != (meta['cpu_type'], meta['cpu_subtype']) or meta['arch'] in arches:
                 raise Error('fat_identity', 'Universal CPU mismatch or duplicate architecture')
             arches.add(meta['arch'])
             slices.append(dict(meta, offset=hex(off), size=hex(size), sha256=hashlib.sha256(data[off:off+size]).hexdigest()))
     else:
-        slices.append(dict(thin(data, allow_arm64e=allow_arm64e), offset='0x0', size=hex(len(data)), sha256=digest))
+        slices.append(dict(thin(data, allow_arm64e=allow_arm64e, for_engine=for_engine), offset='0x0', size=hex(len(data)), sha256=digest))
     slices = [with_loader_container_offsets(s) for s in slices]
     for s in slices:
         s['image_id'] = hashlib.sha256((digest+':'+str(s['cpu_type'])+':'+str(s['cpu_subtype'])+':'+s['offset']+':'+s['size']+':'+s['sha256']).encode()).hexdigest()
@@ -270,11 +272,11 @@ def inspect_debug_companion(root, executable, *, allow_arm64e):
                       for image in evidence['slices']]}
 
 
-def inspect_path(path, *, allow_arm64e=False, include_companion=True):
+def inspect_path(path, *, allow_arm64e=False, include_companion=True, for_engine=False):
     root = Path(os.path.abspath(path))
     p = resolve_input(root)
     data = read_regular(p)
-    result = inspect_bytes(data, allow_arm64e=allow_arm64e)
+    result = inspect_bytes(data, allow_arm64e=allow_arm64e, for_engine=for_engine)
     result['warnings'] = []
     if include_companion and p != root:
         companion = inspect_debug_companion(root, p, allow_arm64e=allow_arm64e)

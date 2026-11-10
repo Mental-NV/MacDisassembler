@@ -26,7 +26,7 @@ DYSYMTAB_TABLES = (
     ("Local relocation table", 8),
 )
 MAX_TABLE_ROWS = 10000
-MAX_START_TABLE_BYTES = 1024 * 1024
+MAX_LINKER_TABLE_BYTES = 1024 * 1024
 THREAD_ENTRY = {"arm64": (6, 68, 32), "x86_64": (4, 42, 16)}
 MAX_THREAD_STATES = 32
 LEGACY_DEPLOYMENT = {0x24: ("LC_VERSION_MIN_MACOSX", "macos"), 0x25: ("LC_VERSION_MIN_IPHONEOS", "ios"),
@@ -136,17 +136,20 @@ def uleb(data, position, end):
 def function_starts(data, extent, text, *, selected=None):
     if not extent:
         return None
-    if len(extent) != 1 or text is None:
-        return {"status": "unavailable", "addresses": [], "reason": "Ambiguous table or __TEXT mapping"}
+    if len(extent) != 1:
+        return {"status": "unavailable", "addresses": [], "reason": "Ambiguous function-start table"}
     offset, size = extent[0]
     if not size:
         return {"status": "complete", "addresses": []}
-    if size > MAX_START_TABLE_BYTES:
+    if text is None:
+        return {"status": "unavailable", "addresses": [], "reason": "Ambiguous __TEXT mapping"}
+    if size > MAX_LINKER_TABLE_BYTES:
         return {"status": "partial", "addresses": [], "reason": "Function-start byte limit"}
     end = offset+size
     address = int(text["va"],16)
     limit = address+int(text["file_size"],16)
     starts = []
+    truncated = False
     found = False
     try:
         while offset < end:
@@ -154,14 +157,17 @@ def function_starts(data, extent, text, *, selected=None):
             if not delta:
                 if any(memoryview(data)[offset:end]):
                     raise ValueError("Nonzero bytes after function-start terminator")
+                if truncated:
+                    return {"status": "partial", "addresses": starts, "reason": "Function-start row limit"}
                 return {"status": "complete", "addresses": starts}
             address += delta
             if address >= limit:
                 raise ValueError("Function start outside file-backed __TEXT")
             if selected is None:
-                if len(starts) == MAX_TABLE_ROWS:
-                    return {"status": "partial", "addresses": starts, "reason": "Function-start row limit"}
-                starts.append(hex(address))
+                if len(starts) < MAX_TABLE_ROWS:
+                    starts.append(hex(address))
+                else:
+                    truncated = True
             elif found:
                 starts.append(hex(address))
                 found = False
@@ -181,14 +187,28 @@ def data_in_code(data, extent):
     offset, size = extent[0]
     if size % 8:
         return {"status": "malformed", "records": [], "reason": "Misaligned data-in-code table"}
-    count = size//8
+    count = size // 8
+    checked = count if size <= MAX_LINKER_TABLE_BYTES else min(count, MAX_TABLE_ROWS)
     rows = []
-    for at in range(offset,offset+min(count,MAX_TABLE_ROWS)*8,8):
-        start, length, kind = struct.unpack_from("<IHH",data,at)
-        if not length or start+length > len(data):
+    for index in range(checked):
+        start, length, kind = struct.unpack_from("<IHH", data, offset + index * 8)
+        if not length or start + length > len(data):
             return {"status": "malformed", "records": [], "reason": "Invalid data-in-code range"}
-        rows.append({"slice_file_offset": hex(start), "length": length, "kind": hex(kind)})
-    return {"status": "complete" if count==len(rows) else "partial", "records": rows, "total": count}
+        if index < MAX_TABLE_ROWS:
+            rows.append({"slice_file_offset": hex(start), "length": length, "kind": hex(kind)})
+    return {"status": "complete" if count == len(rows) else "partial", "records": rows, "total": count}
+
+
+def require_engine_tables(loader, arch):
+    for kind in ("function_starts", "data_in_code"):
+        table = loader[kind]
+        if table is None:
+            continue
+        if table["status"] in ("malformed", "unavailable"):
+            raise Error(f"{kind}_malformed", f"{arch} {kind}: {table['reason']}")
+        for extent in loader["linkedit"]:
+            if extent["kind"] == kind and int(extent["size"], 16) > MAX_LINKER_TABLE_BYTES:
+                raise Error(f"{kind}_limit", f"{arch} {kind} exceeds the engine admission byte limit", 7)
 
 
 def map_entry(record, va, text, segments):

@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from macscope import cli, engine, jobs, storage
 from test_core import TemporaryCase, synthetic_program
+from test_macho import image as macho_fixture
 
 
 class JobResumeTests(TemporaryCase):
@@ -15,7 +16,7 @@ class JobResumeTests(TemporaryCase):
         self.prior = "a" * 32
         self.output_id = "2" * 64
         self.deps = {"ghidra_path": "/engine", "java_home": "/java", "ghidra_tree_sha256": "3" * 64}
-        data = b"owned test input"
+        data = macho_fixture()
         digest = hashlib.sha256(data).hexdigest()
         baseline = self.workspace.path / "engine" / self.image_id
         synthetic_program(baseline, b"untouched import")

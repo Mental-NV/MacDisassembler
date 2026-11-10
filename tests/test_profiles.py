@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from macscope import cli, engine, storage
 from macscope.errors import Error
 from test_core import synthetic_program
+from test_macho import image as macho_fixture
 
 
 def raw_result(name="baseline", mode="analyze"):
@@ -397,7 +398,7 @@ class ProfileRunnerTests(unittest.TestCase):
 
 
     def test_cli_rejected_analysis_keeps_existing_active_snapshot(self):
-        content = b"owned synthetic input"
+        content = macho_fixture()
         digest = hashlib.sha256(content).hexdigest()
         image = dict(self.image, sha256=digest, artifact_sha256=digest,
                      offset="0x0", sections=[],
