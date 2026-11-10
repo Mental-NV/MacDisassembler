@@ -6,9 +6,12 @@ from .macho_view import MappedImage
 
 MAX_CLASSES = 2048
 MAX_METHODS = 10000
+MAX_PROPERTIES = 10000
 MAX_SELECTORS = 10000
 CLASS_LISTS = {"__objc_classlist", "__objc_nlclslist"}
 CATEGORY_LISTS = {"__objc_catlist", "__objc_nlcatlist"}
+PROTOCOL_LISTS = {"__objc_protolist"}
+IMAGE_HAS_CATEGORY_CLASS_PROPERTIES = 0x40
 CLASS_SYMBOL = "_OBJC_CLASS_$_"
 CLASS_DATA_MASK = 0x0F007FFFFFFFFFF8
 
@@ -162,6 +165,16 @@ class ObjCImage:
                     rows.extend(self.methods(self.ro(meta)+32,record["name"],True,None,MAX_METHODS-len(rows)))
             except ValueError:
                 self.gaps.add("invalid_method_list")
+        for address, category, target in self.categories():
+            name = target["name"] if target else None
+            try:
+                for offset,is_class in ((16,False),(24,True)):
+                    rows.extend(self.methods(address+offset,name,is_class,category,MAX_METHODS-len(rows)))
+            except ValueError:
+                self.gaps.add("invalid_category_record")
+        return rows
+
+    def categories(self):
         seen = set()
         for site in self.sites(CATEGORY_LISTS,MAX_CLASSES,"category_limit"):
             try:
@@ -173,11 +186,111 @@ class ObjCImage:
                 target = self.class_ref(address+8)
                 if not target or not target["name"]:
                     self.gaps.add("unresolved_category_class")
-                name = target["name"] if target else None
-                for offset,is_class in ((16,False),(24,True)):
-                    rows.extend(self.methods(address+offset,name,is_class,category,MAX_METHODS-len(rows)))
+                yield address, category, target
             except ValueError:
                 self.gaps.add("invalid_category_record")
+
+    def category_class_properties(self):
+        sections = [section for section in self.sections if section["name"] == "__objc_imageinfo"]
+        try:
+            if len(sections) != 1:
+                raise ValueError("Missing or ambiguous Objective-C image info")
+            section, = sections
+            address = int(section["va"],16)
+            offset, _, _ = self.view.mapping(address,8)
+            if section["size"] != "0x8" or section["file_offset"] != hex(offset):
+                raise ValueError("Invalid Objective-C image info mapping")
+            version, flags = self.view.unpack("<II",address)
+            if version != 0:
+                raise ValueError("Unsupported Objective-C image info version")
+            return bool(flags & IMAGE_HAS_CATEGORY_CLASS_PROPERTIES)
+        except ValueError:
+            self.gaps.add("category_class_properties_layout_unavailable")
+            return False
+
+    def property_lists(self, classes):
+        for record in classes:
+            address = int(record["class_va"],16)
+            owner = {"owner_kind":"class", "owner_va":hex(address), "class_name":record["name"]}
+            yield int(record["metadata_va"],16)+64, owner, "instance"
+            try:
+                meta = self.target(address)
+                if meta:
+                    ro = self.ro(meta)
+                    if not (self.view.unpack("<I",ro)[0] & 1):
+                        raise ValueError("Class has no verified metaclass")
+                    yield ro+64, owner, "class"
+            except ValueError:
+                self.gaps.add("invalid_property_metaclass")
+
+        categories = list(self.categories())
+        class_properties = categories and self.category_class_properties()
+        for address, category, target in categories:
+            owner = {"owner_kind":"category", "owner_va":hex(address), "category":category,
+                     "class_name":target["name"] if target else None, "category_class":target}
+            yield address+40, owner, "instance"
+            if class_properties:
+                yield address+48, owner, "class"
+
+        seen = set()
+        for site in self.sites(PROTOCOL_LISTS,MAX_CLASSES,"protocol_limit"):
+            try:
+                address = self.target(site)
+                if not address:
+                    raise ValueError("Protocol record is missing")
+                if address in seen:
+                    continue
+                seen.add(address)
+                size, = self.view.unpack("<I",address+64)
+                if size < 72 or size % 8:
+                    raise ValueError("Invalid Objective-C protocol size")
+                self.view.mapping(address,size)
+                name_va = self.target(address+8)
+                if not name_va:
+                    raise ValueError("Protocol name is missing")
+                name = self.view.string(name_va)
+                owner = {"owner_kind":"protocol", "owner_va":hex(address), "protocol_name":name}
+                yield address+56, owner, "instance"
+                if size >= 96:
+                    yield address+88, owner, "class"
+            except ValueError:
+                self.gaps.add("invalid_property_protocol")
+
+    def property_rows(self, classes):
+        rows = []
+        remaining = MAX_PROPERTIES
+        for site, owner, kind in self.property_lists(classes):
+            try:
+                address = self.target(site)
+                if not address:
+                    continue
+                if address & 7:
+                    self.gaps.add("unsupported_property_list_pointer")
+                    continue
+                stride,count = self.view.unpack("<II",address)
+                if stride != 16:
+                    self.gaps.add("unsupported_property_list_format")
+                    continue
+                self.view.mapping(address+8,count*stride)
+            except ValueError:
+                self.gaps.add("invalid_property_list")
+                continue
+            visited = min(count,remaining)
+            for index in range(visited):
+                record = address+8+index*stride
+                try:
+                    name, attributes = self.target(record), self.target(record+8)
+                    if not name or not attributes:
+                        raise ValueError("Property name or attributes are missing")
+                    rows.append(dict(owner,name=self.view.string(name),attributes=self.view.string(attributes),
+                                     property_kind=kind,address_space="ram",record_va=hex(record),name_va=hex(name),
+                                     attributes_va=hex(attributes),origin="objc_property_list"))
+                except ValueError:
+                    self.gaps.add("invalid_property_record")
+            remaining -= visited
+            if visited < count:
+                self.gaps.add("property_limit")
+                break
         return rows
 
     def selectors(self, methods):
@@ -199,7 +312,8 @@ class ObjCImage:
 def inventory(data, image, scope):
     parsed = thin(data)
     names = {s["name"] for s in parsed["sections"]}
-    if not names&(CLASS_LISTS|CATEGORY_LISTS|{"__objc_selrefs"}):
+    lists = CLASS_LISTS|CATEGORY_LISTS|(PROTOCOL_LISTS if scope == "properties" else {"__objc_selrefs"})
+    if not names&lists:
         return [], []
     try:
         objc = ObjCImage(data,image,parsed)
@@ -208,5 +322,8 @@ def inventory(data, image, scope):
     classes = objc.classes()
     if scope=="classes":
         return classes,sorted(objc.gaps)
+    if scope=="properties":
+        rows = objc.property_rows(classes)
+        return rows,sorted(objc.gaps)
     methods = objc.method_rows(classes)
     return (methods if scope=="methods" else objc.selectors(methods)),sorted(objc.gaps)

@@ -810,7 +810,29 @@ paginated output. [Apple Objective-C runtime structures](https://github.com/appl
 Apple's `dyld_info -objc` agreed on the 16 class records and 216 method
 addresses across eight owned calculator app builds. Separately compiled
 arm64 and x86_64 probes also matched for instance, class and category
-methods. The views currently cover class, method and selector evidence.
+methods.
+
+`objc properties` reports instance and class property declarations from
+classes, categories and protocols. Each record preserves the raw attribute
+string, its declaring owner and the record, name and attribute addresses.
+A category on an external class retains the recorded bind. Class properties
+on categories require the image-info flag, and those on protocols require
+the corresponding field in the declared protocol size. The scan examines
+at most 10,000 property records and reports unsupported or incomplete
+evidence as partial. [Apple Objective-C metadata layouts](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.h)
+
+```sh
+macscope objc properties --project workspaces/calculator --arch arm64 \
+  --name-contains label --json
+```
+
+The installed CLI matched 36 declarations and 72 name and attribute
+pointer sites against Apple tools and file bytes on owned arm64 and x86_64
+libraries using chained and legacy fixups. The attributes preserved the
+architecture-specific `BOOL` encodings. All four slices completed full
+Ghidra analysis and reproduced the property results from before analysis.
+The validation report SHA-256 is
+`3f522ea08b009a0cc7fd420cd0ae6162ee183ce8533525b90c0bedb2773bf0b0`.
 
 `swift symbols` lists Swift mangling candidates from the Mach-O symbol table,
 including raw names, definition state, available VAs and detected Swift

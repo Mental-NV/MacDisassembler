@@ -125,7 +125,7 @@ def parser():
     s.add_argument('--kind',choices=('all','bind','rebase','non-weak-definition'),default='all',
                    help='Use non-weak-definition for declarations in the legacy weak-bind stream')
     s=sub.add_parser('objc');ss=s.add_subparsers(dest='action',required=True)
-    for c in ('classes','methods','selectors'):
+    for c in ('classes','methods','selectors','properties'):
         s=ss.add_parser(c);project(s);common(s);pagination(s);s.add_argument('--name-contains')
     s=sub.add_parser('swift');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('symbols');project(s);common(s);pagination(s);s.add_argument('--name-contains')

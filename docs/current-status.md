@@ -185,6 +185,11 @@ collections exceed documented bounds despite successful pseudocode output.
   chained formats remain outside the decoder.
 - [x] Expose Objective-C classes, methods and selector references with
   static provenance. The owned app matrix matched 216 method addresses.
+- [x] Verify [Objective-C properties](cli.md#objective-c-and-swift-metadata)
+  for classes, categories and protocols. Apple tooling and file bytes
+  matched 36 declarations and 72 pointer sites on owned arm64 and x86_64
+  slices with chained and legacy fixups. Queries reproduced after full
+  Ghidra analysis of all four slices.
 - [x] Expose Swift symbol-table names and optional sandboxed demangling
   with tool provenance. Broader Swift metadata decoding remains open.
 - [x] Run source-aware recovered-C calibration for the two scalar comparison
