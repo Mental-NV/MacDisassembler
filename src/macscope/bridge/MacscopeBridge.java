@@ -51,6 +51,7 @@ import ghidra.app.util.headless.HeadlessScript;
 import ghidra.framework.options.Options;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFormatException;
+import ghidra.program.model.address.AddressFormatException;
 import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressRangeIterator;
@@ -98,7 +99,7 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.11.0";
+    static final String VERSION = "1.12.0";
     static final String HINT_IDENTIFIER = "[A-Za-z_][A-Za-z0-9_]{0,47}";
     static final Pattern HINT_STRUCT = Pattern.compile("(struct (" + HINT_IDENTIFIER + ")\\{([^{}]+)\\})(\\*{0,2})");
     static final Pattern HINT_FIELD = Pattern.compile("(" + HINT_IDENTIFIER + "):(.+)");
@@ -113,6 +114,7 @@ public class MacscopeBridge extends HeadlessScript {
     static final int MAX_OPTIONS = 4096, MAX_TEXT = 4096, MAX_PSEUDOCODE = 1048576;
     static final int MAX_SPANS_PER_FUNCTION = 1024, MAX_SPANS_PER_JOB = 40000;
     static final String BOUNDARY_POLICY = "macscope-linker-fallthrough-join/1";
+    static final String MANUAL_BOUNDARY_POLICY = "macscope-manual-function-boundaries/1";
     static final int MAX_LINKER_STARTS = 10000, MAX_BOUNDARY_CANDIDATES = 128;
     static final int MAX_BOUNDARY_BYTES = 65536, MAX_BOUNDARY_REFERENCES = 10000;
     static final long MAX_OUTPUT = 64L * 1024 * 1024;
@@ -346,6 +348,15 @@ public class MacscopeBridge extends HeadlessScript {
         }
         if (content.length > 262144) throw new IllegalArgumentException("Boundary request exceeds its byte limit");
         JsonObject request = JsonParser.parseString(new String(content, StandardCharsets.UTF_8)).getAsJsonObject();
+        if (MANUAL_BOUNDARY_POLICY.equals(request.get("policy").getAsString())) {
+            try {
+                applyManualBoundaries(request, content);
+            } catch (IllegalArgumentException e) {
+                root.addProperty("manual_boundary_rejection", e.getMessage());
+                throw e;
+            }
+            return;
+        }
         if (!BOUNDARY_POLICY.equals(request.get("policy").getAsString()) ||
             !currentProgram.getExecutableSHA256().equals(request.get("input_sha256").getAsString()) ||
             !address(currentProgram.getImageBase()).equals(request.get("image_base").getAsString())) {
@@ -428,6 +439,152 @@ public class MacscopeBridge extends HeadlessScript {
         }
     }
 
+    record BodyEdit(Address entry, Function original, AddressSet body) {}
+
+    void applyManualBoundaries(JsonObject request, byte[] content) throws Exception {
+        if (!request.keySet().equals(Set.of("policy", "input_sha256", "revision", "edits")) ||
+                !currentProgram.getExecutableSHA256().equals(request.get("input_sha256").getAsString()) ||
+                analysisTimeoutOccurred()) {
+            throw new IllegalArgumentException("Boundary edits require completed analysis of the exact image");
+        }
+        long revision = request.get("revision").getAsLong();
+        JsonArray rows = request.getAsJsonArray("edits");
+        if (revision < 1 || rows.size() < 1 || rows.size() > 32) {
+            throw new IllegalArgumentException("Invalid manual boundary revision or edit count");
+        }
+        FunctionManager manager = currentProgram.getFunctionManager();
+        Map<Address, BodyEdit> edits = new TreeMap<>();
+        AddressSet proposed = new AddressSet();
+        for (JsonElement element : rows) {
+            monitor.checkCancelled();
+            JsonObject row = element.getAsJsonObject();
+            if (!row.keySet().equals(Set.of("entry", "revision", "before", "body")) ||
+                    row.get("revision").getAsLong() < 1 || row.get("revision").getAsLong() > revision) {
+                throw new IllegalArgumentException("Invalid manual boundary edit");
+            }
+            Address entry = manualBoundaryAddress(row.get("entry"));
+            AddressSet before = manualBoundaryBody(row.get("before"), entry, false);
+            AddressSet body = manualBoundaryBody(row.get("body"), entry, true);
+            Function original = manager.getFunctionAt(entry);
+            if ((before == null) != (original == null) || (original != null &&
+                    (original.isExternal() || original.isThunk() || !original.getBody().hasSameAddresses(before)))) {
+                throw new IllegalArgumentException("Unedited function body differs at " + address(entry));
+            }
+            if (edits.putIfAbsent(entry, new BodyEdit(entry, original, body)) != null || Objects.equals(before, body)) {
+                throw new IllegalArgumentException("Duplicate or unchanged function edit at " + address(entry));
+            }
+            if (body != null) {
+                if (proposed.intersects(body)) throw new IllegalArgumentException("Proposed function bodies overlap");
+                proposed.add(body);
+            }
+        }
+        var owners = manager.getFunctionsOverlapping(proposed);
+        while (owners.hasNext()) {
+            monitor.checkCancelled();
+            Address owner = owners.next().getEntryPoint();
+            if (!edits.containsKey(owner)) {
+                throw new IllegalArgumentException("Proposed body overlaps unedited function at " + address(owner));
+            }
+        }
+        int transaction = currentProgram.startTransaction("Macscope accepted manual function boundaries");
+        boolean applied = false;
+        try {
+            for (BodyEdit edit : edits.values()) {
+                monitor.checkCancelled();
+                if (edit.original() == null) continue;
+                if (edit.body() == null) {
+                    if (!manager.removeFunction(edit.entry())) throw new IllegalStateException("Could not remove edited function");
+                } else {
+                    // Release all old ranges before assigning any replacement body.
+                    edit.original().setBody(new AddressSet(edit.entry(), edit.entry()));
+                }
+            }
+            for (BodyEdit edit : edits.values()) {
+                monitor.checkCancelled();
+                if (edit.body() == null) continue;
+                if (edit.original() == null) {
+                    manager.createFunction(null, edit.entry(), edit.body(), SourceType.USER_DEFINED);
+                } else {
+                    edit.original().setBody(edit.body());
+                }
+            }
+            for (BodyEdit edit : edits.values()) {
+                Function observed = manager.getFunctionAt(edit.entry());
+                if ((observed == null) != (edit.body() == null) ||
+                        (observed != null && !observed.getBody().hasSameAddresses(edit.body()))) {
+                    throw new IllegalStateException("Applied function body differs at " + address(edit.entry()));
+                }
+            }
+            applied = true;
+        } finally {
+            currentProgram.endTransaction(transaction, applied);
+        }
+        enableHeadlessAnalysis(false);
+        root.addProperty("function_count_total_reported_by_engine", manager.getFunctionCount());
+        JsonObject report = new JsonObject();
+        put(report, "policy", MANUAL_BOUNDARY_POLICY);
+        put(report, "request_sha256", HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)));
+        report.addProperty("annotation_revision", revision);
+        report.add("edits", rows);
+        root.add("manual_boundaries", report);
+    }
+
+    Address manualBoundaryAddress(JsonElement value) throws AddressFormatException {
+        String text = value.getAsString();
+        if (!text.matches("0x(?:0|[1-9a-f][0-9a-f]{0,15})")) {
+            throw new IllegalArgumentException("Invalid manual boundary address");
+        }
+        return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(text.substring(2));
+    }
+
+    AddressSet manualBoundaryBody(JsonElement value, Address entry, boolean requireDecoded) throws Exception {
+        if (value.isJsonNull()) return null;
+        JsonArray ranges = value.getAsJsonArray();
+        if (ranges.size() < 1 || ranges.size() > 16) throw new IllegalArgumentException("Invalid function range count");
+        AddressSet body = new AddressSet();
+        for (JsonElement element : ranges) {
+            monitor.checkCancelled();
+            JsonArray range = element.getAsJsonArray();
+            if (range.size() != 2) throw new IllegalArgumentException("Invalid function range");
+            Address lo = manualBoundaryAddress(range.get(0)), hi = manualBoundaryAddress(range.get(1));
+            if (lo.compareTo(hi) > 0 || Long.compareUnsigned(hi.subtract(lo), MAX_BOUNDARY_BYTES) >= 0) {
+                throw new IllegalArgumentException("Invalid or oversized function range");
+            }
+            body.addRange(lo, hi);
+        }
+        if (!body.contains(entry) || body.getNumAddressRanges() != ranges.size() ||
+                body.getNumAddresses() > MAX_BOUNDARY_BYTES) {
+            throw new IllegalArgumentException("Function body must contain its entry and use distinct ranges within 64 KiB");
+        }
+        if (requireDecoded) {
+            if (currentProgram.getListing().getInstructionAt(entry) == null) {
+                throw new IllegalArgumentException("Function entry is not a decoded instruction at " + address(entry));
+            }
+            for (AddressRange range : body) {
+                Address lo = range.getMinAddress(), hi = range.getMaxAddress();
+                if (!decodedExtent(lo, hi)) {
+                    throw new IllegalArgumentException("Function body is not complete executable instructions at " + address(lo));
+                }
+            }
+        }
+        return body;
+    }
+
+    boolean decodedExtent(Address lo, Address hi) throws Exception {
+        MemoryBlock block = currentProgram.getMemory().getBlock(lo);
+        if (block == null || !block.isExecute() || !block.contains(hi)) return false;
+        InstructionIterator instructions = currentProgram.getListing().getInstructions(new AddressSet(lo, hi), true);
+        Address next = lo, last = null;
+        while (instructions.hasNext()) {
+            monitor.checkCancelled();
+            Instruction instruction = instructions.next();
+            if (!instruction.getAddress().equals(next)) return false;
+            last = instruction.getMaxAddress();
+            next = last.next();
+        }
+        return hi.equals(last);
+    }
+
     String joinBoundary(FunctionManager manager, BoundaryCandidate candidate) throws Exception {
         Function owner = candidate.owner(), competing = candidate.competing();
         if (candidate.nextStart() == null) return "unbounded_linker_extent";
@@ -438,20 +595,7 @@ public class MacscopeBridge extends HeadlessScript {
             body.getMaxAddress().compareTo(candidate.nextStart()) >= 0 || body.getNumAddresses() > MAX_BOUNDARY_BYTES) {
             return "noncontiguous_or_oversized_body";
         }
-        MemoryBlock block = currentProgram.getMemory().getBlock(body.getMinAddress());
-        if (block == null || !block.isExecute() || !block.contains(body.getMaxAddress())) {
-            return "unconfirmed_instruction_extent";
-        }
-        InstructionIterator instructions = currentProgram.getListing().getInstructions(body, true);
-        Address next = body.getMinAddress(), last = null;
-        while (instructions.hasNext()) {
-            monitor.checkCancelled();
-            Instruction instruction = instructions.next();
-            if (!instruction.getAddress().equals(next)) return "unconfirmed_instruction_extent";
-            last = instruction.getMaxAddress();
-            next = last.next();
-        }
-        if (!body.getMaxAddress().equals(last)) return "unconfirmed_instruction_extent";
+        if (!decodedExtent(body.getMinAddress(), body.getMaxAddress())) return "unconfirmed_instruction_extent";
         var references = currentProgram.getReferenceManager();
         AddressIterator targets = references.getReferenceDestinationIterator(competing.getBody(), true);
         int visited = 0;

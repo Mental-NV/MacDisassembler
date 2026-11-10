@@ -18,7 +18,7 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, identity, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, html_export, macho_symbols, macho_unwind, pseudocode, string_evidence, terminal
+from . import body_ownership, engine_checks, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -100,7 +100,9 @@ def parser():
     s.add_argument('--include-images',action='append',metavar='PATH|all',
                    help='Include an exact bundle-relative executable path in addition to the main image')
     s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=tuple(engine.ANALYSIS_PROFILES),default='baseline',help='select baseline, binary-derived parameter inference, or deep analysis with additional address-table discovery');common(s);budgets(s)
-    s.add_argument('--repair-split-boundaries',action='store_true',help='Apply guarded linker-derived function joins to this analysis copy')
+    boundaries=s.add_mutually_exclusive_group()
+    boundaries.add_argument('--repair-split-boundaries',action='store_true',help='Apply guarded linker-derived function joins to this analysis copy')
+    boundaries.add_argument('--with-boundary-edits',action='store_true',help='Apply explicitly accepted function bodies to this analysis copy')
     s=sub.add_parser('status');project(s);common(s)
     s=sub.add_parser('jobs');ss=s.add_subparsers(dest='action',required=True)
     for action in ('list','show','cancel','resume'):
@@ -205,6 +207,19 @@ def parser():
     s=ss.add_parser('export');project(s);common(s,('text','json'))
     s=ss.add_parser('import');project(s);common(s)
     s.add_argument('path');s.add_argument('--accept-type-hints',action='store_true')
+    s.add_argument('--accept-boundary-edits',action='store_true')
+    s=sub.add_parser('boundary');ss=s.add_subparsers(dest='action',required=True)
+    for action in ('set','clear','list'):
+        s=ss.add_parser(action);project(s);common(s)
+        s.add_argument('--address',required=action!='list',help='Unslid hexadecimal entry VA')
+        if action=='list':
+            pagination(s)
+        else:
+            s.add_argument('--accept',action='store_true');s.add_argument('--author',default='local')
+        if action=='set':
+            change=s.add_mutually_exclusive_group(required=True)
+            change.add_argument('--body',help='Inclusive START:END ranges separated by commas')
+            change.add_argument('--remove',action='store_true',help='Remove the function at this entry')
     s=sub.add_parser('type');ss=s.add_subparsers(dest='action',required=True)
     for action in ('set','clear','list'):
         s=ss.add_parser(action);project(s);common(s);selector(s,required=action!='list')
@@ -294,6 +309,8 @@ def normalize(raw, image, deps, manifest):
     analysis_key={'image':image['image_id'],'slice_sha256':image['sha256'],'profile':selected_profile['identity'],'profile_configuration':selected_profile,'engine':{k:v for k,v in deps.items() if k not in ('ghidra_path','java_home','host_os')},'language_id':raw['language_id'],'compiler_spec_id':raw['compiler_spec_id'],'options':raw.get('effective_analysis_options',{}),'limits':manifest['limits'],'auxiliary_inputs':[],'import_baseline_sha256':image.get('engine_baseline_sha256')}
     if 'boundary_recovery' in manifest:
         analysis_key['boundary_recovery'] = manifest['boundary_recovery']
+    if 'manual_boundaries' in manifest:
+        analysis_key['manual_boundaries'] = manifest['manual_boundaries']
     ownership = body_ownership.find(raw.get('functions',()))
     if any(ownership):
         analysis_key['body_ownership_policy'] = body_ownership.POLICY
@@ -457,6 +474,8 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
             data['origin']['aggregate_type_layouts'] = result['aggregate_type_layouts']
     if 'boundary_recovery' in job:
         data['origin']['boundary_recovery'] = job['boundary_recovery']
+    if 'manual_boundaries' in job:
+        data['origin']['manual_boundaries'] = job['manual_boundaries']
     if recovery is not None:
         data['origin'][recovery[0]] = result[recovery[0]]
     for field in ('control_flow_review', 'control_flow_gaps', 'engine_decompile_status'):
@@ -533,9 +552,39 @@ def import_annotations(args, project):
         image = project.select(args.image, args.arch)
         snapshot, _ = project.snapshot(image)
         metadata.verified_slice(project, image)
-        added = annotation_transfer.apply(project, image, snapshot, bundle, args.accept_type_hints)
+        added = annotation_transfer.apply(project,image,snapshot,bundle,args.accept_type_hints,
+                                          accept_boundary_edits=args.accept_boundary_edits)
     return envelope('annotations import', {'image_id': image['image_id'], 'appended_revisions': added},
                     snapshot['analysis_id'], cov=coverage('appended image annotation history', added, added))
+
+
+def boundary_command(args, project, command):
+    entry = manual_boundaries.address(args.address) if args.address is not None else None
+    kind = manual_boundaries.KIND
+    if args.action == 'list':
+        image = project.select(args.image,args.arch)
+        revision, rows = annotations.read(project,image['image_id'],kind=kind,engine_entry=entry)
+        rows,cov = page(rows,args,image['active_analysis'],project.project_id,
+                        {'image':image['image_id'],'revision':revision,'kind':kind,'entry':entry},
+                        order='annotation-revision/v1')
+        cov['scope'] = 'accepted image function boundary edits'
+        return envelope(command,rows,image['active_analysis'],cov=cov)
+    if not args.accept:
+        raise Error('boundary_edit_acceptance','Pass --accept to change a function boundary edit',2)
+    author = annotations.valid_text(args.author,'author',128)
+    with project.writer():
+        image = project.select(args.image,args.arch)
+        snapshot,_ = project.snapshot(image)
+        value = None
+        if args.action == 'set':
+            _, rows = annotations.read(project,image['image_id'],kind=kind)
+            if len(rows)>=manual_boundaries.MAX_EDITS and all(row['engine_entry']!=entry for row in rows):
+                raise Error('boundary_edit_limit','At most 32 active function boundary edits are supported',7)
+            before = manual_boundaries.saved_body(snapshot,entry)
+            body = None if args.remove else manual_boundaries.parse_body(args.body,entry)
+            value = manual_boundaries.value(before,body)
+        row,changed = annotations.revise(project,image['image_id'],snapshot['analysis_id'],entry,None,kind,value,author)
+    return envelope(command,{'revision':row,'changed':changed},snapshot['analysis_id'])
 
 
 def job_command(args, project, command):
@@ -649,6 +698,8 @@ def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=Fa
         data['boundary_recovery'] = recovery
         if recovery['status'] == 'partial':
             reasons.append('boundary_recovery_incomplete')
+    if 'manual_boundaries' in snapshot['engine']:
+        data['manual_boundaries'] = snapshot['engine']['manual_boundaries']
     if 'control_flow_review' in view:
         data['control_flow_review'] = view['control_flow_review']
         reasons.append('unresolved_control_flow')
@@ -661,19 +712,32 @@ def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=Fa
                              reason=';'.join(reasons) or None))
 
 
-def analyze_image(project, image, args, deps, command, *, resumed_from=None):
+def boundary_edit_request(project, image, *, at_revision=None):
+    _, history = annotations.read(project,image['image_id'],kind=manual_boundaries.KIND,
+                                  history=True,at_revision=at_revision)
+    return manual_boundaries.request(history,image)
+
+
+def analyze_image(project, image, args, deps, command, *, resumed_from=None, manual_plan=None):
     """Run analysis and publish its snapshot and receipt under the project writer lock."""
     data = metadata.verified_slice(project,image)
     boundary_request = recovery = None
     if getattr(args,'repair_split_boundaries',False):
         boundary_request = flow_boundaries.recovery_request(data,image)
         recovery = flow_boundaries.recovery_identity(boundary_request)
+    if getattr(args,'with_boundary_edits',False):
+        manual_plan = boundary_edit_request(project,image)
+    options = {}
+    if manual_plan is not None:
+        options['manual_request'] = manual_plan
+    edit_identity = manual_boundaries.request_identity(manual_plan) if manual_plan is not None else None
     baseline = project.path/'engine'/image['image_id']
     if (baseline.is_symlink() or not baseline.is_dir()
             or engine.tree_digest(baseline) != image['engine_baseline_sha256']):
         raise Error('baseline_integrity','Saved import Program DB changed; create a fresh project')
     raw,job=engine.run(project,image,'analyze',args,deps,boundary_request=boundary_request,
-                       analysis_request=jobs.analysis_request(project,image,recovery),resumed_from=resumed_from)
+                       analysis_request=jobs.analysis_request(project,image,recovery,edit_identity),
+                       resumed_from=resumed_from,**options)
     with jobs.result_publication('analysis',job['job_id'],resumed_from):
         return publish_analysis(project,image,deps,command,raw,job,resumed_from)
 
@@ -837,10 +901,18 @@ def resume_analysis(args, project, command, record, request):
     if 'boundary_recovery' in request:
         boundary = flow_boundaries.recovery_request(metadata.verified_slice(project,image),image)
         recovery = flow_boundaries.recovery_identity(boundary)
-    current = jobs.analysis_request(project,image,recovery)
+    manual_plan = edit_identity = None
+    if 'manual_boundaries' in request:
+        recorded = request['manual_boundaries']
+        cutoff = recorded.get('annotation_revision') if isinstance(recorded,dict) else None
+        if type(cutoff) is not int or cutoff <= 0 or recovery is not None:
+            raise Error('job_manifest','Invalid recorded boundary edit revision')
+        manual_plan = boundary_edit_request(project,image,at_revision=cutoff)
+        edit_identity = manual_boundaries.request_identity(manual_plan)
+    current = jobs.analysis_request(project,image,recovery,edit_identity)
     if dict(request,previous_analysis_id=image['active_analysis']) != current:
         raise Error('job_resume_inputs','The recorded immutable inputs differ from the workspace',8)
-    if record.get('boundary_recovery') != recovery:
+    if record.get('boundary_recovery') != recovery or record.get('manual_boundaries') != edit_identity:
         raise Error('job_resume_policy','The recorded boundary recovery policy differs from the request',3)
     receipt = jobs.publication(project,args.job_id)
     if receipt:
@@ -856,6 +928,8 @@ def resume_analysis(args, project, command, record, request):
     artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
     if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
         raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
+    if manual_plan is not None:
+        return analyze_image(project,image,replay,deps,command,resumed_from=args.job_id,manual_plan=manual_plan)
     return analyze_image(project,image,replay,deps,command,resumed_from=args.job_id)
 
 
@@ -1325,6 +1399,8 @@ def execute_command(a, address_selection=None):
     p=Project(a.project)
     if a.command == 'jobs':
         return job_command(a,p,command)
+    if a.command == 'boundary':
+        return boundary_command(a,p,command)
     if a.command == 'rename' or (a.command in ('comment','type') and a.action != 'list'):
         return revise_annotation(a,p,command,address_selection)
     if a.command == 'annotations' and a.action == 'import':

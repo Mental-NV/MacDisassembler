@@ -1286,6 +1286,29 @@ class CliTests(TemporaryCase):
         self.assertEqual(hints[0]['return_type'],pair)
         self.assertEqual(hints[1]['parameter_types'],[pair+'*','uint64_t'])
 
+    def test_manual_boundary_edits_preserve_snapshot_and_recover_the_original_revision(self):
+        image = self.workspace.select()
+        entry = self.snapshot['functions'][0]['entry_va']
+        end = hex(int(entry,16)+7)
+        words = ('boundary','set','--address',entry,'--body',f'{entry}:{end}')
+        self.error('boundary_edit_acceptance',cli.execute,self.args(*words))
+        covered = copy.deepcopy(self.snapshot)
+        covered['functions'][0]['coverage'] = {'body_ranges':{'status':'complete'}}
+        with mock.patch.object(storage.Project,'snapshot',return_value=(covered,{})):
+            accepted = cli.execute(self.args(*words,'--accept'))['data']['revision']
+        plan = cli.boundary_edit_request(self.workspace,image)
+        self.assertEqual(plan['edits'],[{'entry':entry,'before':self.snapshot['functions'][0]['body_ranges'],
+                                        'body':[[entry,end]],'revision':accepted['revision']}])
+        self.assertEqual(cli.execute(self.args('boundary','list','--address',entry))['data'],[accepted])
+        overlapping = hex(int(entry,16)+1)
+        cli.execute(self.args('boundary','set','--address',overlapping,'--body',f'{overlapping}:{end}','--accept'))
+        self.error('boundary_edit_overlap',cli.boundary_edit_request,self.workspace,image)
+        cli.execute(self.args('boundary','clear','--address',overlapping,'--accept'))
+        cli.execute(self.args('boundary','clear','--address',entry,'--accept'))
+        self.error('boundary_edits_missing',cli.boundary_edit_request,self.workspace,image)
+        self.assertEqual(cli.boundary_edit_request(self.workspace,image,at_revision=accepted['revision']),plan)
+        self.assertEqual(self.workspace.snapshot(image)[0],self.snapshot)
+
     def test_unresolved_computed_jump_surfaces_without_rewriting_saved_evidence(self):
         snapshot = copy.deepcopy(self.snapshot)
         target = snapshot['functions'][2]

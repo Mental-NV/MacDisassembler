@@ -439,7 +439,8 @@ Import appends the missing history in one transaction, assigning local
 revision numbers. Replaying an existing prefix makes no edits. Diverging
 histories, invalid targets and malformed files are rejected before any
 revision is written. Importing type-hint revisions requires the explicit
-`--accept-type-hints` flag. The transfer file is limited to 64 MiB.
+`--accept-type-hints` flag. Importing function boundary revisions requires
+`--accept-boundary-edits`. The transfer file is limited to 64 MiB.
 
 ### Accepted type hints
 
@@ -1214,6 +1215,54 @@ across 144 completed function records. All linked addresses matched exported
 instruction starts and the pseudocode matched the preceding bridge version.
 Fresh and cached links matched for `_calc_add` on both architectures.
 
+### Manual function boundary edits
+
+After saving an analysis, use `boundary set --accept` to record a function
+body at an unslid entry address. An existing entry receives a replacement
+body. An unused entry creates a function. Use `--remove` in place of
+`--body` to remove a saved function. Body ranges are inclusive. A body can
+contain up to 16 comma-separated ranges covering up to 64 KiB. It must
+contain its entry. The image can have up to 32 active boundary edits.
+
+```sh
+macscope boundary set --project workspaces/calculator --arch arm64 \
+  --address 0x1000002d8 --body 0x1000002d8:0x100000303 --accept --json
+macscope boundary list --project workspaces/calculator --arch arm64 --json
+macscope analyze --project workspaces/calculator --arch arm64 \
+  --with-boundary-edits --experimental-trusted-input --json
+```
+
+Each edit records the original body, proposed body, author and revision.
+`annotations history` shows the audit trail. `boundary clear --accept`
+appends a revision that clears the selected edit. Recording or clearing an
+edit leaves the current analysis in place. Run a new analysis to publish
+the edited or ordinary view. Use a separate run for guarded linker recovery.
+
+The worker checks each original body against the fresh autoanalysis before
+applying the edits together. Every proposed range must contain complete
+decoded instructions in executable memory. An overlap with an unedited
+function or another proposed body rejects the entire set. To split a
+function, record both the reduced original body and the new entry before
+running analysis. To join functions, record the expanded body and the
+removal of the competing entry. Manual corrections rely on the user for
+the intended ownership of those instructions.
+
+`manual_boundaries` in the analysis result records the applied revisions.
+Fresh queries use the edited Program and report its boundary request digest.
+An ordinary analysis uses the pristine import. A retry after interrupted
+publication uses the original accepted revisions even after a later clear.
+Use `annotations export` and `annotations import --accept-boundary-edits`
+to transfer the history to a compatible analysis of the same image.
+
+The installed CLI resized, added and removed functions on owned arm64
+and x86_64 slices. The split instruction bytes matched the original, and
+fresh Ghidra queries reopened the corrected bodies. An x86_64 test
+also preserved a discontiguous body. The worker rejected an overlap with
+an unedited function and a range ending inside an instruction. The
+validation checked annotation transfer and retry after interrupted
+publication, then reproduced the ordinary analysis. The report SHA-256 is
+`c68f9aa78850f7761fcc9fc9829aa9345c1b95e1711c776ea7914db74fd58e94`.
+
 ### Project and job status
 
 `status --project P` reports each selected image and its active analysis.
@@ -1720,7 +1769,8 @@ internal failure, 130 interrupt. A bounded collection page can have partial
 coverage while the page request itself exits0; use `next_cursor`.
 
 Remaining capabilities include richer Objective-C and Swift views, packed
-and nested aggregate hints, and manual function boundary corrections.
+and nested aggregate hints, and boundary edits that require decoding new
+instruction ranges.
 Additional release requirements include stronger isolation,
 hard RSS/disk quotas, schema migrations, signed packaging, x86_64 host
 workers and expanded fuzzing. The [progress checklist](current-status.md)

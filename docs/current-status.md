@@ -157,6 +157,12 @@ collections exceed documented bounds despite successful pseudocode output.
   and a large hidden-storage return. The x86_64 float pair retained vector
   lane operations. Verify opt-in annotation transfer, unchanged Programs
   and cached export, and receipt replay after a later clear.
+- [x] Apply [manual function boundary edits](cli.md#manual-function-boundary-edits)
+  as a separate full-Ghidra analysis. On owned arm64 and x86_64, resize,
+  add and remove functions, verify instruction-byte parity and reopen a
+  corrected body. Check discontiguous ranges, rejection of unsafe ranges,
+  opt-in transfer, and retry of the original edit set after a later clear.
+  Guarded linker recovery retained both its join and refusal decisions.
 - [x] Inventory physical bundle images and resources with hashes and
   resumable pages.
 - [x] Verify [`resources list`](cli.md#bundle-resources) on an owned app

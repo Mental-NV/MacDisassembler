@@ -4,7 +4,7 @@ import json
 import re
 import sqlite3
 
-from . import annotations
+from . import annotations, manual_boundaries
 from .errors import Error
 from .macho import read_regular
 from .storage import canonical
@@ -99,11 +99,14 @@ def validate(rows):
             raise Error("annotation_transfer_format", "Duplicate annotation revision provenance")
         sources.add(source)
         kind, entry, instruction = row["kind"], row["engine_entry"], row["instruction"]
-        if (kind not in ("name", "comment", *annotations.TYPE_HINT_KINDS) or not isinstance(entry, str)
+        if (kind not in ("name", "comment", *annotations.TYPE_HINT_KINDS, manual_boundaries.KIND)
+                or not isinstance(entry, str)
                 or (instruction is not None and (kind != "comment" or not isinstance(instruction, str)
                     or not re.fullmatch(r"0x(?:0|[1-9a-f][0-9a-f]{0,15})", instruction)))):
             raise Error("annotation_transfer_format", "Invalid annotation scope")
         annotations.valid_text(entry, "engine entry", 256)
+        if kind == manual_boundaries.KIND and entry != manual_boundaries.address(entry):
+            raise Error("annotation_transfer_format", "Boundary entry must use a canonical address")
         if not isinstance(row["author"], str) or not isinstance(row["created_at"], str):
             raise Error("annotation_transfer_format", "Invalid annotation author or timestamp")
         annotations.valid_text(row["author"], "author", 128)
@@ -123,6 +126,8 @@ def validate(rows):
                 annotations.return_type(value)
             elif kind == "parameter_types":
                 annotations.parameter_types(value)
+            elif kind == manual_boundaries.KIND:
+                manual_boundaries.read_value(entry, value)
             else:
                 annotations.valid_text(value, kind, 256 if kind == "name" else 4096,
                                        multiline=kind == "comment")
@@ -130,7 +135,7 @@ def validate(rows):
     return [row for row in latest.values() if row["value"] is not None]
 
 
-def apply(project, image, snapshot, bundle, accept_type_hints):
+def apply(project, image, snapshot, bundle, accept_type_hints, *, accept_boundary_edits=False):
     """Append the exact missing suffix while the caller holds the project lock."""
     if bundle["image"] != fingerprint(image):
         raise Error("annotation_transfer_image", "Annotation export belongs to a different imported image", 3)
@@ -149,12 +154,21 @@ def apply(project, image, snapshot, bundle, accept_type_hints):
             raise Error("annotation_transfer_conflict", "Incoming revisions claim missing destination history", 8)
         if not accept_type_hints and any(row["kind"] in annotations.TYPE_HINT_KINDS for row in suffix):
             raise Error("type_hint_acceptance", "Pass --accept-type-hints to import type hint revisions", 2)
+        if not accept_boundary_edits and any(row["kind"] == manual_boundaries.KIND for row in suffix):
+            raise Error("boundary_edit_acceptance", "Pass --accept-boundary-edits to import boundary revisions", 2)
         functions = {f["engine_entry"]: f for f in snapshot["functions"]}
         hints = [row for row in active if row["kind"] in annotations.TYPE_HINT_KINDS]
         if len(hints) > annotations.MAX_TYPE_HINTS:
             raise Error("type_hint_limit", "Image type hint limit reached", 7)
         annotations.check_structures(hints)
+        if sum(row["kind"] == manual_boundaries.KIND for row in active) > manual_boundaries.MAX_EDITS:
+            raise Error("boundary_edit_limit", "At most 32 active function boundary edits are supported", 7)
         for row in active:
+            if row["kind"] == manual_boundaries.KIND:
+                entry = row["engine_entry"]
+                if manual_boundaries.saved_body(snapshot, entry) != manual_boundaries.read_value(entry, row["value"])["before"]:
+                    raise Error("annotation_transfer_target", "A boundary edit differs from the destination function body", 3)
+                continue
             function = functions.get(row["engine_entry"])
             if function is None:
                 raise Error("annotation_transfer_target", "An active annotation has no matching function", 3)

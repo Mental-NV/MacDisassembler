@@ -16,7 +16,7 @@ import subprocess
 import time
 import uuid
 from copy import deepcopy
-from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, scalar_signatures, switch_tables, worker_lifecycle
+from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, manual_boundaries, scalar_signatures, switch_tables, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS, structure_definitions
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -25,7 +25,7 @@ from .macho import read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
-BRIDGE_VERSION = '1.11.0'
+BRIDGE_VERSION = '1.12.0'
 STARTUP_TIMEOUT_SECONDS = 300
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
@@ -360,7 +360,8 @@ def decompiler_timing(result, max_functions):
 
 
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
-        import_request=None, query_request=None, resumed_from=None, boundary_request=None, signature_plan=None):
+        import_request=None, query_request=None, resumed_from=None, boundary_request=None, signature_plan=None,
+        manual_request=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -382,6 +383,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             raise Error('type_hint_request_limit','Accepted hints exceed the worker request size limit',7)
     if boundary_request is not None and mode != 'analyze':
         raise Error('boundary_recovery_scope', 'Boundary recovery requires analysis of an imported image', 2)
+    if manual_request is not None and (mode != 'analyze' or boundary_request is not None):
+        raise Error('boundary_edit_scope', 'Manual boundary edits require a separate analysis', 2)
     recovery = None
     bound_recoveries = {key: query_request[key] for key in jobs.SIGNATURE_RECOVERY_FIELDS
                         if query_request is not None and key in query_request}
@@ -459,6 +462,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         boundaries = job/'boundary-request.json'
         write_json(boundaries,boundary_request,mode=0o400)
         argv.append(str(boundaries))
+    if manual_request is not None:
+        boundaries = job/'manual-boundaries.json'
+        write_json(boundaries,manual_request,mode=0o400)
+        argv.append(str(boundaries))
     if entry is not None:
         argv.append(entry)
     if hints is not None:
@@ -475,6 +482,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         manifest['boundary_recovery'] = flow_boundaries.recovery_identity(boundary_request)
     if mode == 'query' and 'boundary_recovery' in saved_snapshot['identity']:
         manifest['boundary_recovery'] = saved_snapshot['identity']['boundary_recovery']
+    if manual_request is not None:
+        manifest['manual_boundaries'] = manual_boundaries.request_identity(manual_request)
+    if mode == 'query' and 'manual_boundaries' in saved_snapshot['identity']:
+        manifest['manual_boundaries'] = saved_snapshot['identity']['manual_boundaries']
     if import_request is not None:
         manifest['import_request'] = import_request
     if query_request is not None:
@@ -525,6 +536,9 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if result.get('executable_sha256') != image['sha256']:
             raise Error('engine_input_integrity', 'Ghidra loaded a different input digest')
         if result.get('status') == 'failed':
+            rejected = result.get('manual_boundary_rejection')
+            if manual_request is not None and isinstance(rejected,str):
+                raise Error('boundary_edit_rejected',rejected,3)
             raise Error('bridge_failed', 'Bridge failed: '+str(result.get('errors')), 10)
         timing = decompiler_timing(result,max_functions)
         if timing is not None:
@@ -532,6 +546,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if mode != 'import':
             validate_analysis_profile(result, requested_profile, mode)
         flow_boundaries.verify_recovery(result,boundary_request)
+        manual_boundaries.verify(result,manual_request)
         if entry is not None:
             rows = result.get('functions', [])
             if (result.get('selected_entry') != entry or len(rows) != 1
