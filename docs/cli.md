@@ -486,8 +486,10 @@ Program database is retained. Each analysis clones the pristine no-analysis
 import, so a retry cannot silently inherit preceding analyzer mutations.
 The default bridge profile remains `macscope-binary-only/1`. It resets and
 records every effective analysis option and disables source/DWARF/PDB/debug/
-external/library and demangler options. `deep` is explicitly unsupported,
-not an alias. See the explicit alternate profile below.
+external/library and demangler options. See the
+[deep analysis profile](#deep-analysis-profile) and
+[parameter inference profile](#experimental-binary-derived-parameter-inference)
+for the explicit alternatives.
 
 SQLite points only to completed, digest-checked immutable JSON snapshots.
 A writer lock serializes import and analyze; readers continue using the
@@ -818,6 +820,54 @@ directory must be new; private evidence remains there even on failure.
 Use an absolute build-root path when running from a separate worktree.
 See [the profile evidence review](parameter-inference.md) for measured scope
 and remaining limits.
+
+## Deep analysis profile
+
+```sh
+macscope analyze --project workspaces/calculator --profile deep \
+  --experimental-trusted-input --json
+```
+
+`deep/1` enables Ghidra 12.2's `Decompiler Parameter ID` and the Reference
+analyzer's `Create Address Tables` option. The Reference analyzer can
+define pointer entries at addresses referenced by instructions. Relocation
+guidance stays enabled. The profile checks that Reference switch-table
+inference and the Aggressive Instruction Finder stay disabled, and retains
+the baseline exclusions for source and external analyzers. The export
+records the full option inventory and the Program marker
+`macscope-binary-only-deep/1`. Fresh decompilation verifies the saved
+profile on the read-only Program. Analysis restart verifies and reuses the
+recorded profile and limits. Address-table references are inferred data
+evidence. Unresolved indirect jumps keep their explicit coverage gaps.
+
+The [owned packed-table fixture](../analysis/heldout_address_table.S)
+contains a table referenced by an instruction, a second unreferenced table
+with the same pointer bytes, and an indirect jump with an unknown
+destination. Build it with the macOS command-line tools from the repo root.
+
+```sh
+fixture_dir=$(mktemp -d /private/tmp/macscope-deep-fixture.XXXXXX)
+xcrun clang -arch arm64 -nostdlib -lSystem -Wl,-no_fixup_chains,-e,_main \
+  -o "$fixture_dir/arm64" analysis/heldout_address_table.S
+xcrun clang -arch x86_64 -nostdlib -lSystem -Wl,-no_pie,-no_fixup_chains,-e,_main \
+  -o "$fixture_dir/x86_64" analysis/heldout_address_table.S
+```
+
+Import each binary into a separate disposable project and export after
+analyzing under each of the three profiles. Use `xcrun nm -n` to locate
+`_owned_table`, then query its three consecutive 8-byte entries with
+`macscope xrefs --project PROJECT --from ADDRESS`. On both architectures, the installed CLI
+reported 22 references under baseline and parameter inference and 25 under
+deep. Each of the three additions matched the pointer bytes and the
+linker address of its target. The unreferenced control table gained no
+references, and the unresolved jump kept the same coverage gap under all
+three profiles. The fixture's analyze and export commands exit 6 because
+of that gap. Repeated deep exports matched byte for byte, fresh
+decompilation used the saved deep Program, and switching back reproduced
+the baseline exports. A cancelled arm64 deep job preserved the previous
+snapshot. Its restart reproduced the deep export, and a second restart
+request returned the saved receipt. The validation report SHA-256 is
+`81170c7a32865b1131fd4939d3e824fa015e96a27c7516f3f603df34181e9132`.
 
 ## Limits and safety boundaries
 

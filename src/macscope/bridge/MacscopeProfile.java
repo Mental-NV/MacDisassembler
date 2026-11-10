@@ -13,6 +13,16 @@ import ghidra.program.model.listing.Program;
 public class MacscopeProfile extends HeadlessScript {
     public static final String PROFILE = "macscope-binary-only/1";
     public static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
+    public static final String DEEP_PROFILE = "macscope-binary-only-deep/1";
+    private static final Map<String, String> DEEP_OPTIONS = Map.of(
+        "Reference", "true",
+        "Reference.Create Address Tables", "true",
+        "Reference.Address Table Alignment", "1",
+        "Reference.Address Table Minimum Size", "2",
+        "Reference.Relocation Table Guide", "true",
+        "Reference.Switch Table References", "false",
+        "Aggressive Instruction Finder", "false"
+    );
     private static final int MAX_OPTIONS = 4096;
 
     @Override
@@ -22,11 +32,15 @@ public class MacscopeProfile extends HeadlessScript {
                 throw new IllegalStateException("Profile requires a loaded Program and Ghidra 12.2");
             }
             String[] args = getScriptArgs();
-            if (args.length > 1 || (args.length == 1 && !args[0].equals("parameter-inference"))) {
-                throw new IllegalArgumentException("Only explicit parameter-inference is supported");
+            boolean deep = args.length == 1 && args[0].equals("deep");
+            if (args.length > 1 || (args.length == 1 && !deep && !args[0].equals("parameter-inference"))) {
+                throw new IllegalArgumentException("Unsupported Macscope analysis profile");
             }
             boolean inferParameters = args.length == 1;
             String selectedProfile = inferParameters ? PARAMETER_PROFILE : PROFILE;
+            if (deep) {
+                selectedProfile = DEEP_PROFILE;
+            }
             // Reset prior saved/user-specific choices before applying this versioned profile.
             resetAllAnalysisOptions(currentProgram);
             Map<String, String> values = getCurrentAnalysisOptionsAndValues(currentProgram);
@@ -56,10 +70,20 @@ public class MacscopeProfile extends HeadlessScript {
             if (inferParameters) {
                 setAnalysisOption(currentProgram, "Decompiler Parameter ID", "true");
             }
+            if (deep) {
+                setAnalysisOption(currentProgram, "Reference.Create Address Tables", "true");
+            }
             Map<String, String> effective = getCurrentAnalysisOptionsAndValues(currentProgram);
             String expectedParameterID = inferParameters ? "true" : "false";
             if (!expectedParameterID.equals(effective.get("Decompiler Parameter ID"))) {
                 throw new IllegalStateException("Unexpected Decompiler Parameter ID setting");
+            }
+            if (deep) {
+                for (var option : DEEP_OPTIONS.entrySet()) {
+                    if (!option.getValue().equals(effective.get(option.getKey()))) {
+                        throw new IllegalStateException("Unexpected deep analysis option: " + option.getKey());
+                    }
+                }
             }
             for (int i = 0; i < disabled.size() && i < MAX_OPTIONS; i++) {
                 String name = disabled.get(i);

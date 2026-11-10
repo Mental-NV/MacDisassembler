@@ -15,7 +15,8 @@ contains documentation only.
   tested macOS arm64 host.
 - Version/doctor, bounded Mach-O/app-main inspection, private project creation,
   explicit thin/universal slice import without autoanalysis, versioned baseline
-  analysis and explicitly selected binary-derived parameter inference,
+  analysis, explicitly selected binary-derived parameter inference and
+  deep address-table discovery,
   function list/show, function and range disassembly, cached and fresh selected-function pseudocode, references,
   CFG JSON/DOT, project/job status, cached search, bounded call traversal
   and normalized exports.
@@ -281,6 +282,12 @@ collections exceed documented bounds despite successful pseudocode output.
   worker could not modify an earlier Program or the shared index.
   Live import, analysis, and fresh-query restarts each used a new
   job-specific policy and replayed their receipts.
+- [x] Verify the [deep analysis profile](cli.md#deep-analysis-profile) with
+  installed full Ghidra 12.2 on owned arm64 and x86_64 fixtures. Deep
+  added three byte-checked data references per architecture, preserved
+  unresolved jump coverage, and reproduced each export on repeat.
+  Fresh reads verified the saved profile, switching back reproduced
+  baseline, and a cancelled arm64 job restarted and replayed its receipt.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

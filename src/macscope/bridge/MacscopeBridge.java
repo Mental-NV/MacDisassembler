@@ -83,6 +83,7 @@ public class MacscopeBridge extends HeadlessScript {
     static final String VERSION = "1.6.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
+    static final String DEEP_PROFILE = "macscope-binary-only-deep/1";
     static final int MAX_INSTRUCTIONS = 2000, MAX_BLOCKS = 500, MAX_EDGES = 500;
     static final int MAX_XREFS = 200, MAX_RANGES = 512, MAX_SECTIONS = 2048;
     static final int MAX_SYMBOLS = 10000, MAX_STRINGS = 5000, MAX_SCAN = 100000;
@@ -294,7 +295,8 @@ public class MacscopeBridge extends HeadlessScript {
         } else if (mode.equals("analyze")) {
             Options info = currentProgram.getOptions(Program.PROGRAM_INFO);
             String appliedProfile = info.getString("Macscope Profile", null);
-            if ((!PROFILE.equals(appliedProfile) && !PARAMETER_PROFILE.equals(appliedProfile)) ||
+            if ((!PROFILE.equals(appliedProfile) && !PARAMETER_PROFILE.equals(appliedProfile)
+                    && !DEEP_PROFILE.equals(appliedProfile)) ||
                 !info.getBoolean("Macscope Profile Applied", false)) {
                 fatal = true; errors.add("Required binary-only pre-analysis profile was not applied");
             }

@@ -17,6 +17,16 @@ def raw_result(name="baseline", mode="analyze"):
     profile = engine.analysis_profile(name)
     opts = {"Decompiler Parameter ID": "true" if profile["parameter_inference"] else "false",
             "DWARF": "false"}
+    if name == "deep":
+        opts.update({
+            "Reference": "true",
+            "Reference.Create Address Tables": "true",
+            "Reference.Address Table Alignment": "1",
+            "Reference.Address Table Minimum Size": "2",
+            "Reference.Relocation Table Guide": "true",
+            "Reference.Switch Table References": "false",
+            "Aggressive Instruction Finder": "false",
+        })
     function = {"name": "_unrelated_function", "entry_va": "0x100000000",
                 "body_ranges": [["0x100000000", "0x100000003"]],
                 "signature": "long function(long value)", "pseudocode": "return value + 1;",
@@ -57,13 +67,24 @@ class ProfileTests(unittest.TestCase):
         candidate["marker"] = "changed"
         self.assertNotEqual(engine.analysis_profile("parameter-inference")["marker"], "changed")
 
-    def test_unknown_and_deep_never_fall_back(self):
-        for name in ("deep", "typo", None):
+    def test_unknown_never_falls_back(self):
+        for name in ("typo", None):
             self.error("unsupported_profile", engine.analysis_profile, name)
 
-    def test_both_profile_results_validate(self):
+    def test_all_profile_results_validate(self):
         for name in engine.ANALYSIS_PROFILES:
             engine.validate_analysis_profile(raw_result(name), engine.analysis_profile(name), "analyze")
+
+    def test_deep_requires_extra_discovery_and_disabled_switch_inference(self):
+        for mode in ("analyze", "query"):
+            for option in ("Reference.Create Address Tables", "Reference.Relocation Table Guide",
+                           "Reference.Switch Table References", "Aggressive Instruction Finder"):
+                with self.subTest(mode=mode, option=option):
+                    raw = raw_result("deep", mode)
+                    opts = raw["effective_analysis_options"]
+                    opts[option] = "false" if opts[option] == "true" else "true"
+                    self.error("profile_options_mismatch", engine.validate_analysis_profile,
+                               raw, engine.analysis_profile("deep"), mode)
 
     def test_marker_metadata_and_parameter_flag_must_match(self):
         for key, value in (("name", "wrong"), ("applied", False), ("ghidra_version", "other"),
@@ -124,8 +145,8 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(snapshot["identity"]["profile_configuration"], spec)
             self.assertEqual(snapshot["analysis_profile"], spec)
             outputs.append(snapshot)
-        self.assertNotEqual(outputs[0]["analysis_id"], outputs[1]["analysis_id"])
-        self.assertNotEqual(outputs[0]["functions"][0]["function_id"], outputs[1]["functions"][0]["function_id"])
+        self.assertEqual(len({item["analysis_id"] for item in outputs}), len(outputs))
+        self.assertEqual(len({item["functions"][0]["function_id"] for item in outputs}), len(outputs))
         self.assertEqual(outputs[0]["functions"][0]["pseudocode"], outputs[1]["functions"][0]["pseudocode"])
         self.assertTrue(any("may be wrong" in limit for limit in outputs[1]["limitations"]))
 
@@ -196,7 +217,7 @@ class ProfileRunnerTests(unittest.TestCase):
             self.assertEqual(job["sandbox_sha256"], engine.job_sandbox_sha256(self.project, self.deps, job["job_id"]))
             self.assertNotEqual(job["sandbox_sha256"], engine.job_sandbox_sha256(self.project, self.deps, "1" * 32))
             next_arg = self.seen[self.seen.index("MacscopeProfile.java") + 1]
-            self.assertEqual(next_arg, "parameter-inference" if name != "baseline" else "-scriptPath")
+            self.assertEqual(next_arg, name if name != "baseline" else "-scriptPath")
 
     def test_worker_cannot_silently_substitute_a_jdk(self):
         def reply(argv, *, cwd, **kwargs):
@@ -328,9 +349,12 @@ class ProfileRunnerTests(unittest.TestCase):
 
     def test_unsupported_profile_fails_before_job_creation(self):
         before = list((self.project.path / "jobs").iterdir())
+        args = self.args()
+        args.profile = "typo"
         with mock.patch.object(engine, "run_process") as run:
-            with self.assertRaises(Error):
-                engine.run(self.project, self.image, "analyze", self.args("deep"), self.deps)
+            with self.assertRaises(Error) as caught:
+                engine.run(self.project, self.image, "analyze", args, self.deps)
+        self.assertEqual(caught.exception.code, "unsupported_profile")
         run.assert_not_called()
         self.assertEqual(list((self.project.path / "jobs").iterdir()), before)
 

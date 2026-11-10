@@ -87,7 +87,7 @@ def parser():
     s=sub.add_parser('import');s.add_argument('input');s.add_argument('--project',required=True);s.add_argument('--arch',choices=('arm64','x86_64','all'));common(s);budgets(s)
     s.add_argument('--include-images',action='append',metavar='PATH|all',
                    help='Include an exact bundle-relative executable path in addition to the main image')
-    s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=('baseline','parameter-inference','deep'),default='baseline',help='baseline is unchanged; parameter-inference is an explicit experimental binary-only profile');common(s);budgets(s)
+    s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=tuple(engine.ANALYSIS_PROFILES),default='baseline',help='select baseline, binary-derived parameter inference, or deep analysis with additional address-table discovery');common(s);budgets(s)
     s.add_argument('--repair-split-boundaries',action='store_true',help='Apply guarded linker-derived function joins to this analysis copy')
     s=sub.add_parser('status');project(s);common(s)
     s=sub.add_parser('jobs');ss=s.add_subparsers(dest='action',required=True)
@@ -274,6 +274,8 @@ def normalize(raw, image, deps, manifest):
         functions.append(f)
     functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['engine_entry'],f['function_id']))
     value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','Pseudocode spans cover available token addresses within the function body.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
+    if selected_profile['name'] == 'deep':
+        value['limitations'].append('Address-table references are inferred from binary evidence and do not establish indirect control-flow targets.')
     return redact(value)
 
 

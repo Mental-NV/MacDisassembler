@@ -15,6 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
+from copy import deepcopy
 from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, scalar_signatures, switch_tables, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
@@ -47,15 +48,28 @@ ANALYSIS_PROFILES = {
                  'marker': 'macscope-binary-only/1', 'parameter_inference': False},
     'parameter-inference': {'name': 'parameter-inference', 'identity': 'parameter-inference/1',
                  'marker': 'macscope-binary-only-parameters/1', 'parameter_inference': True},
+    'deep': {
+        'name': 'deep', 'identity': 'deep/1',
+        'marker': 'macscope-binary-only-deep/1', 'parameter_inference': True,
+        'required_options': {
+            'Reference': 'true',
+            'Reference.Create Address Tables': 'true',
+            'Reference.Address Table Alignment': '1',
+            'Reference.Address Table Minimum Size': '2',
+            'Reference.Relocation Table Guide': 'true',
+            'Reference.Switch Table References': 'false',
+            'Aggressive Instruction Finder': 'false',
+        },
+    },
 }
 
 
 def analysis_profile(name='baseline'):
     try:
-        return dict(ANALYSIS_PROFILES[name])
+        return deepcopy(ANALYSIS_PROFILES[name])
     except (KeyError, TypeError):
         raise Error('unsupported_profile',
-                    'Supported profiles are baseline and experimental parameter-inference; deep remains unsupported', 3) from None
+                    'Supported profiles are baseline, parameter-inference and deep', 3) from None
 
 
 def profile_for_snapshot(snapshot):
@@ -78,8 +92,10 @@ def validate_analysis_profile(raw, expected, mode):
         raise Error('profile_mismatch', 'Saved Program does not have the requested analysis profile', 10)
     options = raw.get('effective_analysis_options', {})
     desired = 'true' if expected['parameter_inference'] else 'false'
-    if options.get('Decompiler Parameter ID') != desired:
-        raise Error('profile_options_mismatch', 'Parameter-inference option differs from the requested profile', 10)
+    required = {'Decompiler Parameter ID': desired, **expected.get('required_options', {})}
+    for name, value in required.items():
+        if options.get(name) != value:
+            raise Error('profile_options_mismatch', 'Analyzer option differs from the requested profile: ' + name, 10)
     option_coverage = raw.get('coverage', {}).get('effective_analysis_options', {})
     if (option_coverage.get('status') != 'complete'
             or option_coverage.get('truncated') is not False or option_coverage.get('error')
@@ -361,7 +377,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                          str(args.function_timeout)]
         else:
             argv += ['-preScript', 'MacscopeProfile.java']
-            if requested_profile['parameter_inference']:
+            if requested_profile['name'] != 'baseline':
                 argv += [requested_profile['name']]
     max_functions = 1 if entry is not None else args.max_functions
     argv += ['-scriptPath', str(BRIDGE.resolve()), '-postScript', 'MacscopeBridge.java',
