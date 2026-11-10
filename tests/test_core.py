@@ -432,6 +432,48 @@ class ProjectTests(TemporaryCase):
             db.execute('UPDATE analyses SET payload=?', ('{"snapshot_sha256":0}',))
         self.error('snapshot_record', project.snapshot, project.select())
 
+    def test_workspace_json_rejects_ambiguous_manifest_index_and_snapshot_records(self):
+        project = self.project()
+        snapshot, record = synthetic_snapshot(project)
+        image = project.select()
+
+        def invalid_payloads(value, duplicate):
+            tail = storage.canonical(value)[1:]
+            shadow = json.dumps({duplicate: 'shadowed'}).encode()[:-1]
+            return (shadow + b',' + tail, b'{"extra":1e999,' + tail,
+                    b'{"extra":' + b'[' * storage.MAX_JSON_DEPTH + b'0' + b']' * storage.MAX_JSON_DEPTH + b',' + tail)
+
+        manifest = project.path / 'project.json'
+        valid_manifest = manifest.read_bytes()
+        for payload in invalid_payloads(json.loads(valid_manifest), 'project_id'):
+            storage.atomic(manifest, payload, force=True)
+            self.error('workspace_manifest', storage.Project, project.path)
+        storage.atomic(manifest, valid_manifest, force=True)
+
+        for payload in invalid_payloads(snapshot['image'], 'image_id'):
+            with project.db(False) as db:
+                db.execute('UPDATE images SET metadata=?', (payload.decode(),))
+            self.error('workspace_image', project.images)
+        with project.db(False) as db:
+            db.execute('UPDATE images SET metadata=?', (json.dumps(snapshot['image']),))
+        for payload in invalid_payloads(record, 'snapshot_sha256'):
+            with project.db(False) as db:
+                db.execute('UPDATE analyses SET payload=?', (payload.decode(),))
+            self.error('snapshot_record', project.snapshot, image)
+
+        path = project.path / 'snapshots' / (snapshot['analysis_id'] + '.json')
+        valid_snapshot = path.read_bytes()
+        for payload in invalid_payloads(snapshot, 'analysis_id'):
+            storage.atomic(path, payload, force=True)
+            receipt = dict(record, snapshot_sha256=hashlib.sha256(payload).hexdigest())
+            with project.db(False) as db:
+                db.execute('UPDATE analyses SET payload=?', (json.dumps(receipt),))
+            self.error('snapshot_format', project.snapshot, image)
+        storage.atomic(path, valid_snapshot, force=True, mode=0o400)
+        with project.db(False) as db:
+            db.execute('UPDATE analyses SET payload=?', (json.dumps(record),))
+        self.assertEqual(project.snapshot(project.select()), (snapshot, record))
+
 
 class PaginationAndSelectorsTests(TemporaryCase):
     def setUp(self):
@@ -966,8 +1008,10 @@ class CliTests(TemporaryCase):
             with self.subTest(change=change):
                 changed = dict(result,data=dict(result['data'],**change))
                 self.error('query_receipt',jobs.publish_query,self.workspace,job_id,request,changed)
-                forged = dict(json.loads(original), result=changed, result_sha256=storage.identity(changed))
-                storage.write_json(path,forged,force=True)
+                corrupt_result = json.dumps(changed, sort_keys=True, separators=(',', ':')).encode()
+                forged = dict(json.loads(original), result=changed,
+                              result_sha256=hashlib.sha256(corrupt_result).hexdigest())
+                storage.atomic(path,json.dumps(forged).encode(),force=True)
                 storage.write_json(job/'job.json',dict(record,focused_result_sha256=forged['result_sha256']),force=True)
                 self.error('query_receipt',jobs.query_receipt,self.workspace,job_id,request)
 

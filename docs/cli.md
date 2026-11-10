@@ -2058,6 +2058,11 @@ identity. Invalid receipts, malformed snapshots and identity mismatches
 return `snapshot_record`, `snapshot_format` and `snapshot_identity`
 respectively, all with exit 5.
 
+Workspace manifests, indexed image and analysis records, and snapshot
+files reject duplicate JSON fields, nonfinite numbers, and nesting over
+64 containers. Snapshot and query receipt publication use the same
+nesting limit, and the JSON writer rejects nonfinite numbers.
+
 Publication and reopening both check that each function row belongs to
 the selected image, architecture and analysis. Function IDs and entry
 addresses must be unique. Different hexadecimal spellings of one RAM

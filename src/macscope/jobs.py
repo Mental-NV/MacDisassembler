@@ -8,7 +8,7 @@ import stat
 from . import focused, worker_lifecycle
 from .errors import Error
 from .macho import read_regular
-from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity, is_digest, strict_json, write_json
+from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, check_json_nesting, identity, is_digest, strict_json, write_json
 
 
 JOB_ID = re.compile(r"[0-9a-f]{32}")
@@ -461,9 +461,14 @@ def publish_query(project, job_id, request, result):
     path = project.path / "jobs" / job_id / "query-result.json"
     if request.get("schema") == FOCUSED_REQUEST:
         focused.validate_result(result, request["extent"])
-    receipt = {"schema": QUERY_RECEIPT, "request_sha256": identity(request),
-               "result_sha256": identity(result), "result": result}
-    payload = canonical(receipt) + b"\n"
+    try:
+        receipt = {"schema": QUERY_RECEIPT, "request_sha256": identity(request),
+                   "result_sha256": identity(result), "result": result}
+        payload = canonical(receipt) + b"\n"
+        if len(payload) <= MAX_SNAPSHOT_BYTES:
+            check_json_nesting(payload)
+    except (ValueError, RecursionError) as error:
+        raise Error("query_receipt", "Query result cannot be stored as bounded JSON") from error
     if len(payload) > MAX_SNAPSHOT_BYTES:
         raise Error("query_result_limit", "Query result exceeds its read limit", 7,
                     partial={"job_id": job_id})

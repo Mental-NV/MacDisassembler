@@ -437,6 +437,17 @@ class ProfileRunnerTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, code)
                 record = json.loads(job_path.read_bytes())
                 self.assertEqual((record["status"], record["error"]["code"]), ("failed", code))
+        nested = None
+        for _ in range(storage.MAX_JSON_DEPTH - 1):
+            nested = [nested]
+        deep_raw = dict(raw, extra=nested)
+        self.assertEqual(storage.strict_json(storage.canonical(deep_raw)), deep_raw)
+        with mock.patch.object(engine, "dependencies", return_value=self.deps), \
+             mock.patch.object(engine, "run", return_value=(deep_raw, job)):
+            with self.assertRaises(Error) as caught:
+                cli.execute(self.args("parameter-inference"))
+        self.assertEqual(caught.exception.code, "snapshot_format")
+        self.assertEqual(json.loads(job_path.read_bytes())["status"], "failed")
         with mock.patch.object(engine, "dependencies", return_value=self.deps), \
              mock.patch.object(engine, "run", return_value=(raw, job)):
             with self.assertRaises(Error) as caught:

@@ -19,7 +19,7 @@ UNSLID_VA = re.compile(r'0x[0-9a-fA-F]{1,16}')
 WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
 WORKSPACE_RESERVED = frozenset((*WORKSPACE_DIRECTORIES, 'project.json', 'writer.lock',
                                 'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm'))
-CANONICAL_JSON = json.JSONEncoder(sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+CANONICAL_JSON = json.JSONEncoder(sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False)
 JSON_STRUCTURE = re.compile(rb'["\\{}\[\]]')
 MAX_JSON_DEPTH = 64
 
@@ -73,7 +73,7 @@ def validate_snapshot_functions(functions, image, analysis_id):
         entries.add(key)
 
 
-def strict_json(payload):
+def check_json_nesting(payload):
     # Scan ASCII delimiters before the decoder allocates deeply nested containers.
     # UTF-8 continuation bytes cannot be mistaken for these delimiters.
     if b'\0' in payload:
@@ -101,6 +101,12 @@ def strict_json(payload):
             if depth < 0:
                 raise ValueError('Unbalanced JSON delimiters')
 
+
+def strict_json(payload):
+    if isinstance(payload, str):
+        payload = payload.encode('utf-8')
+    check_json_nesting(payload)
+
     def unique_fields(pairs):
         value = dict(pairs)
         if len(value) != len(pairs):
@@ -119,7 +125,7 @@ def strict_json(payload):
 
 def json_object(payload, code, message):
     try:
-        value = json.loads(payload)
+        value = strict_json(payload)
     except (TypeError, ValueError, RecursionError) as error:
         raise Error(code, message) from error
     if not isinstance(value, dict):
@@ -201,11 +207,9 @@ class Project:
         self.path = checked_path(path, directory=True)
         if self.path.stat().st_uid != os.getuid() or self.path.stat().st_mode & 0o077:
             raise Error('workspace_permissions', 'Workspace must be owner-private (chmod 700)', 8)
-        try:
-            manifest = json.loads(read_regular(self.path/'project.json', 65536))
-        except (ValueError, RecursionError) as error:
-            raise Error('workspace_manifest', 'Invalid workspace manifest JSON') from error
-        if not isinstance(manifest, dict) or not isinstance(manifest.get('schema_version'), str):
+        manifest = json_object(read_regular(self.path/'project.json', 65536),
+                               'workspace_manifest', 'Invalid workspace manifest JSON')
+        if not isinstance(manifest.get('schema_version'), str):
             raise Error('workspace_manifest', 'Invalid workspace manifest structure')
         if manifest['schema_version'] != '1.0':
             raise Error('workspace_schema', 'Unsupported workspace schema; export with its original version', 3)

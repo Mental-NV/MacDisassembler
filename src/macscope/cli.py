@@ -16,7 +16,8 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, analysis_program_history, atomic, atomic_chunks,
-                      canonical, canonical_chunks, identity, is_digest, json_object, validate_snapshot_functions, write_json)
+                      canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
+                      validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
@@ -802,7 +803,12 @@ def publish_analysis(project, image, deps, command, raw, job, resumed_from):
     worker_dir=project.path/'jobs'/job['job_id']
     try:
         normalized=normalize(raw,image,deps,job)
-    except (Error, AttributeError, KeyError, TypeError, ValueError) as error:
+        payload=canonical(normalized)+b'\n'
+        if len(payload)>MAX_SNAPSHOT_BYTES and address_xrefs.omit_for_snapshot_budget(normalized):
+            payload=canonical(normalized)+b'\n'
+        if len(payload)<=MAX_SNAPSHOT_BYTES:
+            check_json_nesting(payload)
+    except (Error, AttributeError, KeyError, TypeError, ValueError, RecursionError) as error:
         failure = error if isinstance(error,Error) else Error('snapshot_format','Worker evidence could not be normalized')
         jobs.fail(worker_dir/'job.json',job,failure)
         if failure is error:
@@ -810,9 +816,6 @@ def publish_analysis(project, image, deps, command, raw, job, resumed_from):
         raise failure from error
     aid=normalized['analysis_id']
     out=project.path/'snapshots'/(aid+'.json')
-    payload=canonical(normalized)+b'\n'
-    if len(payload)>MAX_SNAPSHOT_BYTES and address_xrefs.omit_for_snapshot_budget(normalized):
-        payload=canonical(normalized)+b'\n'
     if len(payload)>MAX_SNAPSHOT_BYTES:
         raise Error('snapshot_limit','Normalized snapshot exceeds its read limit; analyze fewer functions',7)
     try:

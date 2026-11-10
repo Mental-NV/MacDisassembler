@@ -140,6 +140,16 @@ class QueryResumeTests(TemporaryCase):
             self.error("analysis_program_integrity", self.resume)
             run.assert_not_called()
 
+    def test_query_writer_rejects_results_its_reader_cannot_reopen(self):
+        nested = None
+        for _ in range(storage.MAX_JSON_DEPTH):
+            nested = [nested]
+        for value in (nested, float("inf")):
+            with self.subTest(value=type(value)):
+                result = cli.envelope("decompile", {"extra": value}, self.aid)
+                self.error("query_receipt", jobs.publish_query, self.workspace, self.prior, self.request, result)
+                self.assertFalse(self.prior_path.with_name("query-result.json").exists())
+
     def test_runtime_selection_is_verified_and_replayed_with_the_receipt(self):
         selection = {"runtime_va": "0x100004000", "load_slide": "0x4000", "va": self.entry,
                      "address_space": "ram", "image_id": self.image_id, "arch": "arm64"}

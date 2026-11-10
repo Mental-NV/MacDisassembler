@@ -524,6 +524,13 @@ collections exceed documented bounds despite successful pseudocode output.
   before opening stored work. Eight corrupt-workspace queries returned
   typed errors. Five archived exports matched, and both owned architectures
   completed full headless analysis and fresh decompilation.
+- [x] Apply strict JSON checks to workspace manifests, indexed records
+  and snapshots. Twelve installed-CLI controls rejected duplicate fields,
+  nonfinite numbers or excessive nesting. Restoring the owned workspace
+  reproduced its cached export. A real worker result exceeded the depth
+  limit after normalization and failed before publication. Its clean
+  retry and offline replay passed. All 48 checked archived snapshots
+  parsed, and cached arm64 and x86_64 outputs matched byte for byte.
 - [x] Verify function identity at snapshot publication and reopening.
   Two full-headless owned Calendar analyses reached normalization with an
   injected duplicate entry or invalid instruction bytes. Each failed
