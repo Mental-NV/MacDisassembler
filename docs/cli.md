@@ -110,7 +110,7 @@ macscope headers --project workspaces/calculator --json
 macscope sections --project workspaces/calculator --name-contains text --json
 macscope imports --project workspaces/calculator --json
 macscope exports --source dyld --project workspaces/calculator --json
-macscope strings --project workspaces/calculator --min-length 8 --json
+macscope strings --project workspaces/calculator --encoding ascii --min-length 8 --json
 macscope fixups --project workspaces/calculator --kind bind --json
 macscope objc methods --project workspaces/calculator --name-contains press --json
 macscope swift symbols --project workspaces/calculator --json
@@ -467,12 +467,56 @@ the Mach-O base, Apple `nm` entry and original bytes. Each had a preferred
 and Ghidra image base of zero. The four-probe report SHA-256 is
 `d259b2d072ae0f59239df071bf28c510e3171a2102c0b3799aabc5a2746fbe31`.
 
-`imports`, `exports`, `symbols`, and `strings` query the saved engine
-collections. The first three accept a literal `--name-contains` filter.
-`strings` searches Ghidra-defined string records with `--contains` and
-`--min-length` in bytes. All collection commands support `--limit` and
-`--cursor` and report the coverage of the selected facet. They run without
-starting Ghidra.
+`imports`, `exports`, `symbols`, and `strings` query saved engine
+collections without starting Ghidra. The first three accept a literal
+`--name-contains` filter. All collection commands support `--limit` and
+`--cursor`.
+
+#### String evidence
+
+`strings` queries Ghidra-defined strings. Use `--contains` for a literal
+text filter and `--min-length` for the minimum size in bytes of the
+defined data, including any terminator and padding. `--encoding` accepts
+`ascii`, `utf8`, `utf16le`, and `auto` (the default). A concrete encoding
+requires strict decoding. The result records the Ghidra charset and whether
+the encoding came from that charset or from valid UTF-8 bytes in an
+ASCII-typed C string. An explicit encoding filter reports partial coverage
+if any otherwise matching candidate has unknown encoding. `auto` includes
+unknown encodings and older records with saved text.
+
+Each row reports its image, architecture, address, and available RVA and
+file offsets. `bytes` contains the full defined span in hex when the imported
+slice and the saved Program agree. A row's `bytes_status` explains missing
+bytes, including redacted text and older snapshots without a byte digest.
+`xrefs_to_start` contains up to 32 recorded incoming references to the
+first byte. `xrefs_status` reports reference coverage independently of the
+page's string coverage.
+
+Build the [owned encoding fixture](../analysis/heldout_string_encodings.S)
+from the repository root and import its two slices into a disposable project.
+
+```sh
+fixture_dir=$(mktemp -d /private/tmp/macscope-string-fixture.XXXXXX)
+for arch in arm64 x86_64; do
+  xcrun clang -arch "$arch" -nostdlib -lSystem -Wl,-e,_main \
+    -o "$fixture_dir/$arch" analysis/heldout_string_encodings.S
+done
+xcrun lipo -create "$fixture_dir/arm64" "$fixture_dir/x86_64" -output "$fixture_dir/owned"
+macscope project create "$fixture_dir/project"
+macscope import "$fixture_dir/owned" --arch all --project "$fixture_dir/project" \
+  --experimental-trusted-input
+macscope analyze --arch arm64 --project "$fixture_dir/project" --experimental-trusted-input
+macscope strings --arch arm64 --project "$fixture_dir/project" --encoding utf16le \
+  --contains 'Owned Wide' --json
+```
+
+The installed CLI verified all three encodings on each slice. Apple
+`nm` and `llvm-objdump` confirmed the addresses and reference sites, and
+the byte spans matched both the thin slices and the universal container.
+The run also checked malformed and redacted strings, encoding-bound
+cursors, read-only access to an older snapshot, and byte-identical
+exports after reanalysis. The report SHA-256 is
+`d6badcd4a1a0069df164cb3221a8ee6976dd30431918d76e5b41400501f707a2`.
 
 Import passes `-noanalysis` to Ghidra, disables loading/reexporting/linking
 libraries, and records the actual language/compiler pair. A no-analysis

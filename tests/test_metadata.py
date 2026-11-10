@@ -1,9 +1,11 @@
 """Imported metadata and file-backed bytes are queryable before analysis."""
+from hashlib import sha256
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
-from macscope import cli, macho, metadata
+from macscope import address_xrefs, cli, macho, metadata
 from macscope.errors import Error
 from macscope.storage import Project, atomic, canonical
 from test_macho import segment_image
@@ -89,3 +91,54 @@ class MetadataQueryTests(unittest.TestCase):
         sections.append({"va": "0x14", "file_offset": "0x20", "size": "0x4"})
         self.assertIsNone(metadata.mapped_location(image, 0x8, 8, from_file=True))
         self.assertIsNone(metadata.mapped_location(image, 0x14, 1, from_file=False))
+
+    def test_string_encoding_cursors_and_verified_byte_evidence(self):
+        payload = b"abc\0"
+        data = self.input.read_bytes()[:-len(payload)] + payload
+        atomic(self.input, data, force=True)
+        image = self.project.select()
+        image["sha256"] = sha256(data).hexdigest()
+        image["loader"] = {"preferred_image_base": "0x100000000"}
+        address = "0x100000100"
+        row = {"address": address, "length_bytes": 4, "value": "abc", "encoding": "ascii",
+               "bytes_sha256": sha256(payload).hexdigest()}
+        legacy = {"address": "0x100000101", "length_bytes": 3, "value": "bc"}
+        ref = {"from": "0x100000088", "to": address, "type": "DATA"}
+        snapshot = {"analysis_id": "b" * 64, "engine": {
+            "image_base": "0x100000000", "strings": [row, legacy], address_xrefs.REFERENCES: [ref],
+            "coverage": {"strings": {"status": "complete", "emitted": 2},
+                         address_xrefs.REFERENCES: {"status": "complete", "emitted": 1}},
+        }}
+        with mock.patch.object(Project, "select", return_value=image), \
+             mock.patch.object(Project, "snapshot", return_value=(snapshot, {})):
+            first = self.query("strings", "--limit", "1")
+            cursor = first["coverage"]["next_cursor"]
+            saved, = first["data"]
+            self.assertEqual(saved["encoding"], "ascii")
+            self.assertEqual(saved["bytes"], payload.hex())
+            self.assertEqual(saved["rva"], "0x100")
+            self.assertEqual(saved["slice_file_offset"], "0xb8")
+            self.assertEqual(saved["container_file_offset"], "0x10b8")
+            self.assertEqual(saved["xrefs_to_start"], [ref])
+            self.assertEqual(saved["xrefs_status"], "complete")
+
+            second = self.query("strings", "--encoding", "auto", "--limit", "1", "--cursor", cursor)
+            previous, = second["data"]
+            self.assertEqual(previous["value"], "bc")
+            self.assertIsNone(previous["encoding"])
+            self.assertIsNone(previous["bytes"])
+            with self.assertRaises(Error) as caught:
+                self.query("strings", "--encoding", "ascii", "--cursor", cursor)
+            self.assertEqual(caught.exception.code, "stale_cursor")
+            result = self.query("strings", "--encoding", "ascii")
+            self.assertEqual(result["data"], [saved])
+            self.assertEqual(result["coverage"]["truncation_reason"], "string_encodings_incomplete")
+
+            row["bytes_sha256"] = sha256(b"xyz\0").hexdigest()
+            mismatch, = self.query("strings", "--encoding", "ascii")["data"]
+            self.assertIsNone(mismatch["bytes"])
+            self.assertEqual(mismatch["bytes_status"], "file_bytes_differ_from_program")
+            atomic(self.input, b"corrupt", force=True)
+            with self.assertRaises(Error) as caught:
+                self.query("strings", "--encoding", "ascii")
+            self.assertEqual(caught.exception.code, "input_integrity")

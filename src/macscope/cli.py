@@ -16,6 +16,7 @@ from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
+from . import string_evidence
 from .schema import validate_envelope, validate_function
 
 
@@ -127,6 +128,7 @@ def parser():
         if c=='strings':
             s.add_argument('--contains')
             s.add_argument('--min-length',type=int,default=0)
+            s.add_argument('--encoding',choices=('ascii','utf8','utf16le','auto'),default='auto')
         else:s.add_argument('--name-contains')
     s=sub.add_parser('functions');ss=s.add_subparsers(dest='action',required=True)
     for c in ('list','show'):
@@ -230,6 +232,8 @@ def normalize(raw, image, deps, manifest):
         analysis_key['boundary_recovery'] = manifest['boundary_recovery']
     aid=identity(analysis_key)
     raw = dict(raw)
+    if 'strings' in raw:
+        raw['strings'] = [string_evidence.omit_redacted_bytes(row, redact) for row in raw['strings']]
     for key in (address_xrefs.REFERENCES,address_xrefs.COMPUTED):
         if key in raw:
             raw[key] = sorted(raw[key],key=canonical)
@@ -759,6 +763,8 @@ def metadata_collection(args, project, image, snapshot=None):
     aid = snapshot['analysis_id'] if snapshot else None
     rows,cov = page(rows,args,aid or image['image_id'],project.project_id,filters,order='metadata-address/v1')
     cov['scope'] = 'selected image '+args.command
+    if args.command == 'strings':
+        string_evidence.enrich_page(project,image,snapshot,rows)
     if gap:
         reasons = [gap,*(['page_limit'] if cov['next_cursor'] else [])]
         cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))

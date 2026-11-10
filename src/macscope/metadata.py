@@ -69,6 +69,11 @@ def records(args, project, image, snapshot):
             gap = gap or "string_values_incomplete"
         rows = [row for row in raw if row["length_bytes"] >= args.min_length and
                 (args.contains is None or args.contains in (row.get("value") or ""))]
+        if args.encoding != "auto":
+            filters["encoding"] = args.encoding
+            if any(row.get("encoding") is None for row in rows):
+                gap = gap or "string_encodings_incomplete"
+            rows = [row for row in rows if row.get("encoding") == args.encoding]
     else:
         filters["name_contains"] = args.name_contains
         rows = [row for row in raw if args.name_contains is None

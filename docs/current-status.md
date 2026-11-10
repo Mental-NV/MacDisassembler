@@ -18,8 +18,9 @@ contains documentation only.
   analysis, explicitly selected binary-derived parameter inference and
   deep address-table discovery,
   function list/show, function and range disassembly, cached and fresh selected-function pseudocode, references,
-  CFG JSON/DOT, project/job status, cached search, bounded call traversal
-  and normalized exports.
+  CFG JSON/DOT, project/job status, cached search, bounded call traversal,
+  encoded strings with verified file bytes and incoming references, and
+  normalized exports.
 - Package-owned Java bridge, effective analyzer-option recording, real saved
   Program databases, immutable digest identities, SQLite committed snapshots,
   writer lock, atomic result/output publication and pagination-bound cursors.
@@ -288,6 +289,12 @@ collections exceed documented bounds despite successful pseudocode output.
   unresolved jump coverage, and reproduced each export on repeat.
   Fresh reads verified the saved profile, switching back reproduced
   baseline, and a cancelled arm64 job restarted and replayed its receipt.
+- [x] Verify [string encoding, bytes, and references](cli.md#string-evidence)
+  on owned arm64 and x86_64 slices of one universal binary. ASCII, UTF-8
+  and UTF-16LE results matched the original bytes, file offsets, and
+  reference sites. Invalid encodings stayed unknown, redacted text had
+  no byte payload, and repeat exports were identical. Older snapshots
+  still returned their saved text.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

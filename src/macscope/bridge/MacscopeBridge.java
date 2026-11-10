@@ -5,6 +5,9 @@
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -57,6 +60,9 @@ import ghidra.program.model.listing.CodeUnit;
 import ghidra.program.model.data.AbstractIntegerDataType;
 import ghidra.program.model.data.BooleanDataType;
 import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.EndianSettingsDefinition;
+import ghidra.program.model.data.StringDataInstance;
+import ghidra.program.model.data.TerminatedStringDataType;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.DataIterator;
@@ -68,6 +74,7 @@ import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.mem.MemoryBlockSourceInfo;
+import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.symbol.ExternalLocation;
 import ghidra.program.model.symbol.IllegalCharCppTransformer;
 import ghidra.program.model.symbol.Reference;
@@ -80,7 +87,7 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.6.0";
+    static final String VERSION = "1.7.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final String DEEP_PROFILE = "macscope-binary-only-deep/1";
@@ -547,18 +554,22 @@ public class MacscopeBridge extends HeadlessScript {
     void strings() {
         JsonArray out = new JsonArray(); String err = null; boolean trunc = false; int scanned = 0;
         try {
+            MessageDigest bytesDigest = MessageDigest.getInstance("SHA-256");
             DataIterator it = currentProgram.getListing().getDefinedData(true);
             while (scanned < MAX_SCAN && out.size() < MAX_STRINGS && it.hasNext()) {
                 monitor.checkCancelled(); Data data = it.next(); scanned++;
                 if (!data.hasStringValue()) continue;
                 JsonObject item = new JsonObject(); put(item, "address", address(data.getAddress()));
                 item.addProperty("length_bytes", data.getLength());
-                if (data.getLength() > MAX_TEXT * 4) {
-                    put(item, "value", null); item.addProperty("value_truncated", true); partial = true;
-                } else {
-                    Object value = data.getValue(); String str = value == null ? null : value.toString();
-                    put(item, "value", str); item.addProperty("value_truncated", str != null && str.length() > MAX_TEXT);
+                boolean oversized = data.getLength() > MAX_TEXT * 4;
+                Object value = oversized ? null : data.getValue();
+                String str = value == null ? null : value.toString();
+                if (str != null && str.length() <= MAX_TEXT) {
+                    str = verifyStringEncoding(data, item, str, bytesDigest);
                 }
+                put(item, "value", str);
+                item.addProperty("value_truncated", oversized || (str != null && str.length() > MAX_TEXT));
+                if (oversized) partial = true;
                 put(item, "data_type", data.getDataType().getName());
                 if (!append(out, item, true)) { trunc = true; break; }
             }
@@ -568,6 +579,65 @@ public class MacscopeBridge extends HeadlessScript {
         JsonObject cov = facet(out.size(), -1, trunc, err, "complete");
         cov.addProperty("defined_data_scanned", scanned); cov.addProperty("scan_limit", MAX_SCAN);
         put(cov, "scope", "Ghidra-defined string data, not an exhaustive raw-byte scan"); coverage.add("strings", cov);
+    }
+
+    String verifyStringEncoding(Data data, JsonObject item, String value, MessageDigest bytesDigest) {
+        StringDataInstance instance = StringDataInstance.getStringDataInstance(data);
+        if (instance == StringDataInstance.NULL_INSTANCE) return value;
+        String charset = instance.getCharsetName();
+        put(item, "engine_charset", charset);
+        try {
+            byte[] bytes = data.getBytes();
+            if (bytes.length != data.getLength() || bytes.length == 0) return value;
+            Charset decoder;
+            String encoding;
+            String evidence = "ghidra_charset_and_bytes";
+            int offset = 0;
+            if ("US-ASCII".equals(charset) || "UTF-8".equals(charset)) {
+                decoder = "US-ASCII".equals(charset) ? StandardCharsets.US_ASCII : StandardCharsets.UTF_8;
+                encoding = "US-ASCII".equals(charset) ? "ascii" : "utf8";
+                if (decoder == StandardCharsets.US_ASCII &&
+                    data.getBaseDataType() instanceof TerminatedStringDataType &&
+                    !StandardCharsets.US_ASCII.newEncoder().canEncode(value) &&
+                    withoutTrailingNulls(new String(bytes, StandardCharsets.US_ASCII)).equals(value)) {
+                    // The Mach-O loader also uses this ASCII datatype for UTF-8 C strings.
+                    decoder = StandardCharsets.UTF_8;
+                    encoding = "utf8";
+                    evidence = "strict_utf8_c_string_bytes";
+                }
+            } else if ("UTF-16".equals(charset) || "UTF-16LE".equals(charset)) {
+                if ("UTF-16".equals(charset) && bytes.length >= 2) {
+                    int bom = (Byte.toUnsignedInt(bytes[0]) << 8) | Byte.toUnsignedInt(bytes[1]);
+                    if (bom == 0xfeff || (bom != 0xfffe &&
+                        EndianSettingsDefinition.DEF.isBigEndian(data, data))) return value;
+                    if (bom == 0xfffe) offset = 2;
+                }
+                decoder = StandardCharsets.UTF_16LE;
+                encoding = "utf16le";
+            } else {
+                return value;
+            }
+            String decoded = decoder.newDecoder().decode(ByteBuffer.wrap(bytes, offset, bytes.length - offset)).toString();
+            if (evidence.equals("strict_utf8_c_string_bytes")) {
+                decoded = withoutTrailingNulls(decoded);
+            } else if (!decoded.equals(value) && !withoutTrailingNulls(decoded).equals(value)) {
+                return value;
+            } else {
+                decoded = value;
+            }
+            put(item, "encoding", encoding);
+            put(item, "encoding_evidence", evidence);
+            put(item, "bytes_sha256", HexFormat.of().formatHex(bytesDigest.digest(bytes)));
+            return decoded;
+        } catch (CharacterCodingException | MemoryAccessException e) {
+            return value;
+        }
+    }
+
+    String withoutTrailingNulls(String value) {
+        int end = value.length();
+        while (end > 0 && value.charAt(end - 1) == 0) end--;
+        return value.substring(0, end);
     }
 
     void functions(int limit, int timeout, String entry) {
