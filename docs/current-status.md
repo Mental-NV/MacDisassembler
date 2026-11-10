@@ -4,6 +4,46 @@ Updated 10 November 2026. The specification is a staged roadmap; its historic
 pre-development wording is not a statement that the current repository still
 contains documentation only.
 
+## Current priority for TickTick and Taskovsky
+
+Prioritize the Calendar investigation in the [Taskovsky reuse scenarios](specification.md#10-taskovsky-reuse-scenarios).
+The existing private TickTick 8.2.20 export indexes shipped images,
+symbols, Objective-C metadata, assembly and selected Calendar resources.
+It has no complete main-app pseudocode or cross-reference graph. The
+Calendar resource subset identifies controls and wiring. Open scheduling
+questions still need evidence about how handlers reach date and recurrence
+logic. Taskovsky already has a local skip-occurrence workflow and is
+verifying it independently. Start with the date-range and time-zone paths
+or recurrence exceptions that could affect a remaining implementation
+decision. Reuse recorded observations for gestures already covered.
+
+- [ ] **Rehearse one selected Calendar workflow on an owned app.** Use the
+  arm64 main image and one explicitly chosen embedded framework. Verify
+  that a selector or string lead reaches an exact function and that the
+  installed CLI returns linked disassembly, pseudocode, incoming and
+  outgoing references, and a bounded caller/callee trace. Include one
+  unresolved dispatch and one resource path with size and SHA-256.
+- [ ] **Produce a small, private evidence handoff.** For each selected lead,
+  record image and slice hashes, architecture, analysis and function IDs,
+  unslid addresses and coverage. Return a typed reason for each missing
+  result. Keep observed behavior, static inference and open questions
+  separate. Reopen or regenerate the handoff from the committed workspace
+  without another whole-image analysis. Use the current cached queries
+  first and add focused export support where the rehearsal exposes a gap.
+- [ ] **Repeat on a small approved TickTick lead set.** Match the exact
+  archived image and architecture before using historical addresses. Use
+  only the main image and the Calendar framework needed for the selected
+  question. Close one practical evidence question or record exactly where
+  static evidence ends and what observation would resolve it. This step
+  requires separate authorization for the exact private inputs and a
+  permitted worker policy. The current worker remains trusted-owned-only.
+
+Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
+arm64e execution semantics, additional host support, and general-purpose
+reporting or packaging expansion. Keep isolation and correctness fixes
+needed by the selected workflow in scope. Desktop UI acceptance, optional
+REA, licensing, and publication retain their separate gates.
+
 ## Implemented
 
 - Source-controlled AppKit calculator, pure-C calculation core and corpus,
