@@ -66,10 +66,16 @@ decision. Reuse recorded observations for gestures already covered.
   arm64 image exercised an exact entry beyond the 10,000-row inventory
   limit. An x86_64 fixture returned pseudocode and reported the undecoded
   bytes in its linker extent as partial coverage.
-- [ ] **Repeat the complete selected Calendar handoff through the standard CLI.**
-  Add targeted relocation lookup beyond the inventory cap and support focused
-  results in the pinned handoff. Verify provenance, replay and explicit
-  missing or unresolved coverage through the normal command sequence.
+- [x] **Resolve exact relocations and Calendar leads beyond the inventory cap.**
+  `fixups --address` matched Apple tooling on four owned binaries covering
+  chained and legacy formats on both architectures. A padded owned Calendar
+  app put its class slot and framework bind beyond the first 10,000 records.
+  The pinned handoff resolved both, withheld an invalid class slot and
+  reproduced the report without starting another worker.
+- [ ] **Include focused results in the pinned Calendar handoff.**
+  Accept results from a verified import even when the main executable has no
+  committed whole-image snapshot. Verify exact provenance, replay and
+  explicit missing or unresolved coverage through the normal commands.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

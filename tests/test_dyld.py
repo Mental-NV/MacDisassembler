@@ -108,6 +108,37 @@ class ChainedFixupsTests(unittest.TestCase):
                 self.decode(data)
             self.assertEqual(caught.exception.code,code)
 
+    def test_exact_chain_validates_its_page_beyond_the_inventory_cap(self):
+        payload_offset = 0x2200
+        table = 66
+        header = struct.pack("<7I",0,32,table,table+4,1,1,0)+bytes(4)
+        pages = struct.pack("<IHHQIHHH",26,4096,6,0,0,2,START,START)
+        payload = header+struct.pack("<2I",1,8)+pages+struct.pack("<I",1)+b"_imported\0"
+        length = payload_offset+len(payload)
+        segment = command(0x19,struct.pack("<16s4Q4I",b"__TEXT",BASE,0x3000,0,length,7,5,0,0))
+        fixups = command(0x80000034,struct.pack("<2I",payload_offset,len(payload)))
+        data = bytearray(image(commands=[segment,library_command(),fixups]))
+        data.extend(bytes(payload_offset-len(data))+payload)
+        struct.pack_into("<Q",data,START,0x80)
+        struct.pack_into("<2Q",data,0x1000+START,0x80 | 2<<51,1<<63)
+        image_data = {"offset":"0x1000"}
+        address = BASE+0x1000+START+8
+        with patch.object(dyld,"MAX_FIXUPS",1), patch.object(dyld,"MAX_PAGE_RECORDS",1):
+            _,inventory,gaps = dyld.fixups(bytes(data),image_data)
+            self.assertEqual(len(inventory),1)
+            self.assertEqual(gaps,["page_limit"])
+            _,rows,gaps = dyld.fixups(bytes(data),image_data,address=address)
+            self.assertEqual((len(rows),gaps),(1,[]))
+            self.assertEqual(rows[0]["symbol"],"_imported")
+            self.assertEqual(rows[0]["container_file_offset"],"0x2108")
+        struct.pack_into("<Q",data,START,0x80 | 4095<<51)
+        self.assertEqual(dyld.fixups(bytes(data),image_data,address=address)[1],rows)
+        self.assertEqual(dyld.fixups(bytes(data),image_data,address=address+8)[1:],([],[]))
+        struct.pack_into("<Q",data,0x1000+START+8,1<<63 | 1)
+        with self.assertRaises(Error) as caught:
+            dyld.fixups(bytes(data),image_data,address=address-8)
+        self.assertEqual(caught.exception.code,"fixup_ordinal")
+
 
 class Arm64eFixupsTests(TemporaryCase):
     def test_metadata_only_arch_and_supported_pointer_layouts(self):
@@ -161,6 +192,19 @@ class Arm64eFixupsTests(TemporaryCase):
             self.error("stale_cursor", cli.execute,
                        cli.parser().parse_args([*args, "--arch", "arm64", "--cursor", cursor]))
             dependencies.assert_not_called()
+
+    def test_direct_file_exact_slot_has_slice_identity_and_typed_absence(self):
+        path = self.root / "owned-arm64e"
+        path.write_bytes(arm64e_fixture())
+        args = ["fixups", "--input", str(path), "--address"]
+        selected = cli.execute(cli.parser().parse_args([*args,hex(BASE+START+8)]))
+        self.assertEqual(selected["data"]["records"][0]["kind"],"bind")
+        self.assertEqual(selected["data"]["artifact_sha256"],selected["data"]["slice_sha256"])
+        missing = cli.execute(cli.parser().parse_args([*args,hex(BASE+START+32)]))
+        self.assertEqual((missing["status"],missing["data"]["records"]),("complete",[]))
+        self.error("fixup_address_unmapped",cli.execute,cli.parser().parse_args([*args,"0x10"]))
+        self.error("fixup_address_scope",cli.execute,
+                   cli.parser().parse_args([*args,hex(BASE+START),"--kind","non-weak-definition"]))
 
     def test_arm64e_metadata_recognition_does_not_enable_engine_import(self):
         path = self.root / "owned-arm64e"
@@ -231,6 +275,21 @@ class LegacyFixupsTests(TemporaryCase):
         _,rows,gaps = self.decode(bind=b"\xd0\0")
         self.assertEqual(rows,[])
         self.assertEqual(gaps,["bind_opcode_0xd0"])
+
+    def test_exact_legacy_retains_lazy_and_rebase_at_the_same_address(self):
+        rebase = bytes.fromhex("11 20 80 02 51 00")
+        lazy = b"\x70\x80\x02\x11\x40_symbol\0\x90\0"
+        binary = legacy_fixture(rebase=rebase,lazy=lazy)
+        metadata = {"offset":"0x0"}
+        with patch.object(dyld,"MAX_FIXUPS",1):
+            self.assertEqual(dyld.fixups(binary,metadata)[2],["fixup_limit"])
+            _,rows,gaps = dyld.fixups(binary,metadata,address=BASE+START)
+            self.assertEqual([row["stream"] for row in rows],["rebase","lazy_bind"])
+            self.assertEqual(gaps,[])
+        with patch.object(dyld,"MAX_LEGACY_LOOKUP_OPERATIONS",1):
+            _,rows,gaps = dyld.fixups(binary,metadata,address=BASE+START)
+            self.assertEqual(len(rows),1)
+            self.assertEqual(gaps,["legacy_selection_scan_limit"])
 
     def test_weak_bind_declarations_use_opcode_offsets_and_a_separate_cursor(self):
         weak_bind = b"\x70\x80\x02\x40_coalesced\0\x90"

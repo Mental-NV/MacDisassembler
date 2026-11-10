@@ -1,5 +1,6 @@
 """Static Objective-C declarations and selector references in owned Mach-O images."""
 from . import dyld
+from .errors import Error
 from .macho import thin
 from .macho_view import MappedImage
 
@@ -9,6 +10,7 @@ MAX_METHODS = 10000
 MAX_PROPERTIES = 10000
 MAX_IVARS = 10000
 MAX_SELECTORS = 10000
+MAX_SELECTED_POINTERS = 1024
 CLASS_LISTS = {"__objc_classlist", "__objc_nlclslist"}
 CATEGORY_LISTS = {"__objc_catlist", "__objc_nlcatlist"}
 PROTOCOL_LISTS = {"__objc_protolist"}
@@ -18,18 +20,40 @@ CLASS_DATA_MASK = 0x0F007FFFFFFFFFF8
 
 
 class ObjCImage:
-    def __init__(self, data, image, parsed):
+    def __init__(self, data, image, parsed, *, scoped=False):
         self.view = MappedImage(data,parsed["segments"])
         self.sections = parsed["sections"]
-        _,rows,gaps = dyld.fixups(data,image,parsed=parsed)
+        self.scoped_lookup = (data,image,parsed) if scoped and any(
+            row["kind"] == "chained_fixups" for row in parsed["loader"]["linkedit"]) else None
+        _,rows,gaps = ({},[],[]) if self.scoped_lookup else dyld.fixups(data,image,parsed=parsed)
         self.gaps = {"fixups_"+reason for reason in gaps}
         self.pointer_gaps = bool(gaps)
         self.pointers = {int(row["va"],16):row for row in rows if row["kind"]=="rebase"}
         # A bind remains external even when a legacy lazy slot also has a rebase.
         self.pointers.update((int(row["va"],16),row) for row in rows if row["kind"]=="bind")
 
+    def relocation(self, site):
+        if self.scoped_lookup is not None and site not in self.pointers:
+            if len(self.pointers) == MAX_SELECTED_POINTERS:
+                self.gaps.add("selected_pointer_limit")
+                raise ValueError("Selected pointer limit reached")
+            data,image,parsed = self.scoped_lookup
+            self.pointers[site] = None
+            try:
+                _,rows,gaps = dyld.fixups(data,image,parsed=parsed,address=site)
+            except Error as error:
+                self.gaps.add("fixups_"+error.code)
+            else:
+                self.gaps.update("fixups_"+reason for reason in gaps)
+                if not gaps:
+                    self.pointers[site] = rows[0] if rows else {}
+        pointer = self.pointers.get(site,{})
+        if pointer is None:
+            raise ValueError("Pointer lacks complete relocation evidence")
+        return pointer
+
     def target(self, site):
-        pointer = self.pointers.get(site)
+        pointer = self.relocation(site)
         if pointer:
             if pointer["kind"]=="bind":
                 raise ValueError("External pointer has no local target")
@@ -70,7 +94,7 @@ class ObjCImage:
         return ro
 
     def class_ref(self, site):
-        binding = self.pointers.get(site,{})
+        binding = self.relocation(site)
         if binding.get("kind")=="bind":
             symbol = binding["symbol"]
             return {"name":symbol.removeprefix(CLASS_SYMBOL) if symbol.startswith(CLASS_SYMBOL) else None,
@@ -81,25 +105,28 @@ class ObjCImage:
         return {"name":self.view.string(self.target(self.ro(address)+24)), "va":hex(address),
                 "origin":"class_metadata"}
 
+    def class_record(self, site, address):
+        ro = self.ro(address)
+        flags,_,size = self.view.unpack("<III",ro)
+        if flags&1:
+            raise ValueError("Class list points to metaclass")
+        row = {"name":self.view.string(self.target(ro+24)), "class_va":hex(address),
+               "metadata_va":hex(ro),"instance_size":size,"flags":hex(flags),
+               "list_entry_va":hex(site),"origin":"objc_class_list"}
+        try:
+            row["superclass"] = self.class_ref(address+8)
+        except ValueError:
+            row["superclass"] = {"origin":"unresolved"}
+            self.gaps.add("unresolved_superclass")
+        return row
+
     def classes(self):
         rows = {}
         for site in self.sites(CLASS_LISTS,MAX_CLASSES,"class_limit"):
             try:
                 address = self.target(site)
-                if address in rows:
-                    continue
-                ro = self.ro(address)
-                flags,_,size = self.view.unpack("<III",ro)
-                if flags&1:
-                    raise ValueError("Class list points to metaclass")
-                rows[address] = {"name":self.view.string(self.target(ro+24)), "class_va":hex(address),
-                                 "metadata_va":hex(ro),"instance_size":size,"flags":hex(flags),
-                                 "list_entry_va":hex(site),"origin":"objc_class_list"}
-                try:
-                    rows[address]["superclass"] = self.class_ref(address+8)
-                except ValueError:
-                    rows[address]["superclass"] = {"origin":"unresolved"}
-                    self.gaps.add("unresolved_superclass")
+                if address not in rows:
+                    rows[address] = self.class_record(site,address)
             except ValueError:
                 self.gaps.add("invalid_class_record")
         return list(rows.values())
@@ -137,7 +164,7 @@ class ObjCImage:
                 else:
                     selector = self.target(site)
                     types = self.target(site+8)
-                    binding = self.pointers.get(site+16,{})
+                    binding = self.relocation(site+16)
                     imp = 0 if binding.get("kind")=="bind" else self.target(site+16)
                 name = self.view.string(selector)
                 encoding = self.view.string(types) if types else None
@@ -154,7 +181,7 @@ class ObjCImage:
             except ValueError:
                 self.gaps.add("invalid_method_record")
 
-    def method_rows(self, classes):
+    def method_rows(self, classes, *, include_categories=True):
         rows = []
         for record in classes:
             address = int(record["class_va"],16)
@@ -166,6 +193,8 @@ class ObjCImage:
                     rows.extend(self.methods(self.ro(meta)+32,record["name"],True,None,MAX_METHODS-len(rows)))
             except ValueError:
                 self.gaps.add("invalid_method_list")
+        if not include_categories:
+            return rows
         for address, category, target in self.categories():
             name = target["name"] if target else None
             try:
@@ -365,6 +394,35 @@ class ObjCImage:
             except ValueError:
                 self.gaps.add("unresolved_selector_reference")
         return rows
+
+
+def selected_methods(data, image, class_slot):
+    parsed = thin(data)
+    matches = [row for row in parsed["sections"] if row["name"] in CLASS_LISTS
+               and row["file_offset"] is not None
+               and (start := int(row["va"],16)) <= class_slot < start+int(row["size"],16)
+               and (class_slot-start)%8 == 0 and class_slot+8 <= start+int(row["size"],16)]
+    if len(matches) != 1:
+        raise Error("objc_class_slot", "Select one aligned, file-backed Objective-C class list entry", 3)
+    section, = matches
+    try:
+        objc = ObjCImage(data,image,parsed,scoped=True)
+        offset,_,_ = objc.view.mapping(class_slot,8)
+        if offset != int(section["file_offset"],16)+class_slot-int(section["va"],16):
+            raise ValueError("Class list segment and section mappings disagree")
+    except ValueError:
+        return [], ["invalid_macho_mapping"]
+    if objc.pointer_gaps:
+        return [], sorted(objc.gaps)
+    try:
+        address = objc.target(class_slot)
+        if not address:
+            raise ValueError("Class list entry is empty")
+        selected = objc.class_record(class_slot,address)
+    except ValueError:
+        return [], sorted(objc.gaps | {"invalid_class_record"})
+    rows = objc.method_rows([selected],include_categories=False)
+    return [dict(row,class_slot=hex(class_slot)) for row in rows],sorted(objc.gaps)
 
 
 def inventory(data, image, scope):

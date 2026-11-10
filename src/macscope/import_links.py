@@ -1,6 +1,5 @@
 """Verify declared calls through ordinary Mach-O stubs to pinned bundle exports."""
 from collections import defaultdict
-from functools import cached_property
 import posixpath
 
 from . import dyld, export_trie, metadata
@@ -106,18 +105,18 @@ class ImageLinkage:
         self.container = image
         self.bundle = snapshot["image"].get("bundle_image")
         self.snapshot = snapshot
+        self.bindings = {}
 
-    @cached_property
-    def bindings(self):
-        try:
-            _, rows, gaps = dyld.fixups(self.binary, self.container, parsed=self.image)
-        except Error as error:
-            return {}, error.code
-        result = defaultdict(list)
-        for row in rows:
-            if row["kind"] == "bind":
-                result[row["va"]].append(row)
-        return result, "import_bind_coverage_incomplete" if gaps else None
+    def binding_at(self, slot):
+        if slot not in self.bindings:
+            try:
+                _, rows, gaps = dyld.fixups(self.binary, self.container, parsed=self.image, address=int(slot, 16))
+            except Error as error:
+                self.bindings[slot] = [], error.code
+            else:
+                self.bindings[slot] = ([row for row in rows if row["kind"] == "bind"],
+                                       "import_bind_coverage_incomplete" if gaps else None)
+        return self.bindings[slot]
 
     def provider(self, pin):
         names = [row["path"] for row in self.image["loader"]["dylibs"] if row["kind"] == "id"]
@@ -156,10 +155,9 @@ class ImageLinkage:
             return dict(row, reason="import_stub_unsupported")
         slot, code = stub
         row.update(bind_va=slot, stub_instructions=code)
-        bindings, error = self.bindings
+        candidates, error = self.binding_at(slot)
         if error:
             return dict(row, reason=error)
-        candidates = bindings.get(slot, ())
         if len(candidates) != 1:
             return dict(row, reason="import_bind_missing" if not candidates else "import_bind_ambiguous")
         binding = candidates[0]

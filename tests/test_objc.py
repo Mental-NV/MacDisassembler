@@ -3,7 +3,8 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from macscope import objc
+from macscope import dyld, objc
+from macscope.errors import Error
 from test_macho import command, image
 
 
@@ -77,6 +78,34 @@ class ObjCMetadataTests(unittest.TestCase):
             self.assertEqual(methods[0]["type_encoding"],"v16@0:8")
             self.assertEqual(methods[0]["selector_reference_va"],hex(BASE+0x308) if relative else None)
             self.assertEqual(methods[0]["encoding"],"relative" if relative else "absolute")
+
+    def test_exact_class_slot_resolves_methods_past_the_chained_fixup_cap(self):
+        data = bytearray(fixture(relative=True))
+        sites = (0x280,0x300,0x308,0x420,0x458,0x460)
+        struct.pack_into("<Q",data,sites[0],BASE+0x500)
+        for index, site in enumerate(sites):
+            raw, = struct.unpack_from("<Q",data,site)
+            step = (sites[index+1]-site)//4 if index+1 < len(sites) else 0
+            struct.pack_into("<Q",data,site,(raw-BASE) | step<<51)
+        payload = struct.pack("<7I",0,32,0,0,0,1,0)+bytes(4)+struct.pack("<2I",1,8)
+        payload += struct.pack("<IHHQIHH",24,4096,6,0,0,1,sites[0])
+        struct.pack_into("<2I",data,16,2,248)
+        data[264:280] = command(0x80000034,struct.pack("<2I",0x700,len(payload)))
+        data[0x700:0x700+len(payload)] = payload
+        binary = bytes(data)
+        image_data = {"offset":"0x0"}
+        with patch.object(dyld,"MAX_FIXUPS",1):
+            methods,gaps = objc.inventory(binary,image_data,"methods")
+            self.assertEqual(methods,[])
+            self.assertIn("fixups_fixup_limit",gaps)
+            methods,gaps = objc.selected_methods(binary,image_data,BASE+0x300)
+            self.assertEqual(gaps,[])
+            method, = methods
+            self.assertEqual((method["name"],method["class_slot"],method["implementation_va"]),
+                             ("probe",hex(BASE+0x300),hex(BASE+0x600)))
+        with self.assertRaises(Error) as caught:
+            objc.selected_methods(binary,image_data,BASE+0x308)
+        self.assertEqual(caught.exception.code,"objc_class_slot")
 
     def test_selector_declaration_and_reference_are_separate(self):
         rows,gaps = self.inventory("selectors",relative=True)

@@ -126,9 +126,12 @@ def parser():
     s.add_argument('--arch',choices=('arm64','arm64e','x86_64'))
     s.add_argument('--kind',choices=('all','bind','rebase','non-weak-definition'),default='all',
                    help='Use non-weak-definition for declarations in the legacy weak-bind stream')
+    s.add_argument('--address',help='Look up fixups at one exact unslid pointer slot')
     s=sub.add_parser('objc');ss=s.add_subparsers(dest='action',required=True)
     for c in ('classes','methods','selectors','properties','ivars'):
         s=ss.add_parser(c);project(s);common(s);pagination(s);s.add_argument('--name-contains')
+        if c=='methods':
+            s.add_argument('--class-slot',help='Select one unslid __objc_classlist or __objc_nlclslist pointer slot')
     s=sub.add_parser('swift');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('symbols');project(s);common(s);pagination(s);s.add_argument('--name-contains')
     s.add_argument('--demangle',action='store_true');s.add_argument('--experimental-trusted-input',action='store_true')
@@ -1106,19 +1109,27 @@ def file_unwind(args, project, image):
 
 def fixup_collection(args, image, data, binding, *, parsed=None, artifact=None):
     definitions = args.kind == 'non-weak-definition'
-    info,records,gaps = dyld.fixups(data,image,parsed=parsed,weak_definitions=definitions)
+    address = metadata.hex_address(args.address,'Unslid fixup slot') if args.address is not None else None
+    info,records,gaps = dyld.fixups(data,image,parsed=parsed,weak_definitions=definitions,address=address)
     if definitions:
         order = 'weak-bind-opcode-offset/v1'
     else:
         records = [row for row in records if args.kind == 'all' or row['kind'] == args.kind]
         records.sort(key=lambda row:int(row['va'],16))
         order = 'fixup-address/v1'
-    rows,cov = page(records,args,image['image_id'],binding,{'kind':args.kind},order=order)
+    filters = {'kind':args.kind}
+    if address is not None:
+        filters['address'] = hex(address)
+    rows,cov = page(records,args,image['image_id'],binding,filters,order=order)
     cov['scope'] = 'selected image dyld fixups: '+args.kind
+    if address is not None:
+        cov['scope'] = 'exact unslid dyld fixup slot: '+args.kind
     if gaps:
         reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
         cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
     data = dict(info,image_id=image['image_id'],arch=image['arch'],records=rows)
+    if address is not None:
+        data.update(address=hex(address),artifact_sha256=artifact or image['artifact_sha256'],slice_sha256=image['sha256'])
     if artifact is not None:
         data.update(artifact_sha256=artifact,slice_sha256=image['sha256'],cpu_subtype=image['cpu_subtype'])
     return envelope('fixups',data,status='partial' if gaps else 'complete',cov=cov)
@@ -1476,14 +1487,21 @@ def execute_command(a, address_selection=None):
     if a.command=='fixups':
         return fixup_collection(a,image,metadata.verified_slice(p,image),p.project_id)
     if a.command=='objc':
-        records,gaps=objc.inventory(metadata.verified_slice(p,image),image,a.action)
+        raw = metadata.verified_slice(p,image)
+        filters = {'action':a.action,'name_contains':a.name_contains}
+        if getattr(a,'class_slot',None) is not None:
+            slot = metadata.hex_address(a.class_slot,'Objective-C class list slot')
+            records,gaps = objc.selected_methods(raw,image,slot)
+            filters['class_slot'] = hex(slot)
+        else:
+            records,gaps = objc.inventory(raw,image,a.action)
         records=[dict(row,image_id=image['image_id'],arch=image['arch'])
                  for row in records if a.name_contains is None or a.name_contains in (row['name'] or '')]
         records.sort(key=lambda row:(row['name'] or '',row.get('class_name') or '',
                                     int(row.get('record_va',row.get('class_va')),16)))
-        rows,cov=page(records,a,image['image_id'],p.project_id,
-                      {'action':a.action,'name_contains':a.name_contains},order='objc-name/address/v1')
-        cov['scope']='selected image Objective-C '+a.action
+        rows,cov=page(records,a,image['image_id'],p.project_id,filters,order='objc-name/address/v1')
+        cov['scope'] = ('selected Objective-C class declaration methods' if 'class_slot' in filters
+                        else 'selected image Objective-C '+a.action)
         if gaps:
             reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
             cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))

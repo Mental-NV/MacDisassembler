@@ -6,6 +6,7 @@ from .macho_load import bounded, uleb
 
 
 MAX_STREAM_BYTES = 1024 * 1024
+MAX_EXACT_MATCHES = 32
 POINTER_BYTES = 8
 NON_WEAK_DEFINITION = 0x8
 SPECIAL_LIBRARIES = {0: "self", -1: "main_executable", -2: "flat_lookup", -3: "weak_lookup"}
@@ -196,7 +197,7 @@ def bind_rows(stream, stream_name, segments, image_offset, libraries, *, weak_de
         raise ValueError("Missing dyld bind DONE")
 
 
-def decode_legacy(data, image, parsed, streams, max_fixups, *, weak_definitions=False):
+def decode_legacy(data, image, parsed, streams, max_fixups, *, weak_definitions=False, address=None):
     result = {"format":"legacy", "streams":[stream["kind"] for stream in streams]}
     if len(result["streams"])!=len(set(result["streams"])):
         raise Error("fixup_layout", "Ambiguous legacy dyld streams")
@@ -205,6 +206,7 @@ def decode_legacy(data, image, parsed, streams, max_fixups, *, weak_definitions=
     image_offset = int(image["offset"],16)
     records, gaps = [], []
     scanned = 0
+    selected = hex(address) if address is not None else None
     for extent in streams:
         name = extent["kind"]
         offset,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
@@ -217,8 +219,14 @@ def decode_legacy(data, image, parsed, streams, max_fixups, *, weak_definitions=
         try:
             for row in rows:
                 if scanned==max_fixups:
-                    return result,records,[*gaps,"fixup_limit"]
+                    reason = "fixup_limit" if selected is None else "legacy_selection_scan_limit"
+                    return result,records,[*gaps,reason]
                 scanned += 1
+                if selected is not None:
+                    if row["va"] != selected:
+                        continue
+                    if len(records) == MAX_EXACT_MATCHES:
+                        return result,records,[*gaps,"fixup_match_limit"]
                 if not weak_definitions or row["kind"] == "non_weak_definition":
                     records.append(row)
         except UnsupportedOperation as error:

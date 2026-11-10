@@ -9,6 +9,7 @@ from .macho_load import bounded
 
 MAX_FIXUPS = 10000
 MAX_PAGE_RECORDS = 262144
+MAX_LEGACY_LOOKUP_OPERATIONS = 262144
 POINTER_FORMATS = {
     1: "DYLD_CHAINED_PTR_ARM64E",
     2: "DYLD_CHAINED_PTR_64",
@@ -50,14 +51,15 @@ def import_symbol(data, payload, end, table, symbols, count, format_id, index, l
             "weak_import": bool(value >> width & 1), "import_addend": addend}
 
 
-def segment_pages(data, payload, starts, starts_end, segments):
+def segment_pages(data, payload, starts, starts_end, segments, *, selected=None):
     bounded(starts,4,starts_end,"Chained segment count")
     count = struct.unpack_from("<I",data,payload+starts)[0]
     if count > len(segments):
         raise Error("fixup_segments", "Chained starts exceed the Mach-O segment table")
     table_end = starts+4+count*4
     bounded(starts+4,count*4,starts_end,"Chained segment offsets")
-    for index in range(count):
+    indices = range(count) if selected is None else range(selected, min(selected + 1, count))
+    for index in indices:
         relative = struct.unpack_from("<I",data,payload+starts+4+index*4)[0]
         if not relative:
             continue
@@ -116,7 +118,7 @@ def ordinary_pointer(value, kind, base):
     return fields, (value >> 51 & 0xFFF) * 4
 
 
-def decode_chained(data, image, parsed, extent):
+def decode_chained(data, image, parsed, extent, *, address=None, selected=None):
     payload,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
     end = payload+size
     bounded(0,28,size,"Chained fixup header")
@@ -150,7 +152,7 @@ def decode_chained(data, image, parsed, extent):
     pages_seen = 0
     seen_addresses = set()
     for segment,kind,segment_offset,page_size,pages,page_table in segment_pages(
-            data,payload,starts,starts_end,parsed["segments"]):
+            data,payload,starts,starts_end,parsed["segments"],selected=selected):
         formats.add(kind)
         if kind not in POINTER_FORMATS:
             unsupported.append(f"pointer_format_{kind}")
@@ -165,7 +167,9 @@ def decode_chained(data, image, parsed, extent):
         if segment_va-base!=segment_offset or file_offset is None:
             raise Error("fixup_segments", "Chained starts disagree with the file-backed segment mapping")
         file_offset, file_size = int(file_offset,16), int(segment["file_size"],16)
-        for page in range(pages):
+        selected_page = (address-segment_va)//page_size if address is not None else None
+        page_indices = range(pages) if selected_page is None else range(selected_page,min(selected_page+1,pages))
+        for page in page_indices:
             pages_seen += 1
             if pages_seen > MAX_PAGE_RECORDS:
                 result["pointer_formats"] = sorted(formats)
@@ -179,7 +183,7 @@ def decode_chained(data, image, parsed, extent):
             page_end = min((page+1)*page_size,file_size)
             while True:
                 bounded(offset,8,page_end,"Chained pointer in file-backed page")
-                if len(records)==MAX_FIXUPS:
+                if address is None and len(records)==MAX_FIXUPS:
                     result["pointer_formats"] = sorted(formats)
                     return result, records, [*unsupported,"fixup_limit"]
                 va = segment_va+offset
@@ -201,7 +205,8 @@ def decode_chained(data, image, parsed, extent):
                         "declared_symbol" if symbol["library"] else "unresolved_library_ordinal"
                     ))
                 row.update(fields)
-                records.append(row)
+                if address is None or va == address:
+                    records.append(row)
                 if not step:
                     break
                 offset += step
@@ -209,19 +214,37 @@ def decode_chained(data, image, parsed, extent):
     return result, records, sorted(set(unsupported))
 
 
-def fixups(data, image, *, parsed=None, weak_definitions=False):
+def slot_segment(parsed, address):
+    end = address + 8
+    overlaps = []
+    for index, segment in enumerate(parsed["segments"]):
+        start = int(segment["va"],16)
+        limit = start + int(segment["size"],16)
+        if start < end and address < limit and start < limit:
+            overlaps.append((index,start,limit))
+    if (len(overlaps) != 1 or not overlaps[0][1] <= address < end <= overlaps[0][2]
+            or end > 1 << 64):
+        raise Error("fixup_address_unmapped", "An exact fixup slot must fit one unambiguous Mach-O segment", 3)
+    return overlaps[0][0]
+
+
+def fixups(data, image, *, parsed=None, weak_definitions=False, address=None):
     if parsed is None:
         parsed = thin(data)
+    if address is not None and weak_definitions:
+        raise Error("fixup_address_scope", "Weak definitions are keyed by opcode offset rather than slot address", 2)
+    selected = slot_segment(parsed,address) if address is not None else None
     loader = parsed["loader"]
     if not weak_definitions:
         extents = [row for row in loader["linkedit"] if row["kind"]=="chained_fixups"]
         if len(extents)>1:
             raise Error("fixup_layout", "Ambiguous chained fixup payload")
         if extents:
-            return decode_chained(data,image,parsed,extents[0])
+            return decode_chained(data,image,parsed,extents[0],address=address,selected=selected)
     streams = [row for row in loader["dyld_streams"] if row["kind"]!="export_trie" and row["size"]!="0x0"]
     if weak_definitions:
         streams = [row for row in streams if row["kind"] == "weak_bind"]
     if streams:
-        return decode_legacy(data,image,parsed,streams,MAX_FIXUPS,weak_definitions=weak_definitions)
+        limit = MAX_FIXUPS if address is None else MAX_LEGACY_LOOKUP_OPERATIONS
+        return decode_legacy(data,image,parsed,streams,limit,weak_definitions=weak_definitions,address=address)
     return {"format":"none"}, [], []

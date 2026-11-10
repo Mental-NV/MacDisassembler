@@ -829,6 +829,14 @@ compressed names receive partial coverage. No dependencies are loaded.
 Use `--kind bind|rebase|all`,
 `--limit` and `--cursor` to inspect the evidence.
 
+Use `--address` for an exact unslid fixup slot. On a chained image the
+lookup validates the chain on the selected page. On a legacy image it
+scans up to 262,144 operations and retains up to 32 matching records,
+including distinct rebase and lazy-bind records at the same address.
+The general inventory still stops at 10,000 records. An empty complete
+result means the selected address has no matching record in the requested
+scope. An unsupported format or scan limit produces partial coverage.
+
 On 16 owned fixtures, `dyld_info -fixups` agreed on all 3,296 rebase
 addresses/targets and 594 bind addresses/symbols. Those binaries used
 `DYLD_CHAINED_PTR_64_OFFSET` and import format 1.
@@ -901,6 +909,14 @@ reference slots remain separate, and none imply a resolved runtime dispatch.
 Use the reported implementation address with `functions show --address` in
 an analyzed project. The views work before analysis and support filtered,
 paginated output. [Apple Objective-C runtime structures](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.h)
+
+`objc methods --class-slot VA` selects one aligned pointer slot in
+`__objc_classlist` or `__objc_nlclslist`. On a chained image it verifies
+up to 1,024 individual relocation sites for the selected class and its
+metaclass, including sites beyond the full inventory cap. On a legacy
+image this view requires complete relocation inventory. The result covers
+method lists declared on the class and metaclass. Categories and inherited
+methods are outside that scope.
 
 Apple's `dyld_info -objc` agreed on the 16 class records and 216 method
 addresses across eight owned calculator app builds. Separately compiled
@@ -1495,7 +1511,9 @@ the angle-bracket placeholders in this example with those values.
 Each lead has a unique ID and one selector. Use `address` for an unslid
 entry VA, `function_id` for an exact function ID, or `name` for an exact
 saved engine label. `objc_selector` matches a declaration in the verified
-workspace slice and accepts an optional `class_name`. `string` finds a
+workspace slice and accepts an optional `class_name` or unslid
+`class_slot`. With `class_slot`, the search is limited to the selected
+class's declaration lists. `string` finds a
 case-insensitive literal in saved strings and uses recorded references
 from saved instruction addresses. A known shared body prevents ownership
 from being assigned at that reference site. An ambiguous lead returns its

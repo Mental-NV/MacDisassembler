@@ -63,7 +63,7 @@ def load(path):
     used = set()
     for lead in leads:
         if (not isinstance(lead, dict) or not LEAD_FIELDS <= lead.keys()
-                or lead.keys() - LEAD_FIELDS - {"class_name", "query_job"}
+                or lead.keys() - LEAD_FIELDS - {"class_name", "class_slot", "query_job"}
                 or not isinstance(lead["id"], str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", lead["id"])
                 or lead["id"] in lead_ids or not is_digest(lead["image_id"]) or lead["image_id"] not in pins
                 or not isinstance(lead["kind"], str) or lead["kind"] not in KINDS or not lead_text(lead["value"])):
@@ -72,11 +72,15 @@ def load(path):
         if (kind == "address" and not metadata.VA.fullmatch(value)
                 or kind == "function_id" and not is_digest(value)
                 or "class_name" in lead and (kind != "objc_selector" or not lead_text(lead["class_name"]))
+                or "class_slot" in lead and (kind != "objc_selector" or not isinstance(lead["class_slot"], str)
+                                              or not metadata.VA.fullmatch(lead["class_slot"]))
                 or "query_job" in lead and (not isinstance(lead["query_job"], str)
                                            or not jobs.JOB_ID.fullmatch(lead["query_job"]))):
             raise Error("evidence_lead", "Invalid unslid address, function ID, class or query job", 2)
         if kind == "address":
             lead["value"] = hex(int(value, 16))
+        if "class_slot" in lead:
+            lead["class_slot"] = hex(int(lead["class_slot"], 16))
         lead_ids.add(lead["id"])
         used.add(lead["image_id"])
     if used != pins:
@@ -271,18 +275,25 @@ def export(project, manifest, *, link_imports=False):
         pins.append(dict(pin, status="available", snapshot_sha256=source["snapshot_sha256"], engine=engine,
                          bundle_image=snapshot["image"].get("bundle_image"), profile=snapshot.get("analysis_profile")))
         selector_rows, selector_error = ([], []), None
-        selectors = any(lead["kind"] == "objc_selector" for lead in leads)
+        selectors = [lead for lead in leads if lead["kind"] == "objc_selector"]
+        scoped_selectors = {}
         binary = None
         if selectors or link_imports:
             try:
                 binary = metadata.verified_slice(project, image)
             except Error as error:
                 selector_error = linkage_error = error.code
-        if binary is not None and selectors:
+        if binary is not None and any("class_slot" not in lead for lead in selectors):
             try:
                 selector_rows = objc.inventory(binary, image, "methods")
             except Error as error:
                 selector_error = error.code
+        if binary is not None:
+            for slot in dict.fromkeys(lead["class_slot"] for lead in selectors if "class_slot" in lead):
+                try:
+                    scoped_selectors[slot] = (objc.selected_methods(binary, image, int(slot, 16)), None)
+                except Error as error:
+                    scoped_selectors[slot] = (None, error.code)
         if binary is not None and link_imports:
             try:
                 linkage = import_links.ImageLinkage(binary, image, snapshot)
@@ -291,10 +302,11 @@ def export(project, manifest, *, link_imports=False):
             except Error as error:
                 linkage_error = error.code
         for lead in leads:
-            if lead["kind"] == "objc_selector" and selector_error:
-                row = unresolved(lead, selector_error)
+            methods, error = scoped_selectors.get(lead.get("class_slot"), (selector_rows, selector_error))
+            if lead["kind"] == "objc_selector" and error:
+                row = unresolved(lead, error)
             else:
-                row = lead_view(project, pin, source, snapshot, lead, selector_rows)
+                row = lead_view(project, pin, source, snapshot, lead, methods)
             if len(canonical(row)) > MAX_LEAD_BYTES:
                 row = unresolved(lead, "lead_output_limit")
             records[lead["id"]] = row
