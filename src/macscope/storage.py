@@ -13,6 +13,7 @@ from .errors import Error
 from .macho import checked_path, open_directory, read_regular
 
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+SHA256 = re.compile(r'[0-9a-f]{64}')
 WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
 WORKSPACE_RESERVED = frozenset((*WORKSPACE_DIRECTORIES, 'project.json', 'writer.lock',
                                 'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm'))
@@ -30,6 +31,20 @@ def canonical_chunks(value):
 
 def identity(value):
     return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def is_digest(value):
+    return isinstance(value, str) and SHA256.fullmatch(value) is not None
+
+
+def json_object(payload, code, message):
+    try:
+        value = json.loads(payload)
+    except (TypeError, ValueError, RecursionError) as error:
+        raise Error(code, message) from error
+    if not isinstance(value, dict):
+        raise Error(code, message)
+    return value
 
 
 def output_directory_matches(parent, directory):
@@ -130,7 +145,7 @@ class Project:
                 db.execute('SELECT id,arch,metadata,imported,active_analysis FROM images LIMIT 0')
                 db.execute('SELECT id,image_id,payload FROM analyses LIMIT 0')
         except sqlite3.DatabaseError as error:
-            if error.sqlite_errorcode & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+            if getattr(error, 'sqlite_errorcode', 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
                 raise Error('workspace_index_busy', 'Workspace index is locked', 8, retryable=True) from error
             raise Error('workspace_index', 'Workspace index cannot open the supported schema') from error
 
@@ -163,8 +178,11 @@ class Project:
                     db.rollback()
                     raise
         except sqlite3.DatabaseError as error:
-            if error.sqlite_errorcode & 0xff in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+            code = getattr(error, 'sqlite_errorcode', 0)
+            if code & 0xff in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
                 raise Error('workspace_index', 'Workspace index is corrupt') from error
+            if not code and isinstance(error, sqlite3.OperationalError):
+                raise Error('workspace_index', 'Workspace index contains unreadable data') from error
             raise
 
     @contextlib.contextmanager
@@ -181,7 +199,18 @@ class Project:
 
     def images(self):
         with self.db() as db:
-            return [dict(json.loads(m), imported=bool(i), active_analysis=a) for m,i,a in db.execute('SELECT metadata, imported, active_analysis FROM images ORDER BY arch,id')]
+            images = []
+            rows = db.execute('SELECT id,arch,metadata,imported,active_analysis FROM images ORDER BY arch,id')
+            for image_id, arch, payload, imported, aid in rows:
+                image = json_object(payload, 'workspace_image', 'Invalid image metadata in the workspace index')
+                if (not is_digest(image_id) or arch not in ('arm64', 'x86_64')
+                        or image.get('image_id') != image_id or image.get('arch') != arch
+                        or not all(is_digest(image.get(key)) for key in ('sha256', 'artifact_sha256'))
+                        or type(imported) is not int or imported not in (0, 1)
+                        or (aid is not None and not is_digest(aid))):
+                    raise Error('workspace_image', 'Image metadata or analysis identity disagrees with the workspace index')
+                images.append(dict(image, imported=bool(imported), active_analysis=aid))
+            return images
 
     def select(self, image=None, arch=None):
         rows = [r for r in self.images() if (not image or r['image_id'] == image) and (not arch or r['arch'] == arch)]
@@ -191,14 +220,29 @@ class Project:
 
     def snapshot(self, image):
         aid = image['active_analysis']
-        if not aid:
+        if aid is None:
             raise Error('not_analyzed', 'No committed analysis; run analyze first', 3)
+        if not is_digest(aid) or not is_digest(image.get('image_id')):
+            raise Error('snapshot_identity', 'Invalid analysis or image identity for the saved snapshot')
         with self.db() as db:
             row = db.execute('SELECT payload FROM analyses WHERE id=? AND image_id=?', (aid,image['image_id'])).fetchone()
         if row is None:
             raise Error('snapshot_missing', 'Committed snapshot is missing')
-        record = json.loads(row[0])
+        record = json_object(row[0], 'snapshot_record', 'Invalid saved analysis record in the workspace index')
+        if not is_digest(record.get('snapshot_sha256')):
+            raise Error('snapshot_record', 'Saved analysis record has no valid snapshot digest')
         data = read_regular(self.path/'snapshots'/(aid+'.json'), MAX_SNAPSHOT_BYTES)
         if hashlib.sha256(data).hexdigest() != record['snapshot_sha256']:
             raise Error('snapshot_integrity', 'Snapshot digest mismatch')
-        return json.loads(data), record
+        snapshot = json_object(data, 'snapshot_format', 'Invalid saved analysis snapshot JSON')
+        if (not isinstance(snapshot.get('functions'), list)
+                or any(not isinstance(function, dict) for function in snapshot['functions'])
+                or not isinstance(snapshot.get('engine'), dict)
+                or snapshot.get('status') not in ('complete', 'partial')):
+            raise Error('snapshot_format', 'Saved snapshot has invalid analysis fields')
+        stored_image = snapshot.get('image')
+        if (snapshot.get('analysis_id') != aid or not isinstance(stored_image, dict)
+                or any(stored_image.get(key) != image.get(key)
+                       for key in ('image_id', 'arch', 'sha256', 'artifact_sha256'))):
+            raise Error('snapshot_identity', 'Saved snapshot belongs to a different analysis or image')
+        return snapshot, record

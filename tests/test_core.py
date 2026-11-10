@@ -50,13 +50,17 @@ class TemporaryCase(unittest.TestCase):
         return storage.Project.create(self.root / name)
 
 
-def synthetic_snapshot(project, aid='analysis-one', *, slice_bytes=None):
+SYNTHETIC_IMAGE_ID = 'c' * 64
+SYNTHETIC_ANALYSIS_ID = 'd' * 64
+
+
+def synthetic_snapshot(project, aid=SYNTHETIC_ANALYSIS_ID, *, slice_bytes=None):
     """Commit a deterministic, engine-independent snapshot through the public DB."""
-    image = {'image_id': 'image-one', 'arch': 'arm64', 'sha256': '0' * 64,
+    image = {'image_id': SYNTHETIC_IMAGE_ID, 'arch': 'arm64', 'sha256': '0' * 64,
              'artifact_sha256': '1' * 64, 'input_name': 'synthetic.macho'}
     if slice_bytes is not None:
         image['sha256'] = hashlib.sha256(slice_bytes).hexdigest()
-        storage.atomic(project.path / 'inputs' / 'image-one.macho', slice_bytes, mode=0o400)
+        storage.atomic(project.path / 'inputs' / (SYNTHETIC_IMAGE_ID + '.macho'), slice_bytes, mode=0o400)
     functions = []
     for index, name in enumerate(('duplicate', 'duplicate', 'unique')):
         address = hex(0x100000000 + index * 0x10)
@@ -334,17 +338,65 @@ class ProjectTests(TemporaryCase):
 
     def test_missing_snapshot_record_is_rejected(self):
         project = self.project()
-        self.error('snapshot_missing', project.snapshot, {'image_id': 'missing', 'active_analysis': 'absent'})
+        self.error('snapshot_missing', project.snapshot,
+                   {'image_id': SYNTHETIC_IMAGE_ID, 'active_analysis': SYNTHETIC_ANALYSIS_ID})
 
     def test_image_selector_reports_ambiguity(self):
         project = self.project()
         synthetic_snapshot(project)
+        other = dict(image_id='e' * 64, arch='x86_64', sha256='0' * 64, artifact_sha256='1' * 64)
         with project.db(False) as db:
             db.execute('INSERT INTO images(id,arch,metadata,imported) VALUES(?,?,?,1)',
-                       ('image-two', 'x86_64', json.dumps({'image_id': 'image-two', 'arch': 'x86_64'})))
+                       (other['image_id'], other['arch'], json.dumps(other)))
         error = self.error('image_selector', project.select)
         self.assertEqual(len(error.partial), 2)
-        self.assertEqual(project.select(arch='arm64')['image_id'], 'image-one')
+        self.assertEqual(project.select(arch='arm64')['image_id'], SYNTHETIC_IMAGE_ID)
+
+    def test_invalid_indexed_ids_fail_before_opening_a_snapshot_path(self):
+        project = self.project()
+        snapshot, record = synthetic_snapshot(project)
+        image = project.select()
+        outside = self.root / 'outside.json'
+        outside.write_bytes(storage.canonical(snapshot) + b'\n')
+        traversal = '../../outside'
+        with project.db(False) as db:
+            db.execute('INSERT INTO analyses VALUES(?,?,?)', (traversal, image['image_id'], json.dumps(record)))
+            db.execute('UPDATE images SET active_analysis=?', (traversal,))
+        with mock.patch.object(storage, 'read_regular', side_effect=AssertionError('unexpected snapshot read')):
+            self.error('workspace_image', project.select)
+            self.error('snapshot_identity', project.snapshot, dict(image, active_analysis=traversal))
+
+    def test_image_metadata_must_match_its_index_row(self):
+        project = self.project()
+        snapshot, _ = synthetic_snapshot(project)
+        image = snapshot['image']
+        for payload in (b'\xff', '[]', json.dumps(dict(image, arch='x86_64')),
+                        json.dumps(dict(image, image_id='e' * 64)), json.dumps(dict(image, sha256=False))):
+            with self.subTest(payload=payload):
+                with project.db(False) as db:
+                    db.execute('UPDATE images SET metadata=?', (payload,))
+                self.error('workspace_image', project.images)
+        with project.db(False) as db:
+            db.execute("UPDATE images SET metadata=CAST(X'FF' AS TEXT)")
+        self.error('workspace_index', project.images)
+
+    def test_digest_valid_snapshot_must_match_selected_analysis_and_image(self):
+        project = self.project()
+        snapshot, record = synthetic_snapshot(project)
+        target = project.path / 'snapshots' / (snapshot['analysis_id'] + '.json')
+        for changed, code in ((dict(snapshot, analysis_id='e' * 64), 'snapshot_identity'),
+                              (dict(snapshot, image=dict(snapshot['image'], arch='x86_64')), 'snapshot_identity'),
+                              (dict(snapshot, functions=[None]), 'snapshot_format'), ([], 'snapshot_format')):
+            with self.subTest(code=code, value=type(changed)):
+                payload = storage.canonical(changed) + b'\n'
+                storage.atomic(target, payload, force=True, mode=0o400)
+                receipt = dict(record, snapshot_sha256=hashlib.sha256(payload).hexdigest())
+                with project.db(False) as db:
+                    db.execute('UPDATE analyses SET payload=?', (json.dumps(receipt),))
+                self.error(code, project.snapshot, project.select())
+        with project.db(False) as db:
+            db.execute('UPDATE analyses SET payload=?', ('{"snapshot_sha256":0}',))
+        self.error('snapshot_record', project.snapshot, project.select())
 
 
 class PaginationAndSelectorsTests(TemporaryCase):

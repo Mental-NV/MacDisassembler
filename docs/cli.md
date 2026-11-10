@@ -1394,6 +1394,23 @@ On the same saved workspace, 20 paired cached queries produced
 byte-identical JSON with the earlier and current wheels. The observed
 95th percentiles were 0.167 s and 0.143 s on the development Mac.
 
+Saved-work queries check image and analysis IDs before building paths.
+The image ID and architecture must agree with the index row, and image
+metadata must carry valid artifact and slice digests. A bad row returns
+`workspace_image`. Unreadable SQLite text returns `workspace_index`.
+The snapshot loader checks the recorded
+SHA-256, the snapshot's basic structure, and its analysis and image
+identity. Invalid receipts, malformed snapshots and identity mismatches
+return `snapshot_record`, `snapshot_format` and `snapshot_identity`
+respectively, all with exit 5.
+
+The installed CLI rejected eight corrupt-workspace queries, including a
+path that led outside the project and a snapshot from another slice with
+a valid recorded digest. The test preserved the selected workspaces and
+the outside control file. Five archived exports matched byte for byte,
+and a fresh owned arm64 and x86_64 project completed full headless import,
+analysis and fresh decompilation. The validation report SHA-256 is
+`f0be5fad6a9f6b6bb7ec333c5850d1fe747688daa5510fdcf4e13aa968b72841`.
 
 Bundled `envelope.schema.json` and `function.schema.json` use schema1.0.
 Every JSON response has command, status, analysis_id (nullable), data,

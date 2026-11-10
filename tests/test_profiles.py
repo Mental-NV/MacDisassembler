@@ -336,16 +336,18 @@ class ProfileRunnerTests(unittest.TestCase):
                      engine_baseline_sha256=engine.tree_digest(
                          self.project.path / "engine" / self.image["image_id"]))
         (self.project.path / "inputs" / (image["image_id"] + ".macho")).write_bytes(content)
-        snapshot = {"analysis_id": "previous", "identity": {"profile": "baseline/1"}}
+        previous = "c" * 64
+        snapshot = {"analysis_id": previous, "identity": {"profile": "baseline/1"},
+                    "image": image, "status": "complete", "engine": {}, "functions": []}
         payload = storage.canonical(snapshot) + b"\n"
-        old = self.project.path / "snapshots" / "previous.json"
+        old = self.project.path / "snapshots" / (previous + ".json")
         storage.atomic(old, payload, mode=0o400)
         record = {"snapshot_sha256": hashlib.sha256(payload).hexdigest(), "job_id": "old"}
         with self.project.db(False) as db:
             db.execute("INSERT INTO images(id,arch,metadata,imported,active_analysis) VALUES(?,?,?,1,?)",
-                       (image["image_id"], image["arch"], json.dumps(image), "previous"))
+                       (image["image_id"], image["arch"], json.dumps(image), previous))
             db.execute("INSERT INTO analyses(id,image_id,payload) VALUES(?,?,?)",
-                       ("previous", image["image_id"], json.dumps(record)))
+                       (previous, image["image_id"], json.dumps(record)))
         wrong = raw_result("baseline")
         job = {"limits": {}, "analysis_profile": engine.analysis_profile("parameter-inference")}
         with mock.patch.object(engine, "dependencies", return_value=self.deps), \
@@ -360,7 +362,7 @@ class ProfileRunnerTests(unittest.TestCase):
             with self.assertRaises(Error) as caught:
                 cli.execute(self.args("parameter-inference"))
         self.assertEqual(caught.exception.code, "snapshot_limit")
-        self.assertEqual(self.project.select()["active_analysis"], "previous")
+        self.assertEqual(self.project.select()["active_analysis"], previous)
         self.assertEqual(old.read_bytes(), payload)
         self.assertEqual(len(list((self.project.path / "snapshots").iterdir())), 1)
 

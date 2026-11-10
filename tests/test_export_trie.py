@@ -105,7 +105,8 @@ class ExportTrieTests(unittest.TestCase):
         data = fixture(leaf_trie([(b"alpha", b"\x00\x28"), (b"beta", b"\x00\x30")]))
         with tempfile.TemporaryDirectory() as directory:
             project = Project.create(Path(directory).resolve() / "project")
-            record = macho.inspect_bytes(data)["slices"][0]
+            inspected = macho.inspect_bytes(data)
+            record = dict(inspected["slices"][0], artifact_sha256=inspected["artifact_sha256"])
             image_id = record["image_id"]
             atomic(project.path / "inputs" / (image_id + ".macho"), data, mode=0o400)
             with project.db(False) as db:

@@ -26,7 +26,7 @@ class QueryResumeTests(TemporaryCase):
             "function_id": self.function_id, "entry_va": self.entry, "engine_entry": self.entry,
             "names": [{"origin": "ghidra", "name": "owned"}], "is_external": False, "is_thunk": False,
         }
-        snapshot = {"analysis_id": self.aid, "functions": [self.function], "engine": {},
+        snapshot = {"analysis_id": self.aid, "image": self.image, "functions": [self.function], "engine": {},
                     "status": "complete", "identity": {"profile": "baseline/1"}}
         path = self.workspace.path / "snapshots" / (self.aid + ".json")
         storage.write_json(path, snapshot)

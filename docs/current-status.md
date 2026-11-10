@@ -303,6 +303,10 @@ collections exceed documented bounds despite successful pseudocode output.
   and a byte-identical export from an earlier schema 1.0 workspace.
 - [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)
   for corrupt data, missing schema, and a lock held by another connection.
+- [x] Validate [saved image and snapshot identity](cli.md#envelopes-errors-and-explicit-omissions)
+  before opening stored work. Eight corrupt-workspace queries returned
+  typed errors. Five archived exports matched, and both owned architectures
+  completed full headless analysis and fresh decompilation.
 - [x] Verify [per-job write confinement](cli.md#limits-and-safety-boundaries)
   with owned canaries and eight installed full-headless scopes. A
   worker could not modify an earlier Program or the shared index.
