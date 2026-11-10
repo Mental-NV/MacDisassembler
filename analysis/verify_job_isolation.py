@@ -17,21 +17,6 @@ from macscope.errors import Error
 from macscope.storage import Project
 
 
-SYSTEM_READS = (
-    "/System/Library", "/System/Volumes/Preboot/Cryptexes/OS/System/Library",
-    "/usr/lib", "/usr/share", "/private/var/db/timezone", "/dev/fd",
-)
-SYSTEM_FILES = ("/", "/dev/null", "/dev/urandom", "/dev/random", "/private/etc/localtime", "/private/etc/hosts")
-BREW_LIBS = (
-    "brotli/lib/libbrotlicommon.1.dylib", "brotli/lib/libbrotlidec.1.dylib",
-    "freetype/lib/libfreetype.6.dylib", "gettext/lib/libintl.8.dylib",
-    "giflib/lib/libgif.dylib", "glib/lib/libglib-2.0.0.dylib",
-    "graphite2/lib/libgraphite2.3.dylib", "harfbuzz/lib/libharfbuzz.0.dylib",
-    "jpeg-turbo/lib/libjpeg.8.dylib", "libpng/lib/libpng16.16.dylib",
-    "little-cms2/lib/liblcms2.2.dylib", "pcre2/lib/libpcre2-8.0.dylib",
-)
-
-
 def checked(condition, message):
     if not condition:
         raise ValueError(message)
@@ -39,7 +24,7 @@ def checked(condition, message):
 
 def runtime_files():
     result = {}
-    for name in BREW_LIBS:
+    for name in engine.JDK_BREW_LIBRARIES:
         alias = Path("/opt/homebrew/opt") / name
         actual = alias.resolve(strict=True)
         checked(actual.is_relative_to("/opt/homebrew/Cellar") and actual.is_file(),
@@ -57,7 +42,7 @@ def restriction(operation, *, paths=(), roots=()):
 def worker_profile(job, deps, libraries, *, staged=None, protected=()):
     ghidra, java = (Path(deps[key]) for key in ("ghidra_path", "java_home"))
     programs = engine.worker_launch_paths(deps)
-    reads = set((*programs, *SYSTEM_FILES))
+    reads = set((*programs, *engine.SYSTEM_FILES))
     for alias, lib in libraries.items():
         real = Path(lib["path"])
         reads.update((alias, str(real), str(real.with_name(Path(alias).name))))
@@ -65,7 +50,7 @@ def worker_profile(job, deps, libraries, *, staged=None, protected=()):
         reads.add(str(staged))
     profile = ("(version 1)\n(allow default)\n(deny network*)\n"
                + restriction("file-read-data", paths=sorted(map(str, reads)),
-                             roots=(job, ghidra, java, engine.BRIDGE.resolve(), *SYSTEM_READS))
+                             roots=(job, ghidra, java, engine.BRIDGE.resolve(), *engine.SYSTEM_READS))
                + restriction("file-write*", paths=("/dev/null",), roots=(job,))
                + restriction("process-exec", paths=programs))
     if protected:
@@ -265,7 +250,7 @@ def main():
             "Runtime identity changed during the experiment")
     write_new_json(output / "positive.json", {"status": "passed", "engine": deps, "java_tree_sha256": java_digest,
                                             "library_reads": libraries, "system_read_roots": SYSTEM_READS,
-                                            "system_read_files": SYSTEM_FILES, "system_executables": engine.SYSTEM_EXEC,
+                                            "system_read_files": engine.SYSTEM_FILES, "system_executables": engine.SYSTEM_EXEC,
                                             "cases": positive})
     write_new_json(output / "negative.json", negative)
     print(output)

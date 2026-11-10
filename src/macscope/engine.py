@@ -33,6 +33,19 @@ SYSTEM_EXEC = (
     '/usr/bin/readlink', '/usr/bin/dirname', '/usr/bin/uname', '/usr/bin/true',
     '/usr/bin/java', '/usr/libexec/java_home',
 )
+SYSTEM_READS = (
+    '/System/Library', '/System/Volumes/Preboot/Cryptexes/OS/System/Library',
+    '/usr/lib', '/usr/share', '/private/var/db/timezone', '/dev/fd',
+)
+SYSTEM_FILES = ('/', '/dev/null', '/dev/urandom', '/dev/random', '/private/etc/localtime', '/private/etc/hosts')
+JDK_BREW_LIBRARIES = (
+    'brotli/lib/libbrotlicommon.1.dylib', 'brotli/lib/libbrotlidec.1.dylib',
+    'freetype/lib/libfreetype.6.dylib', 'gettext/lib/libintl.8.dylib',
+    'giflib/lib/libgif.dylib', 'glib/lib/libglib-2.0.0.dylib',
+    'graphite2/lib/libgraphite2.3.dylib', 'harfbuzz/lib/libharfbuzz.0.dylib',
+    'jpeg-turbo/lib/libjpeg.8.dylib', 'libpng/lib/libpng16.16.dylib',
+    'little-cms2/lib/liblcms2.2.dylib', 'pcre2/lib/libpcre2-8.0.dylib',
+)
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
     'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
@@ -260,12 +273,38 @@ def workspace_read_rule(project, dependencies, write_root, staged_image_id):
     return f'(deny file-read-data (require-all (subpath {literal(project.path)}) {" ".join(excluded)}))\n'
 
 
+def jdk_library_paths():
+    opt, cellar = Path('/opt/homebrew/opt'), Path('/opt/homebrew/Cellar')
+    for name in JDK_BREW_LIBRARIES:
+        alias = opt/name
+        try:
+            real = alias.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if real.is_relative_to(cellar/name.split('/')[0]) and real.is_file():
+            yield alias
+            yield real
+            yield real.with_name(alias.name)
+
+
+def worker_read_rule(project, dependencies, write_root, staged_image_id):
+    literal = lambda p: json.dumps(str(p), ensure_ascii=False)
+    paths = set(map(str, (*SYSTEM_FILES, *worker_launch_paths(dependencies), *jdk_library_paths())))
+    if staged_image_id is not None:
+        paths.add(str(project.path/'inputs'/(staged_image_id+'.macho')))
+    roots = (write_root, BRIDGE.resolve(), dependencies['ghidra_path'], dependencies['java_home'], *SYSTEM_READS)
+    allowed = [f'(literal {literal(path)})' for path in sorted(paths)]
+    allowed.extend(f'(subpath {literal(root)})' for root in roots)
+    return f'(deny file-read-data (require-not (require-any {" ".join(allowed)})))\n'
+
+
 def sandbox_rules(project, dependencies, write_root, staged_image_id, read_only_program):
     rules = [workspace_exec_rule(project), workspace_read_rule(project, dependencies, write_root, staged_image_id),
              worker_exec_rule(dependencies)]
     if read_only_program:
         program = json.dumps(str(write_root/'program'), ensure_ascii=False)
         rules.append(f'(deny file-write* (require-all (subpath {program}) (regex #"[.]gbf$")))\n')
+    rules.append(worker_read_rule(project, dependencies, write_root, staged_image_id))
     return rules
 
 

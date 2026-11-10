@@ -2389,9 +2389,10 @@ An import worker can read its job and exactly one immutable staged
 `.macho` slice. Analysis and query workers read the Program copy in their
 own job. The worker profile denies file-content reads of sibling jobs,
 other staged slices, the full artifact copy and the workspace index.
-The pinned runtime and bridge retain read access. The existing restriction
-on unrelated home data applies separately, and other non-home paths
-outside the workspace remain broadly readable.
+The pinned runtime and bridge retain read access. This checkpoint
+restricted reads inside the workspace. See the
+[headless worker read paths](#headless-worker-read-paths) for the current
+rules outside it.
 
 The temporary wheel passed import, analysis, fresh queries and focused
 queries on owned arm64 and x86_64 calculator tools. The import and query
@@ -2445,6 +2446,35 @@ queries while allowing database reads. The metadata write control, live
 doctor probe and owned one-shot capture rerun also passed. The report
 SHA-256 is
 `498514c1307fa13daa5b3d7b0dfcfb4d320524c9ea33123afb605556c4d4e080`.
+
+### Headless worker read paths
+
+The normal worker profile permits file-content reads in its job and the
+selected Ghidra, JDK and bridge directories. An import also gets the
+exact staged slice. The profile permits the pinned setup's macOS system
+runtime paths, exact launcher utilities and named auxiliary JDK
+libraries. Homebrew library entries resolve to files within their
+expected formula directories. The profile records the resolved paths.
+
+The temporary wheel completed the 32-case owned calculator matrix.
+All normalized exports matched the earlier wheel, including the five
+complete and 27 partial results. The live probe passed. A focused query
+from the previous wheel restarted under the new profile and replayed
+offline. Its worker could still read its Program copy and the system
+control. It could no longer read a separate disposable project or an
+unrelated non-home file. The combined policy also denied a loopback
+connection, an outside write, and launch of the outside executable
+canary. A write inside the job succeeded.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Owned matrix | `9c6c05e65599239482e906bab6c31e4e762cfe259d94c1cb11708b1fdef9037b` |
+| Read controls and retry | `f93a8525074a1beb4484ec1663d26041614c1a26a83865e877add3abdcb0e94a` |
+| Combined worker controls | `031d943c6729e8d74fc613fa7b0a7abcb27a140dcbb786cc1c0bd1128aaa25d1` |
+
+This is a file-content policy for the tested macOS arm64 setup. File
+metadata, other IPC, hard memory and disk quotas, and hostile-input
+containment remain separate validation gaps.
 
 ### Owned one-shot approval prototype
 

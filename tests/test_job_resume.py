@@ -156,13 +156,14 @@ class JobResumeTests(TemporaryCase):
     def test_replay_accepts_predecessor_profile_for_exact_job(self):
         path = self.prior_path.parent
         current = engine.profile(self.workspace, self.deps, write_root=path)
-        workspace_scoped = current.removesuffix(engine.worker_exec_rule(self.deps))
+        launch_scoped = current.removesuffix(engine.worker_read_rule(self.workspace, self.deps, path, None))
+        workspace_scoped = launch_scoped.removesuffix(engine.worker_exec_rule(self.deps))
         previous = workspace_scoped.removesuffix(engine.workspace_read_rule(self.workspace, self.deps, path, None))
         original = previous.removesuffix(engine.workspace_exec_rule(self.workspace))
-        self.assertEqual(len({current, workspace_scoped, previous, original}), 4)
+        self.assertEqual(len({current, launch_scoped, workspace_scoped, previous, original}), 5)
         args = self.args("jobs", "resume", self.prior, "--experimental-trusted-input")
         with patch.object(engine, "dependencies", return_value=self.deps):
-            for policy in (workspace_scoped, previous, original):
+            for policy in (launch_scoped, workspace_scoped, previous, original):
                 record = dict(self.record, sandbox_sha256=hashlib.sha256(policy.encode()).hexdigest())
                 cli.replay_worker_request(args, self.workspace, record)
                 self.error("job_resume_engine", cli.replay_worker_request, args, self.workspace,

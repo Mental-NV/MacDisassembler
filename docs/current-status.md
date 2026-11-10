@@ -291,8 +291,9 @@ reads, and confines write paths to its own newly created job directory
 and `/dev/null`. It denies direct execution from managed input and job
 directories. Within the workspace, workers read their own job and, for
 imports, the exact selected slice. The shared index and earlier jobs
-are outside that scope. Non-home reads outside the workspace remain
-broadly available.
+are outside that scope. Outside the workspace, the read allowlist
+permits the selected runtime and specific macOS system and library
+paths.
 Direct worker launches are limited to the tested macOS launcher
 utilities and exact paths in the selected Ghidra and JDK.
 Hard process-memory and disk quotas are unavailable. Isolation errors
@@ -648,6 +649,10 @@ collections exceed documented bounds despite successful pseudocode output.
   Real database append attempts failed while reads and working metadata
   writes succeeded. Hinted and focused queries recovered across the wheel
   upgrade, and the optimized x86_64 recovery query applied its signatures.
+- [x] Apply the [runtime read allowlist](cli.md#headless-worker-read-paths)
+  to normal headless jobs. All 32 owned matrix exports matched the prior
+  wheel. Cross-workspace reads failed, and a focused retry used the new
+  policy and replayed offline.
 - [x] Verify [the one-shot focused capture binding](cli.md#owned-one-shot-approval-prototype)
   with a simulated issuer on both owned calculator architectures. Wrong
   scopes, edited grants, expiry and reuse produced no extra worker jobs.
