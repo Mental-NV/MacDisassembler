@@ -1,6 +1,9 @@
 """Decode supported dyld fixups from immutable Mach-O bytes."""
 import struct
 
+from .chained_layout import (
+    IMPORT_WIDTHS, MAX_PAGE_RECORDS, header, segment_pages, starts_region, symbol_bounds,
+)
 from .errors import Error
 from .dyld_legacy import decode_legacy, library_for_ordinal
 from .macho import thin
@@ -8,7 +11,6 @@ from .macho_load import bounded
 
 
 MAX_FIXUPS = 10000
-MAX_PAGE_RECORDS = 262144
 MAX_LEGACY_LOOKUP_OPERATIONS = 262144
 POINTER_FORMATS = {
     1: "DYLD_CHAINED_PTR_ARM64E",
@@ -19,7 +21,6 @@ POINTER_FORMATS = {
 }
 ARM64E_FORMATS = {1, 9, 12}
 AUTH_KEYS = ("IA", "IB", "DA", "DB")
-IMPORT_WIDTHS = {1: 4, 2: 8, 3: 16}
 
 
 def import_symbol(data, payload, end, table, symbols, count, format_id, index, libraries):
@@ -41,37 +42,11 @@ def import_symbol(data, payload, end, table, symbols, count, format_id, index, l
             addend = struct.unpack_from("<i",data,at+4)[0]
     if ordinal >= (1 << width)-15:
         ordinal -= 1 << width
-    name_start = payload+symbols+name_offset
-    name_end = data.find(b"\0",name_start,min(end,name_start+4097))
-    if name_end <= name_start:
-        raise Error("fixup_symbol", "Chained import symbol is missing or oversized")
+    name_start, name_end = symbol_bounds(data, payload + symbols, end, name_offset)
     return {"symbol": data[name_start:name_end].decode("utf-8","backslashreplace"),
             "library_ordinal": ordinal,
             "library": library_for_ordinal(ordinal,libraries),
             "weak_import": bool(value >> width & 1), "import_addend": addend}
-
-
-def segment_pages(data, payload, starts, starts_end, segments, *, selected=None):
-    bounded(starts,4,starts_end,"Chained segment count")
-    count = struct.unpack_from("<I",data,payload+starts)[0]
-    if count > len(segments):
-        raise Error("fixup_segments", "Chained starts exceed the Mach-O segment table")
-    table_end = starts+4+count*4
-    bounded(starts+4,count*4,starts_end,"Chained segment offsets")
-    indices = range(count) if selected is None else range(selected, min(selected + 1, count))
-    for index in indices:
-        relative = struct.unpack_from("<I",data,payload+starts+4+index*4)[0]
-        if not relative:
-            continue
-        at = starts+relative
-        if at < table_end:
-            raise Error("fixup_segments", "Chained segment data overlaps its offset table")
-        bounded(at,22,starts_end,"Chained segment header")
-        size,page_size,pointer_format,segment_offset,_,pages = struct.unpack_from("<IHHQIH",data,payload+at)
-        bounded(at,size,starts_end,"Chained segment data")
-        if size < 22+pages*2 or page_size not in (4096,16384):
-            raise Error("fixup_pages", "Invalid chained page table")
-        yield segments[index], pointer_format, segment_offset, page_size, pages, payload+at+22
 
 
 def rebase_target(target, high, base):
@@ -121,8 +96,7 @@ def ordinary_pointer(value, kind, base):
 def decode_chained(data, image, parsed, extent, *, address=None, selected=None):
     payload,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
     end = payload+size
-    bounded(0,28,size,"Chained fixup header")
-    version,starts,table,symbols,count,format_id,symbol_format = struct.unpack_from("<7I",data,payload)
+    version,starts,table,symbols,count,format_id,symbol_format = header(data, payload, size)
     result = {"format": "chained", "version": version, "import_count": count,
               "imports_format": format_id, "symbols_format": symbol_format, "pointer_formats": []}
     records = []
@@ -137,15 +111,7 @@ def decode_chained(data, image, parsed, extent, *, address=None, selected=None):
     if unsupported:
         return result, records, unsupported
     base = int(base,16)
-    starts_end = table
-    if count==0 and table==symbols==0:
-        starts_end = size
-    elif not 28 <= starts < table <= symbols <= size:
-        raise Error("fixup_layout", "Chained starts, imports or symbols overlap")
-    else:
-        bounded(table,count*IMPORT_WIDTHS[format_id],symbols,"Chained imports")
-    if starts<28:
-        raise Error("fixup_layout", "Chained starts overlap the header")
+    starts_end = starts_region(size, starts, table, symbols, count, format_id)
     libraries = [d["path"] for d in parsed["loader"]["dylibs"] if d["kind"]!="id"]
     imports = {}
     formats = set()

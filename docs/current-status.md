@@ -180,6 +180,40 @@ reporting or packaging expansion. Keep isolation and correctness fixes
 needed by the selected workflow in scope. Desktop UI acceptance, optional
 REA, licensing, and publication retain their separate gates.
 
+### Live Taskovsky integration gate
+
+The reported Weekend trial reached the installed CLI's
+`isolation_required` gate. Its executable hash matches the prior
+archived container. The Weekend lead still lacks an approved entry and
+extent in the six-entry Week grant. Saved Week evidence remains available
+through the existing offline handoff.
+
+The current worker profile denied an owned canary in another home
+path and allowed owned canaries in the project and elsewhere under
+`/private/tmp`. A scoped live path needs a separate per-job profile
+with explicit read access to the staged slice or saved Program, pinned
+Ghidra and JDK, and required operating-system files. It should deny
+network access and execution of staged input, restrict writes to the
+job directory, and fail closed when the profile fails to load.
+
+The smallest proposed live interface is a one-shot request approved by
+the owner through a trusted launcher. Bind approval to the artifact
+and slice hashes, architecture, one entry and its linker extent, pinned
+engine and JDK, isolated workspace, and bounded import and focused
+query. The import disables autoanalysis and library loading. The focused
+query uses a read-only copy of the resulting Program and publishes a
+receipt for offline replay. The public owned-fixture gate remains in
+effect for ordinary commands.
+
+The owned-fixture prototype can verify startup, reject mismatched
+digests, entries, engine identities and reused approvals before
+launch, probe network, read, write and execution restrictions, and
+verify receipt replay with the engine unavailable. This work uses
+per-process restrictions and the existing local dependencies.
+Enabling the new live route and authorizing its exact Weekend request
+are separate decisions. Any change to host security settings, software
+installation or persistent access would need separate approval.
+
 ## Implemented
 
 - Source-controlled AppKit calculator, pure-C calculation core and corpus,
@@ -575,6 +609,10 @@ collections exceed documented bounds despite successful pseudocode output.
   before engine work. All 29 owned malformed or oversized import controls
   stopped before staging. An intact Program imported by the prior wheel
   completed analysis and fresh decompilation with the new wheel.
+- [x] Validate [chained-fixup layouts](cli.md#chained-fixup-layout-preflight)
+  before engine work. Thirty-one import controls stopped before staging.
+  Data-only results matched on 24 intact slices, and both owned calculator
+  architectures completed full headless validation.
 - [x] Bound [section records across each Mach-O slice](cli.md#limits-and-safety-boundaries).
   Exact-limit thin and universal fixtures passed. An excess failed before
   staging, including in an unselected slice. An owned Calendar bundle

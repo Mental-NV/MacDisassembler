@@ -11,6 +11,7 @@ import stat
 import struct
 from xml.parsers.expat import ExpatError
 from pathlib import Path
+from .chained_layout import require_engine_layout
 from .errors import Error
 from .macho_load import ENCRYPTION_COMMANDS, bounded, details, encryption_region, require_engine_tables
 
@@ -181,6 +182,7 @@ def thin(data, *, allow_arm64e=False, include_section_linkage=False, for_engine=
     loader = details(data,command_records,segments,arch)
     if for_engine:
         require_engine_tables(loader, arch)
+        require_engine_layout(data, loader, segments)
     if encryption is not None:
         loader['encryption'] = encryption
     return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,

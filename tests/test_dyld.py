@@ -3,7 +3,7 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from macscope import cli, dyld, engine, evidence, handoff_diff, import_state, macho, storage
+from macscope import chained_layout, cli, dyld, engine, evidence, handoff_diff, import_state, macho, storage
 from macscope.errors import Error
 from test_core import TemporaryCase
 from test_macho import X86_64, command, image, universal
@@ -140,6 +140,38 @@ class ChainedFixupsTests(unittest.TestCase):
             _,rows,gaps = self.decode(fixture())
         self.assertEqual(len(rows),1)
         self.assertEqual(gaps,["fixup_limit"])
+
+    def test_engine_admission_validates_even_an_unreferenced_import_name(self):
+        for import_format in (1, 2, 3):
+            with self.subTest(import_format=import_format):
+                raw = bytearray(fixture(import_format=import_format, step=0))
+                macho.thin(raw, for_engine=True)
+                name_field = PAYLOAD + 64 + (4 if import_format == 3 else 0)
+                struct.pack_into("<I", raw, name_field, 0xFFFFFFFF)
+                data = bytes(raw)
+                self.assertEqual(len(self.decode(data)[1]), 1)
+                with self.assertRaises(Error) as caught:
+                    macho.thin(data, for_engine=True)
+                self.assertEqual(caught.exception.code, "fixup_symbol")
+
+    def test_engine_admission_checks_header_spans_and_record_limits(self):
+        for field, value, code in (
+                (4, 24, "fixup_layout"), (8, 63, "macho_bounds"),
+                (12, 0xFFFFFFFF, "fixup_layout"), (24, 1, "fixup_header_unsupported"),
+                (36, 4, "fixup_segments"), (40, 30, "macho_bounds")):
+            with self.subTest(field=field, code=code):
+                raw = bytearray(fixture())
+                struct.pack_into("<I", raw, PAYLOAD + field, value)
+                macho.thin(raw)
+                with self.assertRaises(Error) as caught:
+                    macho.thin(raw, for_engine=True)
+                self.assertEqual(caught.exception.code, code)
+        for limit, code in (("MAX_CHAINED_IMPORTS", "fixup_import_limit"),
+                            ("MAX_PAGE_RECORDS", "fixup_page_limit"),
+                            ("MAX_ENGINE_SEGMENT_PAGES", "fixup_page_limit")):
+            with self.subTest(limit=limit), patch.object(chained_layout, limit, 0), self.assertRaises(Error) as caught:
+                macho.thin(fixture(), for_engine=True)
+            self.assertEqual((caught.exception.code, caught.exception.exit_code), (code, 7))
 
     def test_chain_cannot_escape_page_or_import_table(self):
         for data,code in ((fixture(step=4095),"macho_bounds"),

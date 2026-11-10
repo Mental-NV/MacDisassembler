@@ -2214,6 +2214,28 @@ and both fresh results matched the saved pseudocode. The private
 validation report SHA-256 is
 `9e96703339b683eaeb10ed7198d1dc7c7d79769bcab6bfee254cb7174183505e`.
 
+### Chained-fixup layout preflight
+
+Before an import or new analysis, the CLI validates the
+`LC_DYLD_CHAINED_FIXUPS` header, starts and import table extents,
+segment page records, and all referenced symbol strings inside their
+declared payload. This includes import names that a targeted fixup
+query would never read. Engine admission requires version 0, import
+formats 1 through 3, and uncompressed symbols. It caps the aggregate
+import and page counts at 262,144 each and a segment's page count at
+32,767 to fit the pinned loader. These checks cover layout and names.
+Pointer interpretation and chain traversal have their own coverage.
+[Apple chained-fixup definitions](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h)
+
+The isolated wheel rejected 31 owned malformed or unsupported import
+controls before staging or worker launch, including a malformed
+unselected universal slice. Data-only inspection and fixup results
+matched byte for byte on 24 intact slices. Intact arm64 and x86_64
+calculator tools completed full headless import and analysis, and
+both fresh queries reproduced their saved pseudocode. The validation
+report SHA-256 is
+`b4b50f5be8228266a20243c913700d0d45640e0456378aa99f2a6ed90a7da89b`.
+
 ## Envelopes, errors and explicit omissions
 
 Workspace opens validate the manifest structure, schema version, and
