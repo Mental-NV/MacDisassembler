@@ -55,7 +55,8 @@ class QueryResumeTests(TemporaryCase):
             "type_hints": self.hints, "type_hint_view_id": self.request["type_hint_view_id"],
             "analysis_profile": engine.analysis_profile(), "dependencies": self.deps,
             "limits": engine.worker_limits(original, 1),
-            "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, self.prior),
+            "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, self.prior,
+                                                        read_only_program=True),
         }
         self.prior_path = self.workspace.path / "jobs" / self.prior / "job.json"
         self.prior_path.parent.mkdir()
@@ -244,7 +245,8 @@ class FocusedResumeTests(TemporaryCase):
                        'source_analysis_id':None,'selected_entry':self.entry,'focused_import':self.proof,
                        'focused_request':self.request,'analysis_profile':None,'dependencies':self.deps,
                        'limits':engine.worker_limits(options,1),'restart_protocol':jobs.RESTART_PROTOCOL,
-                       'sandbox_sha256':engine.job_sandbox_sha256(self.workspace,self.deps,self.original)}
+                       'sandbox_sha256':engine.job_sandbox_sha256(self.workspace,self.deps,self.original,
+                                                                  read_only_program=True)}
         self.path = self.write_job(self.original,self.record)
 
     def write_job(self, job_id, record):

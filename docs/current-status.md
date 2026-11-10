@@ -644,6 +644,10 @@ collections exceed documented bounds despite successful pseudocode output.
   to the selected runtime and known macOS utilities. A child shell could
   not launch the outside canary. The live probe, both alternate analysis
   profiles and recovery across the wheel upgrade passed.
+- [x] Protect [copied Program database files in queries](cli.md#read-only-program-database-files-in-queries).
+  Real database append attempts failed while reads and working metadata
+  writes succeeded. Hinted and focused queries recovered across the wheel
+  upgrade, and the optimized x86_64 recovery query applied its signatures.
 - [x] Verify [the one-shot focused capture binding](cli.md#owned-one-shot-approval-prototype)
   with a simulated issuer on both owned calculator architectures. Wrong
   scopes, edited grants, expiry and reuse produced no extra worker jobs.

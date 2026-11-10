@@ -81,11 +81,12 @@ def call(*words):
 
 
 def run_scoped(project, deps, libraries, words, *, staged=None, protected=()):
-    def scoped(workspace, actual, *, write_root, staged_image_id=None):
+    def scoped(workspace, actual, *, write_root, staged_image_id=None, read_only_program=False):
         selected = workspace.path / "inputs" / (staged_image_id + ".macho") if staged_image_id else None
         checked(workspace.path == project and write_root.parent == project / "jobs" and actual == deps,
                 "Worker request differs from the owned experiment scope")
         checked(selected == staged, "Staged input differs from the owned experiment scope")
+        checked(read_only_program == bool(protected), "Program protection differs from the owned experiment scope")
         return worker_profile(write_root, actual, libraries, staged=staged, protected=protected)
 
     with patch.object(engine, "profile", scoped):

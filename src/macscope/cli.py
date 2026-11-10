@@ -959,7 +959,7 @@ def replay_worker_request(args, project, record, *, query_profile=None):
     staged_image_id = record.get('image_id') if mode == 'import' else None
     if (deps != record.get('dependencies')
             or not engine.job_sandbox_matches(project, deps, record.get('job_id'), record.get('sandbox_sha256'),
-                                              staged_image_id=staged_image_id)):
+                                              staged_image_id=staged_image_id, read_only_program=mode == 'query')):
         raise Error('job_resume_engine','Restart requires the recorded engine and JDK and a recognized worker policy',4)
     return replay,deps
 

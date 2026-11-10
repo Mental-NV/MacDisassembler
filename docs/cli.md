@@ -2426,6 +2426,26 @@ wheel in place. Both receipts replayed offline. The validation report
 SHA-256 is
 `d05bfc2dd3c1ed41702760b5db971c3036ef723f161cf54cb9563035d941c224`.
 
+### Read-only Program database files in queries
+
+Fresh and focused queries pass `-readOnly -noanalysis` and run on a
+verified Program copy in their own job. The query sandbox also denies
+writes to `.gbf` database files inside that copy. Ghidra can still write
+the working metadata and temporary files it needs to open the project.
+Import creates a writable Program, and analysis uses a writable copy.
+A query restarted from a recognized earlier profile uses the current
+database protection.
+
+The temporary wheel recovered an interrupted arm64 query with an accepted
+type hint and an interrupted x86_64 focused query from the previous
+wheel. Both launched with the new protection and replayed offline after
+publication. A separate x86_64 O2 query applied direct-signature
+recovery. macOS denied an append to a real copied database in all three
+queries while allowing database reads. The metadata write control, live
+doctor probe and owned one-shot capture rerun also passed. The report
+SHA-256 is
+`498514c1307fa13daa5b3d7b0dfcfb4d320524c9ea33123afb605556c4d4e080`.
+
 ### Owned one-shot approval prototype
 
 The [research supervisor](../analysis/verify_capture_approval.py)

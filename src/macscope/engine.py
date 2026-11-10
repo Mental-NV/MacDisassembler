@@ -260,7 +260,16 @@ def workspace_read_rule(project, dependencies, write_root, staged_image_id):
     return f'(deny file-read-data (require-all (subpath {literal(project.path)}) {" ".join(excluded)}))\n'
 
 
-def profile(project, dependencies, *, write_root, staged_image_id=None):
+def sandbox_rules(project, dependencies, write_root, staged_image_id, read_only_program):
+    rules = [workspace_exec_rule(project), workspace_read_rule(project, dependencies, write_root, staged_image_id),
+             worker_exec_rule(dependencies)]
+    if read_only_program:
+        program = json.dumps(str(write_root/'program'), ensure_ascii=False)
+        rules.append(f'(deny file-write* (require-all (subpath {program}) (regex #"[.]gbf$")))\n')
+    return rules
+
+
+def profile(project, dependencies, *, write_root, staged_image_id=None, read_only_program=False):
     # Seatbelt strings are JSON quoted, never shell interpolated.
     reads = [str(project.path), str(BRIDGE.resolve()), dependencies['ghidra_path'], dependencies['java_home']]
     ancestors = sorted({str(p) for p in project.path.parents} | {str(p) for p in BRIDGE.resolve().parents})
@@ -273,9 +282,7 @@ def profile(project, dependencies, *, write_root, staged_image_id=None):
             '(deny file-read-data (require-all (subpath "/Users") '+exclusions+'))\n'
             '(deny file-write* (require-all (require-not (subpath '+writable+')) '
             '(require-not (literal "/dev/null"))))\n'
-            + workspace_exec_rule(project)
-            + workspace_read_rule(project, dependencies, write_root, staged_image_id)
-            + worker_exec_rule(dependencies))
+            + ''.join(sandbox_rules(project, dependencies, write_root, staged_image_id, read_only_program)))
 
 
 
@@ -285,21 +292,22 @@ def job_directory(project, job_id):
     return project.path/'jobs'/job_id
 
 
-def job_sandbox_sha256(project, dependencies, job_id, *, staged_image_id=None):
+def job_sandbox_sha256(project, dependencies, job_id, *, staged_image_id=None, read_only_program=False):
     rendered = profile(project, dependencies, write_root=job_directory(project, job_id),
-                       staged_image_id=staged_image_id)
+                       staged_image_id=staged_image_id, read_only_program=read_only_program)
     return hashlib.sha256(rendered.encode()).hexdigest()
 
 
-def job_sandbox_matches(project, dependencies, job_id, recorded, *, staged_image_id=None):
+def job_sandbox_matches(project, dependencies, job_id, recorded, *, staged_image_id=None, read_only_program=False):
     job = job_directory(project, job_id)
-    current = profile(project, dependencies, write_root=job, staged_image_id=staged_image_id)
+    current = profile(project, dependencies, write_root=job, staged_image_id=staged_image_id,
+                      read_only_program=read_only_program)
     # Recognize the recorded historical profiles without launching a worker under them.
-    workspace_scoped = current.removesuffix(worker_exec_rule(dependencies))
-    previous = workspace_scoped.removesuffix(workspace_read_rule(project, dependencies, job, staged_image_id))
-    original = previous.removesuffix(workspace_exec_rule(project))
-    return any(hashlib.sha256(policy.encode()).hexdigest() == recorded
-               for policy in (current, workspace_scoped, previous, original))
+    for rule in reversed(sandbox_rules(project, dependencies, job, staged_image_id, read_only_program)):
+        if hashlib.sha256(current.encode()).hexdigest() == recorded:
+            return True
+        current = current.removesuffix(rule)
+    return hashlib.sha256(current.encode()).hexdigest() == recorded
 
 
 def worker_exited(proc):
@@ -629,7 +637,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     outfile = job/'bridge.json'
     sandbox = job/'sandbox.sb'
     staged_image_id = image['image_id'] if mode == 'import' else None
-    sandbox.write_text(profile(project, deps, write_root=job, staged_image_id=staged_image_id), encoding="utf-8")
+    sandbox.write_text(profile(project, deps, write_root=job, staged_image_id=staged_image_id,
+                               read_only_program=mode == 'query'), encoding="utf-8")
     g, j = Path(deps['ghidra_path']), Path(deps['java_home'])
     engine_dir = job/'program'
     if mode == 'import':
