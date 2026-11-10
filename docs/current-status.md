@@ -16,7 +16,7 @@ contains documentation only.
 - Version/doctor, bounded Mach-O/app-main inspection, private project creation,
   explicit thin/universal slice import without autoanalysis, versioned baseline
   analysis and explicitly selected binary-derived parameter inference,
-  function list/show, disassembly, cached and fresh selected-function pseudocode, references,
+  function list/show, function and range disassembly, cached and fresh selected-function pseudocode, references,
   CFG JSON/DOT, project/job status, cached search, bounded call traversal
   and normalized exports.
 - Package-owned Java bridge, effective analyzer-option recording, real saved
@@ -79,6 +79,9 @@ collections exceed documented bounds despite successful pseudocode output.
   patched app and tool matrix. The [determinism run](parameter-inference.md#three-run-determinism)
   verified 96 distinct headless workers.
 - [x] Expose uncached selected-function decompilation from the saved Program.
+- [x] Query saved disassembly by unslid VA range with explicit byte gaps.
+  The installed CLI matched all 534 returned instruction records to LLVM
+  and the owned slices across 27 thin and universal queries.
 - [x] Link available Ghidra pseudocode tokens to machine addresses. The
   arm64/x86_64 thin and universal integration checked cached and fresh links.
 - [x] Measure 20 rounds of CLI latency on the development Mac. See the

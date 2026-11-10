@@ -90,6 +90,37 @@ workspace has multiple images. `--name EXACT`, `--address 0xUNSLID_VA`, and
 `--function-id ID` are mutually exclusive; duplicate names return candidates.
 Addresses identify **function entries**, not an arbitrary containing function.
 
+Use `disasm --range START:END` to read committed Ghidra instructions
+across function boundaries. Both addresses are unslid hexadecimal VAs
+and the end is exclusive. A range covers 1 to 4,096 bytes and selects
+one imported image. It uses its own selector in place of `--address`,
+`--name`, or `--function-id`.
+
+```sh
+macscope disasm --project workspaces/calculator --arch x86_64 \
+  --range 0x100000510:0x100000552 --json
+```
+
+The result lists whole saved instructions in address order and reports
+their function IDs. Identical records from overlapping functions appear
+once. Missing records, conflicting decodes, and instructions cut by a
+range boundary are separate gap reasons. Gap ends are exclusive. A range
+with gaps exits 6 and reports the number of covered and requested bytes.
+An unmapped range yields an empty instruction list with a gap. Use `bytes`
+for file-backed bytes whether or not Ghidra decoded them. Range queries
+read a committed snapshot and start no worker.
+
+The installed wheel verified 27 ranges across six stock Ghidra captures
+of the owned O0 calculator tool, covering both thin architectures and
+symbol states and both slices of a symbol-bearing universal binary. All
+534 returned instruction addresses and 2,013 bytes matched LLVM and the
+original slices. The x86_64 range that crossed two functions reported the
+intervening padding gap. The unresolved switch reported its missing case
+range. The universal queries matched their thin counterparts after
+remapping image and function identities and container offsets. Exports
+stayed byte-identical and no range query created a worker job. The report
+SHA-256 is `464079202b7bbe8c5aed15db6655b66c80acc6ae5bab73f6b924377d56df3c4d`.
+
 `functions list --name-contains TEXT` is a literal filter. Collection cursors
 bind to project, full analysis ID, filter and sort order. Changing any of
 these rejects the cursor. Pagination coverage distinguishes page truncation

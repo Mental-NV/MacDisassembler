@@ -14,7 +14,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import annotation_transfer, annotations, bundle, callee_parameters, calls, direct_signatures, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
+from . import annotation_transfer, annotations, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from .schema import validate_envelope, validate_function
 
 
@@ -50,6 +50,7 @@ def parser():
         g.add_argument('--address')
         g.add_argument('--name')
         if all_option:g.add_argument('--all',action='store_true')
+        return g
     def pagination(s):
         s.add_argument('--limit',type=int,default=100)
         s.add_argument('--cursor')
@@ -123,7 +124,11 @@ def parser():
         if c=='show':selector(s)
         else:s.add_argument('--name-contains');pagination(s)
     for c in ('disasm','decompile','xrefs','cfg'):
-        s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl'));selector(s,all_option=c=='decompile')
+        s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl'))
+        selections=selector(s,all_option=c=='decompile')
+        if c=='disasm':
+            selections.add_argument('--range',dest='va_range',metavar='START:END',
+                                    help='Show saved instructions in an unslid VA range (exclusive end)')
         if c=='decompile':
             pagination(s);budgets(s)
             s.add_argument('--fresh',action='store_true',help='Reopen the saved Program and decompile one function')
@@ -795,6 +800,9 @@ def swift_collection(args, project, image):
 
 def execute(a):
     limits(a)
+    va_range = getattr(a,'va_range',None) if a.command == 'disasm' else None
+    if va_range is not None:
+        va_range = disassembly.parse_range(va_range)
     fresh = a.command == 'decompile' and a.fresh
     with_hints = a.command == 'decompile' and a.with_type_hints
     recover_dispatch = a.command == 'decompile' and a.recover_dispatch_return
@@ -914,6 +922,13 @@ def execute(a):
     if a.command in metadata.ENGINE_LISTS:
         return metadata_collection(a,p,image,snapshot)
     aid=snapshot['analysis_id']
+    if va_range is not None:
+        data = disassembly.query(snapshot,image,*va_range)
+        partial = bool(data['gaps'])
+        count = len(data['instructions'])
+        return envelope(command,data,aid,'partial' if partial else 'complete',
+                        coverage('saved instructions within selected VA range',count,None if partial else count,
+                                 partial,reason='range_instruction_evidence_incomplete' if partial else None))
     if a.command == 'annotations' and a.action == 'export':
         transfer = annotation_transfer.export(p,image)
         total = len(transfer['revisions'])
