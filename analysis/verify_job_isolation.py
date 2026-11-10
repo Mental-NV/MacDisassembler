@@ -22,11 +22,6 @@ SYSTEM_READS = (
     "/usr/lib", "/usr/share", "/private/var/db/timezone", "/dev/fd",
 )
 SYSTEM_FILES = ("/", "/dev/null", "/dev/urandom", "/dev/random", "/private/etc/localtime", "/private/etc/hosts")
-SYSTEM_EXEC = (
-    "/bin/bash", "/bin/sh", "/bin/cat", "/bin/expr", "/usr/bin/env",
-    "/usr/bin/readlink", "/usr/bin/dirname", "/usr/bin/uname", "/usr/bin/true",
-    "/usr/bin/java", "/usr/libexec/java_home",
-)
 BREW_LIBS = (
     "brotli/lib/libbrotlicommon.1.dylib", "brotli/lib/libbrotlidec.1.dylib",
     "freetype/lib/libfreetype.6.dylib", "gettext/lib/libintl.8.dylib",
@@ -61,9 +56,7 @@ def restriction(operation, *, paths=(), roots=()):
 
 def worker_profile(job, deps, libraries, *, staged=None, protected=()):
     ghidra, java = (Path(deps[key]) for key in ("ghidra_path", "java_home"))
-    programs = (*SYSTEM_EXEC, ghidra / "support/analyzeHeadless", ghidra / "support/launch.sh",
-                java / "bin/java", java / "lib/jspawnhelper",
-                ghidra / "Ghidra/Features/Decompiler/os/mac_arm_64/decompile")
+    programs = engine.worker_launch_paths(deps)
     reads = set((*programs, *SYSTEM_FILES))
     for alias, lib in libraries.items():
         real = Path(lib["path"])
@@ -271,7 +264,7 @@ def main():
             "Runtime identity changed during the experiment")
     write_new_json(output / "positive.json", {"status": "passed", "engine": deps, "java_tree_sha256": java_digest,
                                             "library_reads": libraries, "system_read_roots": SYSTEM_READS,
-                                            "system_read_files": SYSTEM_FILES, "system_executables": SYSTEM_EXEC,
+                                            "system_read_files": SYSTEM_FILES, "system_executables": engine.SYSTEM_EXEC,
                                             "cases": positive})
     write_new_json(output / "negative.json", negative)
     print(output)

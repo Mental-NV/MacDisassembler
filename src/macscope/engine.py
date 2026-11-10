@@ -28,6 +28,11 @@ JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/
 BRIDGE = Path(__file__).parent/'bridge'
 BRIDGE_VERSION = '1.14.0'
 STARTUP_TIMEOUT_SECONDS = 300
+SYSTEM_EXEC = (
+    '/bin/bash', '/bin/sh', '/bin/cat', '/bin/expr', '/usr/bin/env',
+    '/usr/bin/readlink', '/usr/bin/dirname', '/usr/bin/uname', '/usr/bin/true',
+    '/usr/bin/java', '/usr/libexec/java_home',
+)
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
     'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
@@ -230,6 +235,18 @@ def workspace_exec_rule(project):
     return '(deny process-exec ' + ' '.join(f'(subpath {path})' for path in paths) + ')\n'
 
 
+def worker_launch_paths(dependencies):
+    ghidra, java = (Path(dependencies[key]) for key in ('ghidra_path', 'java_home'))
+    return (*SYSTEM_EXEC, ghidra/'support/analyzeHeadless', ghidra/'support/launch.sh',
+            java/'bin/java', java/'lib/jspawnhelper', ghidra/engine_checks.NATIVE)
+
+
+def worker_exec_rule(dependencies):
+    paths = (json.dumps(str(path), ensure_ascii=False) for path in worker_launch_paths(dependencies))
+    filters = ' '.join(f'(literal {path})' for path in paths)
+    return f'(deny process-exec (require-not (require-any {filters})))\n'
+
+
 def workspace_read_rule(project, dependencies, write_root, staged_image_id):
     literal = lambda p: json.dumps(str(p), ensure_ascii=False)
     runtime = (BRIDGE.resolve(), Path(dependencies['ghidra_path']), Path(dependencies['java_home']))
@@ -257,7 +274,8 @@ def profile(project, dependencies, *, write_root, staged_image_id=None):
             '(deny file-write* (require-all (require-not (subpath '+writable+')) '
             '(require-not (literal "/dev/null"))))\n'
             + workspace_exec_rule(project)
-            + workspace_read_rule(project, dependencies, write_root, staged_image_id))
+            + workspace_read_rule(project, dependencies, write_root, staged_image_id)
+            + worker_exec_rule(dependencies))
 
 
 
@@ -277,9 +295,11 @@ def job_sandbox_matches(project, dependencies, job_id, recorded, *, staged_image
     job = job_directory(project, job_id)
     current = profile(project, dependencies, write_root=job, staged_image_id=staged_image_id)
     # Recognize the recorded historical profiles without launching a worker under them.
-    previous = current.removesuffix(workspace_read_rule(project, dependencies, job, staged_image_id))
+    workspace_scoped = current.removesuffix(worker_exec_rule(dependencies))
+    previous = workspace_scoped.removesuffix(workspace_read_rule(project, dependencies, job, staged_image_id))
     original = previous.removesuffix(workspace_exec_rule(project))
-    return any(hashlib.sha256(policy.encode()).hexdigest() == recorded for policy in (current, previous, original))
+    return any(hashlib.sha256(policy.encode()).hexdigest() == recorded
+               for policy in (current, workspace_scoped, previous, original))
 
 
 def worker_exited(proc):

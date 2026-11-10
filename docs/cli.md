@@ -2405,6 +2405,27 @@ two owned runs with the updated worker interface. The validation report
 SHA-256 is
 `7beca2edd42d0a9652b7d24eb64108b0facda9fb3595f9aec3bfc2b70735c97d`.
 
+### Headless worker launch paths
+
+The normal headless worker can directly launch the selected Ghidra
+launch scripts, the selected JDK's `java` and subprocess helper, the
+pinned native decompiler, and the exact macOS shell and launcher utility
+paths used by the pinned setup. The list applies to child processes as
+well. The existing workspace execution denial also applies. The
+allowlist governs direct process launches. Allowed interpreters still
+have access to readable content under the worker's separate read rules.
+
+The previous profile launched a disposable executable outside the
+workspace. The new profile denied it directly and from a child shell,
+and denied an unlisted system utility. The canary stayed readable.
+The temporary wheel passed the live doctor probe and owned arm64 and
+x86_64 import, analysis, fresh query and focused query. The analysis
+runs used `deep` and `parameter-inference`, respectively. A prepared
+import and an interrupted analysis recovered after upgrading the test
+wheel in place. Both receipts replayed offline. The validation report
+SHA-256 is
+`d05bfc2dd3c1ed41702760b5db971c3036ef723f161cf54cb9563035d941c224`.
+
 ### Owned one-shot approval prototype
 
 The [research supervisor](../analysis/verify_capture_approval.py)

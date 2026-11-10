@@ -293,6 +293,8 @@ directories. Within the workspace, workers read their own job and, for
 imports, the exact selected slice. The shared index and earlier jobs
 are outside that scope. Non-home reads outside the workspace remain
 broadly available.
+Direct worker launches are limited to the tested macOS launcher
+utilities and exact paths in the selected Ghidra and JDK.
 Hard process-memory and disk quotas are unavailable. Isolation errors
 fail closed.
 
@@ -638,6 +640,10 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Restrict [worker reads inside the workspace](cli.md#worker-workspace-read-scope)
   to the current job and selected import slice. Both owned architectures
   passed full headless operations, and both upgrade receipts replayed offline.
+- [x] Limit [direct worker launches](cli.md#headless-worker-launch-paths)
+  to the selected runtime and known macOS utilities. A child shell could
+  not launch the outside canary. The live probe, both alternate analysis
+  profiles and recovery across the wheel upgrade passed.
 - [x] Verify [the one-shot focused capture binding](cli.md#owned-one-shot-approval-prototype)
   with a simulated issuer on both owned calculator architectures. Wrong
   scopes, edited grants, expiry and reuse produced no extra worker jobs.
