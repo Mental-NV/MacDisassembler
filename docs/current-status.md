@@ -486,6 +486,12 @@ collections exceed documented bounds despite successful pseudocode output.
   retained its main image when the framework exceeded the cap. Restoring
   the framework allowed both images to complete headless analysis and
   fresh decompilation.
+- [x] Verify [imported Program mappings](cli.md#imported-program-mapping)
+  against the staged Mach-O. The installed CLI verified all 31 file-backed
+  sections across the owned calculator slices and Calendar main and
+  framework images. A shifted live worker offset failed before publication.
+  Both calculator slices completed full headless analysis, disassembly
+  and fresh decompilation.
 - [x] List and inspect worker jobs and request cancellation through their
   live owner. A second CLI process cancelled an owned calculator analysis
   while preserving its previously committed snapshot.

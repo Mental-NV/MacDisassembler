@@ -719,6 +719,29 @@ data-in-code entries. An incomplete decoded table makes the header result
 partial. Dyld stream, export trie, chained fixup and signature ranges are
 recorded as extents.
 
+### Imported Program mapping
+
+Before publishing an import, the CLI checks the Ghidra image base against
+the Mach-O preferred base when available. It compares each nonempty
+file-backed section's virtual range and slice offsets with the sources
+reported by Ghidra for loaded, initialized default memory. Bridge 1.14.0
+adds the original file offset of each Ghidra FileBytes object to its
+sub-block offset. It also reports the backing filename so the CLI can
+check that it matches the staged slice.
+
+`jobs show JOB_ID` exposes the saved `loader_mapping` with the base, the
+number of declared file-backed sections and the number fully verified.
+Missing coverage or ambiguous declarations make the mapping report partial.
+A conflicting base, source file or section offset fails import with
+`loader_mapping_mismatch` before Program publication. Invalid worker
+evidence returns `loader_mapping_evidence`.
+
+The installed CLI verified 31 file-backed sections across the owned arm64
+and x86_64 calculator slices and the Calendar app and framework. A control
+shifted one source offset in a live worker result. The import recorded a
+failed job and left the image and Program unpublished. Both calculator
+slices completed full headless analysis, disassembly and fresh decompilation.
+
 ### Mach-O process entry points
 
 `inspect` and `headers` decode `LC_MAIN` and legacy `LC_UNIXTHREAD`.

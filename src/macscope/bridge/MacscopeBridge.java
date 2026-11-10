@@ -99,7 +99,7 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.13.0";
+    static final String VERSION = "1.14.0";
     static final String HINT_IDENTIFIER = "[A-Za-z_][A-Za-z0-9_]{0,47}";
     static final Pattern HINT_STRUCT = Pattern.compile("(struct (" + HINT_IDENTIFIER + ")\\{([^{}]+)\\})(\\*{0,2})");
     static final Pattern HINT_FIELD = Pattern.compile("(" + HINT_IDENTIFIER + "):(.+)");
@@ -648,8 +648,17 @@ public class MacscopeBridge extends HeadlessScript {
                     MemoryBlockSourceInfo si = infos.get(j);
                     JsonObject source = new JsonObject();
                     put(source, "start", address(si.getMinAddress())); put(source, "end", address(si.getMaxAddress()));
-                    if (si.getFileBytes().isPresent()) source.addProperty("file_offset", si.getFileBytesOffset());
-                    else source.add("file_offset", JsonNull.INSTANCE);
+                    var file = si.getFileBytes();
+                    if (file.isEmpty()) {
+                        source.add("file_offset", JsonNull.INSTANCE);
+                    } else if (mode.equals("import")) {
+                        long offset = si.getFileBytesOffset();
+                        if (offset < 0) source.add("file_offset", JsonNull.INSTANCE);
+                        else {
+                            put(source, "file_name", file.get().getFilename());
+                            source.addProperty("file_offset", Math.addExact(file.get().getFileOffset(), offset));
+                        }
+                    } else source.addProperty("file_offset", si.getFileBytesOffset());
                     sources.add(source);
                 }
                 item.add("sources", sources);

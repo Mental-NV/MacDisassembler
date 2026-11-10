@@ -17,7 +17,7 @@ import time
 import uuid
 from copy import deepcopy
 from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, manual_boundaries, scalar_signatures, switch_tables, worker_lifecycle
-from . import focused
+from . import focused, loader_mapping
 from .annotations import MAX_TYPE_HINTS, structure_definitions
 from .errors import Error
 from .storage import canonical, identity, is_digest, strict_json, write_json
@@ -26,7 +26,7 @@ from .macho import checked_path, read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
-BRIDGE_VERSION = '1.13.0'
+BRIDGE_VERSION = '1.14.0'
 STARTUP_TIMEOUT_SECONDS = 300
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
@@ -748,8 +748,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                 except (Error, ValueError, RecursionError, OSError) as error:
                     raise Error('signature_recovery_result', 'Worker did not publish a valid signature decision', 10) from error
             result[recovery_field] = dict(recovery_identity, **recovery_policy.decision(signature_plan,report))
-        if mode == 'import' and result.get('validation',{}).get('headless_analysis_enabled') is not False:
-            raise Error('import_analysis','Import did not disable autoanalysis',10)
+        if mode == 'import':
+            if result['validation'].get('headless_analysis_enabled') is not False:
+                raise Error('import_analysis','Import did not disable autoanalysis',10)
+            manifest['loader_mapping'] = loader_mapping.verify(result,image)
         write_json(job/'job.json',manifest,force=True)
         if mode == 'import' and import_request is None:
             destination = project.path/'engine'/image['image_id']
