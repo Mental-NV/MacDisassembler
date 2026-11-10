@@ -115,3 +115,41 @@ class WorkerLifecycleTests(TemporaryCase):
                     record(unsafe)
                     self.error("job_resume_ownership", jobs.record_for_resume, path, starting)
                 probe.assert_not_called()
+
+    def test_workspace_writer_checks_live_groups_and_accepts_a_verified_previous_boot(self):
+        project = self.project()
+        job_id = 'a' * 32
+        path = project.path / 'jobs' / job_id / 'job.json'
+        path.parent.mkdir()
+        current = '11111111-1111-1111-1111-111111111111'
+        previous = '22222222-2222-2222-2222-222222222222'
+        record = {'job_id':job_id, 'mode':'analyze', 'status':'running', 'pid':1080, 'process_group':1080,
+                  'launch_protocol':worker_lifecycle.PROTOCOL, 'boot_session_id':current}
+        with project.writer(), patch.object(worker_lifecycle, 'boot_session', return_value=current), \
+             patch.object(worker_lifecycle.os, 'killpg') as probe:
+            storage.write_json(path, record)
+            error = self.error('writer_conflict', jobs.verify_engine_writer_stopped, project)
+            self.assertEqual(error.partial, {'job_id':job_id})
+            self.assertTrue(error.retryable)
+            probe.assert_called_once_with(1080, 0)
+            probe.reset_mock()
+            storage.write_json(path, dict(record, mode='query'), force=True)
+            jobs.verify_engine_writer_stopped(project)
+            storage.write_json(path, dict(record, boot_session_id=previous), force=True)
+            jobs.verify_engine_writer_stopped(project)
+            self.error('job_resume_ownership', jobs.record_for_resume, path, jobs.load(path))
+            storage.write_json(path, dict(record, boot_session_id=None), force=True)
+            self.error('writer_conflict', jobs.verify_engine_writer_stopped, project)
+            probe.assert_not_called()
+            storage.write_json(path, record, force=True)
+            probe.side_effect = ProcessLookupError()
+            jobs.verify_engine_writer_stopped(project)
+            probe.assert_called_once_with(1080, 0)
+
+    def test_workspace_writer_refuses_incomplete_history(self):
+        project = self.project()
+        jobs_dir = project.path / 'jobs'
+        for job_id in ('a' * 32, 'b' * 32):
+            (jobs_dir / job_id).mkdir()
+        with project.writer(), patch.object(jobs, 'SCAN_LIMIT', 1):
+            self.error('writer_history', jobs.verify_engine_writer_stopped, project)

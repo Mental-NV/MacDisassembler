@@ -1203,6 +1203,21 @@ class CliTests(TemporaryCase):
                     self.assert_envelope(result)
                     self.assertEqual(result['status'], 'complete')
 
+    def test_fresh_writer_commands_refuse_disconnected_import_before_staging(self):
+        job_id = 'a' * 32
+        path = self.workspace.path / 'jobs' / job_id / 'job.json'
+        path.parent.mkdir()
+        storage.write_json(path, {'job_id':job_id, 'mode':'import', 'status':'running'})
+        commands = [('import', str(self.root / 'unused')), ('analyze',)]
+        with mock.patch.object(engine, 'dependencies', side_effect=AssertionError('unexpected engine preflight')):
+            for command in commands:
+                with self.subTest(command=command):
+                    args = self.args(*command, '--experimental-trusted-input')
+                    error = self.error('writer_conflict', cli.execute, args)
+                    self.assertEqual(error.partial, {'job_id':job_id})
+            self.assertEqual(cli.execute(self.args('decompile', '--name', 'unique'))['status'], 'complete')
+        self.assertEqual(list((self.workspace.path / 'inputs').iterdir()), [])
+
     def test_version_never_probes_dependencies(self):
         with mock.patch.object(engine, 'dependencies', side_effect=AssertionError('version probe')):
             code, output, stderr = self.invoke(['version', '--json'])

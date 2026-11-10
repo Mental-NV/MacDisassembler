@@ -804,6 +804,7 @@ def resume_analysis(args, project, command, record, request):
         return analysis_response(command,snapshot,receipt['job_id'],resumed_from=args.job_id,reused=True)
     if request != current:
         raise Error('job_resume_conflict','The active analysis changed since the recorded request',8)
+    jobs.verify_engine_writer_stopped(project)
     replay,deps = replay_worker_request(args,project,record)
     replay.repair_split_boundaries = recovery is not None
     artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
@@ -824,6 +825,7 @@ def resume_import(args, project, command, record, request):
     else:
         if any(item['imported'] and item['image_id'] == image['image_id'] for item in project.images()):
             raise Error('job_resume_conflict','The slice was imported by a different attempt',8)
+        jobs.verify_engine_writer_stopped(project)
         replay,deps = replay_worker_request(args,project,record)
         job_id = import_state.import_slice(project,image,original,replay,deps,resumed_from=args.job_id)
     data = {'image_id':image['image_id'],'arch':image['arch'],'job_id':job_id,
@@ -1186,8 +1188,9 @@ def execute(a):
     if a.command=='status':
         return project_status(a,p)
     if a.command in ('import','analyze'):
-        deps=engine.dependencies(a.ghidra,a.java_home,full=True)
         with p.writer():
+            jobs.verify_engine_writer_stopped(p)
+            deps=engine.dependencies(a.ghidra,a.java_home,full=True)
             if a.command=='import':
                 return import_inputs(a,p,deps)
             return analyze_image(p,p.select(a.image,a.arch),a,deps,command)

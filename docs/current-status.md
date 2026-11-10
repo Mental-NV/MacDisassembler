@@ -304,6 +304,10 @@ collections exceed documented bounds despite successful pseudocode output.
   worker was live, including through the legacy history scan. After exit
   the original job restarted, and import, analysis and fresh queries
   each verified receipt reuse.
+- [x] Fence [workspace writers after a disconnect](cli.md#project-and-job-status).
+  A live owned Ghidra analysis blocked new import, analysis and restart
+  commands. Cached export and fresh read-only decompilation still worked.
+  All three writer commands completed after the worker group exited.
 - [x] Verify [workspace manifest error handling](cli.md#envelopes-errors-and-explicit-omissions)
   and a byte-identical export from an earlier schema 1.0 workspace.
 - [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)

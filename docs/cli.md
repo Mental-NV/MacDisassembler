@@ -1089,6 +1089,22 @@ older job without a recorded request remains ineligible. The process-group
 check requires the recorded macOS boot identity and sends no signal to
 the worker.
 
+Before import, analysis or a restart of either, the CLI checks up to
+4,096 job directory entries while holding the project writer lock. A
+previous writer with a live or unconfirmed process group returns
+`writer_conflict` with the earlier job ID. An incomplete history returns
+`writer_history`. For new jobs on a local workspace, a verified change in
+macOS boot session clears a writer from the previous boot. Cached and
+fresh read-only queries use committed snapshots. [Apple boot session identifier](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sysctl.c#L2735)
+
+An installed test disconnected an owned arm64 analysis supervisor while
+its Ghidra worker was live. A new import, a new analysis and an unrelated
+analysis restart each returned `writer_conflict`. Cached export and fresh
+x86_64 decompilation completed while that group was still live. The
+committed snapshots and imported Programs matched after it exited, and
+all three writer commands then completed. The validation report SHA-256 is
+`a6f231c9b746af9ec46fa03c5d8257c66c55b510dbcae5ffda72e1ba3e502c9b`.
+
 Raw bridge JSON and job manifests/logs remain private in the workspace.
 Normalized exports sort function and unordered cross-reference records (retaining
 duplicate references), omit volatile Program-info/timing fields and

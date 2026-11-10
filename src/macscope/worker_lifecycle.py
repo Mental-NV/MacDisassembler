@@ -7,6 +7,7 @@ import sys
 
 
 PROTOCOL = "macscope-launch-gate/1"
+BOOT_SESSION_ID = re.compile(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}")
 STARTUP_EVIDENCE = "ghidra-12.2-headless-startup-log/1"
 STARTUP_PREFIX_LIMIT = 256 * 1024
 _STARTUP_LINE = re.compile(rb"(?m)^INFO  Headless startup complete \(([0-9]{1,12}) ms\) \(AnalyzeHeadless\)[ \t]*\r?\n")
@@ -54,7 +55,7 @@ def boot_session():
     except (OSError, subprocess.TimeoutExpired):
         return None
     token = probe.stdout.strip()
-    if probe.returncode == 0 and re.fullmatch(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}", token):
+    if probe.returncode == 0 and BOOT_SESSION_ID.fullmatch(token):
         return token.lower()
     return None
 
@@ -79,13 +80,19 @@ def release(fd):
     os.write(fd, _RELEASE)
 
 
-def disconnected_exit_confirmed(record):
+def disconnected_exit_confirmed(record, *, allow_reboot=False):
     """Check a gated job with no remaining supervisor lease."""
     if record.get("launch_protocol") != PROTOCOL:
         return False
     session = boot_session()
-    if session is None or session != record.get("boot_session_id"):
+    previous = record.get("boot_session_id")
+    if session is None:
         return False
+    if session != previous:
+        return (allow_reboot and isinstance(previous, str)
+                and BOOT_SESSION_ID.fullmatch(previous) is not None
+                and BOOT_SESSION_ID.fullmatch(session) is not None
+                and previous.lower() != session.lower())
     if record["status"] == "starting":
         # Without a durable running record the original supervisor could not
         # release the gate. Its closed pipe makes the waiting child exit.

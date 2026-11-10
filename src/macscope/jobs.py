@@ -105,7 +105,7 @@ def token_for(record):
     return token if isinstance(token, str) and JOB_ID.fullmatch(token) else None
 
 
-def record_for_resume(path, record):
+def record_for_resume(path, record, *, allow_reboot=False):
     if leased(path):
         raise Error("job_resume_ownership", "Cannot verify that the previous worker stopped", 8,
                     partial={"job_id": record["job_id"]})
@@ -113,10 +113,44 @@ def record_for_resume(path, record):
     # caller first read "starting". Read again once its lease is gone.
     if record["status"] in ACTIVE:
         record = load(path)
-        if record["status"] in ACTIVE and not worker_lifecycle.disconnected_exit_confirmed(record):
+        if record["status"] in ACTIVE and not worker_lifecycle.disconnected_exit_confirmed(record, allow_reboot=allow_reboot):
             raise Error("job_resume_ownership", "Cannot verify that the previous worker stopped", 8,
                         partial={"job_id": record["job_id"]})
     return record
+
+
+def ownership_history(project, error_code):
+    with os.scandir(project.path / "jobs") as entries:
+        for index, entry in enumerate(entries):
+            if index == SCAN_LIMIT:
+                raise Error(error_code, "Worker ownership check exceeded its job history limit", 8)
+            if not JOB_ID.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):
+                continue
+            candidate = project.path / "jobs" / entry.name / "job.json"
+            try:
+                try:
+                    candidate.lstat()
+                except FileNotFoundError:
+                    continue  # A job without a manifest has not reached its launch gate.
+                record = load(candidate)
+            except (Error, OSError) as error:
+                raise Error(error_code, "Cannot verify worker ownership from the job history", 8,
+                            partial={"job_id":entry.name}) from error
+            yield candidate, record
+
+
+def verify_engine_writer_stopped(project):
+    """Check previous engine writers while the caller holds the project writer lock."""
+    for path, record in ownership_history(project, "writer_history"):
+        if record["status"] not in ACTIVE or record.get("mode") == "query":
+            continue
+        try:
+            record_for_resume(path, record, allow_reboot=True)
+        except Error as error:
+            if error.code != "job_resume_ownership":
+                raise
+            raise Error("writer_conflict", "An earlier headless project writer may still be running", 8,
+                        retryable=True, partial=error.partial) from error
 
 
 def record_restart_attempt(path, attempt):
@@ -166,24 +200,10 @@ def verify_restart_stopped(project, path, original):
 
     # Earlier launches recorded their parent only on the attempt itself.
     descendants = {}
-    with os.scandir(project.path / "jobs") as entries:
-        for index, entry in enumerate(entries):
-            if index == SCAN_LIMIT:
-                raise Error("job_resume_ownership", "Legacy restart scan exceeded its job limit", 8)
-            if not JOB_ID.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):
-                continue
-            candidate = project.path / "jobs" / entry.name / "job.json"
-            try:
-                try:
-                    candidate.lstat()
-                except FileNotFoundError:
-                    continue
-                record = load(candidate)
-            except (Error, OSError) as error:
-                raise Error("job_resume_ownership", "Cannot verify legacy restart history", 8) from error
-            if "resumed_from" in record:
-                state = {key: record[key] for key in ("job_id", "status")}
-                descendants.setdefault(record["resumed_from"], []).append((candidate, state))
+    for candidate, record in ownership_history(project, "job_resume_ownership"):
+        if "resumed_from" in record:
+            state = {key: record[key] for key in ("job_id", "status")}
+            descendants.setdefault(record["resumed_from"], []).append((candidate, state))
     pending = [root]
     while pending:
         for candidate, record in descendants.get(pending.pop(), ()):
