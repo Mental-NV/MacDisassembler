@@ -7,6 +7,7 @@ from .macho_view import MappedImage
 MAX_CLASSES = 2048
 MAX_METHODS = 10000
 MAX_PROPERTIES = 10000
+MAX_IVARS = 10000
 MAX_SELECTORS = 10000
 CLASS_LISTS = {"__objc_classlist", "__objc_nlclslist"}
 CATEGORY_LISTS = {"__objc_catlist", "__objc_nlcatlist"}
@@ -256,28 +257,32 @@ class ObjCImage:
             except ValueError:
                 self.gaps.add("invalid_property_protocol")
 
+    def declaration_sites(self, site, stride, kind):
+        try:
+            address = self.target(site)
+            if not address:
+                return range(0)
+            if address & 7:
+                self.gaps.add(f"unsupported_{kind}_list_pointer")
+                return range(0)
+            entry_size,count = self.view.unpack("<II",address)
+            if entry_size != stride:
+                self.gaps.add(f"unsupported_{kind}_list_format")
+                return range(0)
+            first, end = address+8, address+8+count*stride
+            self.view.mapping(first,end-first)
+            return range(first,end,stride)
+        except ValueError:
+            self.gaps.add(f"invalid_{kind}_list")
+            return range(0)
+
     def property_rows(self, classes):
         rows = []
         remaining = MAX_PROPERTIES
         for site, owner, kind in self.property_lists(classes):
-            try:
-                address = self.target(site)
-                if not address:
-                    continue
-                if address & 7:
-                    self.gaps.add("unsupported_property_list_pointer")
-                    continue
-                stride,count = self.view.unpack("<II",address)
-                if stride != 16:
-                    self.gaps.add("unsupported_property_list_format")
-                    continue
-                self.view.mapping(address+8,count*stride)
-            except ValueError:
-                self.gaps.add("invalid_property_list")
-                continue
-            visited = min(count,remaining)
-            for index in range(visited):
-                record = address+8+index*stride
+            records = self.declaration_sites(site,16,"property")
+            visited = records[:remaining]
+            for record in visited:
                 try:
                     name, attributes = self.target(record), self.target(record+8)
                     if not name or not attributes:
@@ -287,9 +292,62 @@ class ObjCImage:
                                      attributes_va=hex(attributes),origin="objc_property_list"))
                 except ValueError:
                     self.gaps.add("invalid_property_record")
-            remaining -= visited
-            if visited < count:
+            remaining -= len(visited)
+            if len(visited) < len(records):
                 self.gaps.add("property_limit")
+                break
+        return rows
+
+    def ivar_offset(self, site, *, anonymous):
+        binding = self.pointers.get(site,{})
+        result = {"declared_offset_bytes":None,"offset_storage_va":None,"offset_status":"unavailable"}
+        if binding.get("kind") == "bind":
+            self.gaps.add("ivar_offset_unavailable")
+            return dict(result,offset_status="external_bind",offset_symbol=binding["symbol"],
+                        offset_library=binding["library"])
+        try:
+            address = self.target(site)
+            if not address:
+                if anonymous:
+                    return dict(result,offset_status="anonymous_bitfield")
+                raise ValueError("Ivar offset storage is missing")
+            result["offset_storage_va"] = hex(address)
+            value, = self.view.unpack("<i",address)
+            if value < 0:
+                raise ValueError("Negative initial ivar offset")
+            return dict(result,declared_offset_bytes=value,offset_status="recorded")
+        except ValueError:
+            self.gaps.add("ivar_offset_unavailable")
+            return result
+
+    def ivar_rows(self, classes):
+        rows = []
+        remaining = MAX_IVARS
+        for owner in classes:
+            records = self.declaration_sites(int(owner["metadata_va"],16)+48,32,"ivar")
+            visited = records[:remaining]
+            for record in visited:
+                try:
+                    name, encoding = self.target(record+8), self.target(record+16)
+                    if not encoding:
+                        raise ValueError("Ivar type encoding is missing")
+                    type_encoding = self.view.string(encoding)
+                    anonymous = not name and type_encoding.startswith("b") and type_encoding[1:].isdecimal()
+                    if not name and not anonymous:
+                        raise ValueError("Ivar name is missing")
+                    alignment,size = self.view.unpack("<II",record+24)
+                    if alignment > 31 and alignment != 0xffffffff:
+                        raise ValueError("Invalid ivar alignment")
+                    rows.append({"name":self.view.string(name) if name else None, "type_encoding":type_encoding,
+                                 "class_name":owner["name"], "class_va":owner["class_va"], "address_space":"ram",
+                                 "record_va":hex(record), "name_va":hex(name) if name else None, "type_encoding_va":hex(encoding),
+                                 "alignment_raw":hex(alignment), "alignment_bytes":8 if alignment==0xffffffff else 1<<alignment,
+                                 "size_bytes":size, "origin":"objc_ivar_list", **self.ivar_offset(record,anonymous=anonymous)})
+                except ValueError:
+                    self.gaps.add("invalid_ivar_record")
+            remaining -= len(visited)
+            if len(visited) < len(records):
+                self.gaps.add("ivar_limit")
                 break
         return rows
 
@@ -312,7 +370,8 @@ class ObjCImage:
 def inventory(data, image, scope):
     parsed = thin(data)
     names = {s["name"] for s in parsed["sections"]}
-    lists = CLASS_LISTS|CATEGORY_LISTS|(PROTOCOL_LISTS if scope == "properties" else {"__objc_selrefs"})
+    lists = CLASS_LISTS if scope == "ivars" else (
+        CLASS_LISTS|CATEGORY_LISTS|(PROTOCOL_LISTS if scope == "properties" else {"__objc_selrefs"}))
     if not names&lists:
         return [], []
     try:
@@ -324,6 +383,9 @@ def inventory(data, image, scope):
         return classes,sorted(objc.gaps)
     if scope=="properties":
         rows = objc.property_rows(classes)
+        return rows,sorted(objc.gaps)
+    if scope=="ivars":
+        rows = objc.ivar_rows(classes)
         return rows,sorted(objc.gaps)
     methods = objc.method_rows(classes)
     return (methods if scope=="methods" else objc.selectors(methods)),sorted(objc.gaps)

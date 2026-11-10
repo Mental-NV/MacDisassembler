@@ -114,3 +114,31 @@ class ObjCMetadataTests(unittest.TestCase):
             rows,gaps = objc.inventory(property_fixture(bad_property=True),{"offset":"0x0"},"properties")
         self.assertFalse(rows)
         self.assertEqual(gaps,["invalid_property_record","property_limit"])
+
+    def test_ivar_offset_width_alignment_and_unavailable_storage(self):
+        data = bytearray(property_fixture())
+        struct.pack_into("<Q",data,0x3B0,BASE+0x600)
+        struct.pack_into("<II",data,0x600,32,3)
+        struct.pack_into("<3Q2I",data,0x608,BASE+0x680,BASE+0x790,BASE+0x7A0,0xffffffff,8)
+        struct.pack_into("<3Q2I",data,0x628,BASE+0x900,BASE+0x7B0,BASE+0x7A0,2,4)
+        struct.pack_into("<3Q2I",data,0x648,0,0,BASE+0x7C0,2,4)
+        struct.pack_into("<II",data,0x680,12,0xdeadbeef)
+        data[0x790:0x796] = b"first\0"
+        data[0x7A0:0x7A2] = b"q\0"
+        data[0x7B0:0x7B7] = b"second\0"
+        data[0x7C0:0x7C3] = b"b5\0"
+        rows,gaps = objc.inventory(bytes(data),{"offset":"0x0"},"ivars")
+        self.assertEqual(gaps,["ivar_offset_unavailable"])
+        first, second, anonymous = rows
+        self.assertEqual((first["name"],first["class_name"],first["type_encoding"]),("first","Owned","q"))
+        self.assertEqual((first["declared_offset_bytes"],first["alignment_bytes"],first["size_bytes"]),(12,8,8))
+        self.assertEqual(first["offset_status"],"recorded")
+        self.assertEqual(second["offset_storage_va"],hex(BASE+0x900))
+        self.assertIsNone(second["declared_offset_bytes"])
+        self.assertEqual(second["offset_status"],"unavailable")
+        self.assertIsNone(anonymous["name"])
+        self.assertIsNone(anonymous["declared_offset_bytes"])
+        self.assertEqual(anonymous["offset_status"],"anonymous_bitfield")
+        with patch.object(objc,"MAX_IVARS",1):
+            rows,gaps = objc.inventory(bytes(data),{"offset":"0x0"},"ivars")
+        self.assertEqual((rows,gaps),([first],["ivar_limit"]))

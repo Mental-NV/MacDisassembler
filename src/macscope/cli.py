@@ -125,7 +125,7 @@ def parser():
     s.add_argument('--kind',choices=('all','bind','rebase','non-weak-definition'),default='all',
                    help='Use non-weak-definition for declarations in the legacy weak-bind stream')
     s=sub.add_parser('objc');ss=s.add_subparsers(dest='action',required=True)
-    for c in ('classes','methods','selectors','properties'):
+    for c in ('classes','methods','selectors','properties','ivars'):
         s=ss.add_parser(c);project(s);common(s);pagination(s);s.add_argument('--name-contains')
     s=sub.add_parser('swift');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('symbols');project(s);common(s);pagination(s);s.add_argument('--name-contains')
@@ -1293,8 +1293,8 @@ def execute_command(a, address_selection=None):
     if a.command=='objc':
         records,gaps=objc.inventory(metadata.verified_slice(p,image),image,a.action)
         records=[dict(row,image_id=image['image_id'],arch=image['arch'])
-                 for row in records if a.name_contains is None or a.name_contains in row['name']]
-        records.sort(key=lambda row:(row['name'],row.get('class_name') or '',
+                 for row in records if a.name_contains is None or a.name_contains in (row['name'] or '')]
+        records.sort(key=lambda row:(row['name'] or '',row.get('class_name') or '',
                                     int(row.get('record_va',row.get('class_va')),16)))
         rows,cov=page(records,a,image['image_id'],p.project_id,
                       {'action':a.action,'name_contains':a.name_contains},order='objc-name/address/v1')

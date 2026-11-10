@@ -834,6 +834,25 @@ Ghidra analysis and reproduced the property results from before analysis.
 The validation report SHA-256 is
 `3f522ea08b009a0cc7fd420cd0ae6162ee183ce8533525b90c0bedb2773bf0b0`.
 
+`objc ivars` reports instance variables by declaring class. Each record
+includes the raw type encoding, declared size and alignment, and the initial
+byte offset when its storage is file-backed. Offsets describe the linked
+image. The Objective-C runtime can adjust them when laying out a class.
+Unresolved storage retains the declaration and reports partial coverage.
+An anonymous bitfield record can have a null name and offset. The scan
+examines at most 10,000 ivar records. [Apple Objective-C ivar layout](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.h#L1113) · [Apple Objective-C runtime layout adjustments](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.mm#L2568)
+
+```sh
+macscope objc ivars --project workspaces/calculator --arch x86_64 --json
+```
+
+The installed CLI matched 40 declarations and 120 pointer sites against
+Apple tools and file bytes on owned arm64 and x86_64 slices with chained
+and legacy fixups. Tests included a subclass, arrays, structures, object
+pointers and named bitfields. All four slices completed full Ghidra
+analysis and reproduced their earlier ivar queries. The validation report
+SHA-256 is `abceca55221887e1e5c1ff81d6cf635fc6b3c0c23a5decfa863ae7ea1810c6a3`.
+
 `swift symbols` lists Swift mangling candidates from the Mach-O symbol table,
 including raw names, definition state, available VAs and detected Swift
 sections. The command works before analysis. Use `--demangle

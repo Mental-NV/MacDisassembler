@@ -190,6 +190,11 @@ collections exceed documented bounds despite successful pseudocode output.
   matched 36 declarations and 72 pointer sites on owned arm64 and x86_64
   slices with chained and legacy fixups. Queries reproduced after full
   Ghidra analysis of all four slices.
+- [x] Verify [Objective-C instance variables](cli.md#objective-c-and-swift-metadata).
+  Apple tooling and file bytes matched 40 declarations and 120 pointer
+  sites on owned arm64 and x86_64 slices with chained and legacy fixups.
+  Initial offsets, sizes, alignments and type encodings reproduced after
+  full Ghidra analysis of all four slices.
 - [x] Expose Swift symbol-table names and optional sandboxed demangling
   with tool provenance. Broader Swift metadata decoding remains open.
 - [x] Run source-aware recovered-C calibration for the two scalar comparison
