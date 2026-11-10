@@ -1,19 +1,69 @@
-"""Literal search over a committed analysis snapshot."""
+"""Literal and bounded regex search over a committed analysis snapshot."""
+import json
 import re
+import subprocess
+import sys
 
 from .errors import Error
 
 
 SCOPES = ("names", "strings", "pseudocode", "comments")
+REGEX_TIMEOUT_SECONDS = 3
+MAX_REGEX_BYTES = 64 * 1024 * 1024
+MAX_REGEX_RECORDS = 100000
+CONTEXT_MARGIN = 60
+MAX_CONTEXT = 376
+
+# JSON lines on stdin preserve text boundaries. Return only character offsets.
+REGEX_WORKER = """
+import json, re, sys
+lines = sys.stdin.buffer
+try:
+    term = re.compile(json.loads(next(lines)), re.IGNORECASE)
+except (re.error, OverflowError, RecursionError) as error:
+    json.dump({"error": str(error)}, sys.stdout)
+    raise SystemExit
+matches = []
+for index, line in enumerate(lines):
+    match = term.search(json.loads(line))
+    if match is not None:
+        matches.append((index, *match.span()))
+json.dump(matches, sys.stdout)
+"""
 
 
-def pattern(query):
+def pattern(query, *, regex=False):
     if not 1 <= len(query) <= 256 or not query.strip() or not query.isprintable():
         raise Error("search_query", "Search requires 1..256 printable characters", 2)
-    return re.compile(re.escape(query), re.IGNORECASE)
+    return query if regex else re.compile(re.escape(query), re.IGNORECASE)
 
 
-def snapshot_matches(snapshot, term, scope, *, comments=()):
+def regex_matches(expression, values):
+    payload = bytearray(json.dumps(expression).encode("ascii") + b"\n")
+    for value in values:
+        if len(value) >= MAX_REGEX_BYTES - len(payload):
+            raise Error("search_regex_limit", "Regex search exceeds its text budget; narrow --in", 7)
+        line = json.dumps(value).encode("ascii")
+        if len(payload) + len(line) + 1 > MAX_REGEX_BYTES:
+            raise Error("search_regex_limit", "Regex search exceeds its text budget; narrow --in", 7)
+        payload.extend(line)
+        payload.append(10)
+    try:
+        worker = subprocess.run([sys.executable, "-I", "-S", "-c", REGEX_WORKER], input=payload,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd="/", env={},
+                                timeout=REGEX_TIMEOUT_SECONDS, check=True)
+        result = json.loads(worker.stdout)
+    except subprocess.TimeoutExpired as error:
+        raise Error("search_regex_timeout", f"Regex search exceeded its {REGEX_TIMEOUT_SECONDS}-second matching deadline",
+                    7) from error
+    except (OSError, subprocess.CalledProcessError, ValueError) as error:
+        raise Error("search_regex_worker", "Could not complete the regex search worker", 10) from error
+    if isinstance(result, dict):
+        raise Error("search_regex", f"Invalid regular expression: {result['error']}", 2)
+    return result
+
+
+def snapshot_matches(snapshot, term, scope, *, comments=(), regex=False):
     fields = SCOPES if scope == "all" else (scope,)
     image = snapshot["image"]
     engine = snapshot["engine"]
@@ -21,16 +71,12 @@ def snapshot_matches(snapshot, term, scope, *, comments=()):
     engine_coverage = engine.get("coverage", {})
     hits = []
     gaps = []
+    candidates = []
 
-    def add(kind, value, address, function_id=None, *, source, namespace=None, origin="ghidra"):
-        if not isinstance(value, str):
-            return
-        match = term.search(value)
-        if match is None:
-            return
+    def emit(kind, value, address, function_id, source, namespace, origin, *, span):
         va = address if address and re.fullmatch(r"0x[0-9a-fA-F]{1,16}", address) else None
-        start = max(0, match.start() - 60)
-        end = min(len(value), match.end() + 60)
+        start = max(0, span[0] - CONTEXT_MARGIN)
+        end = min(len(value), span[1] + CONTEXT_MARGIN, start + MAX_CONTEXT)
         hits.append({
             "kind": kind, "source": source, "namespace": namespace, "origin": origin,
             "function_id": function_id, "image_id": image["image_id"], "arch": image["arch"],
@@ -38,6 +84,17 @@ def snapshot_matches(snapshot, term, scope, *, comments=()):
             "context": value[start:end], "context_start": start,
             "context_truncated": start > 0 or end < len(value),
         })
+
+    def add(kind, value, address, function_id=None, *, source, namespace=None, origin="ghidra"):
+        if not isinstance(value, str):
+            return
+        record = (kind, value, address, function_id, source, namespace, origin)
+        if regex:
+            if len(candidates) == MAX_REGEX_RECORDS:
+                raise Error("search_regex_limit", "Regex search exceeds its record budget; narrow --in", 7)
+            candidates.append(record)
+        elif match := term.search(value):
+            emit(*record, span=match.span())
 
     entries = {f["engine_entry"]: f["function_id"] for f in functions}
     if "names" in fields:
@@ -89,6 +146,10 @@ def snapshot_matches(snapshot, term, scope, *, comments=()):
             gaps.append("engine_output_limit")
     if engine.get("strings_or_names_truncated") and ("names" in fields or "strings" in fields):
         gaps.append("engine_text_limit")
+
+    if regex:
+        for index, start, end in regex_matches(term, (record[1] for record in candidates)):
+            emit(*candidates[index], span=(start, end))
 
     hits.sort(key=lambda hit: (
         hit["kind"], hit["va"] is None, int(hit["va"], 16) if hit["va"] else 0,

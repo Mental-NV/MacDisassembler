@@ -249,6 +249,26 @@ entry. Use `--limit` and `--cursor` to page through the hits. A partial source
 facet yields partial coverage even when there are no matches. Search uses
 the saved evidence and requires no engine startup.
 
+Add `--regex` to use a Python regular expression. Matching is case-insensitive
+by default and searches each source record separately. A separate process
+compiles the expression and scans up to 100,000 records and 64 MiB of encoded
+text under a three-second deadline. Invalid expressions exit 2. Exceeding the
+text, record or time budget exits 7. A hit includes at most 376 characters of
+context, and its cursor applies only to the same search mode.
+
+```sh
+macscope search '^_?calc_.*(add|divide)' --regex --in names \
+  --project workspaces/calculator --arch arm64 --json
+```
+
+The installed CLI found nine expected records per slice across the four
+search scopes on an owned arm64 and x86_64 fixture analyzed with full
+Ghidra. A slow expression returned a typed timeout and preserved the
+existing output. Twelve archived literal search pages matched the previous
+wheel byte for byte, including continuation with its cursors. The validation
+report SHA-256 is
+`1017368d5a1bdbcb15636af8f399c5dc421864ba6b8cef5f04a910bc3738a5cd`.
+
 `xrefs --to 0xVA` and `xrefs --from 0xVA` select a single unslid address.
 They read the committed image-wide reference capture, which includes data
 and Ghidra external-entry markers alongside code references. Each row keeps

@@ -104,6 +104,10 @@ collections exceed documented bounds despite successful pseudocode output.
   [benchmark](benchmark.md) for scope and outstanding reference-host measurements.
 - [x] Search committed function names, symbols, strings and pseudocode
   with resumable pages and scoped coverage.
+- [x] Verify [bounded opt-in regex search](cli.md#implemented-commands) in
+  all four scopes on owned arm64 and x86_64 full-Ghidra snapshots.
+  A slow expression timed out and preserved the output. Archived literal
+  pages and cursors matched the previous wheel.
 - [x] Traverse saved call references with depth/edge bounds and explicit
   unresolved targets.
 - [x] Query [references at arbitrary addresses](cli.md#implemented-commands)

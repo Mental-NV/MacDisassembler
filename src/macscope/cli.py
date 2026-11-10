@@ -181,6 +181,7 @@ def parser():
             s.add_argument('--cursor',help='Continue an address query')
     s=sub.add_parser('search');project(s);common(s);pagination(s)
     s.add_argument('query')
+    s.add_argument('--regex',action='store_true',help='Use a case-insensitive regular expression with a matching deadline')
     s.add_argument('--in',dest='search_scope',choices=(*search.SCOPES,'all'),default='all')
     s=sub.add_parser('calls');project(s);common(s);selector(s)
     s.add_argument('--direction',choices=('callers','callees','both'),default='both')
@@ -1149,7 +1150,7 @@ def execute_command(a, address_selection=None):
         raise Error('switch_table_scope','Switch-table recovery requires --fresh and its own query',3)
     if fresh and a.all:
         raise Error('fresh_selection','--fresh requires one function selector',2)
-    term = search.pattern(a.query) if a.command == 'search' else None
+    term = search.pattern(a.query,regex=a.regex) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
         return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':engine.BRIDGE_VERSION,'backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
@@ -1314,8 +1315,9 @@ def execute_command(a, address_selection=None):
         return envelope(command,rows,aid,cov=cov)
     if a.command == 'search':
         view = dict(snapshot,functions=functions)
-        hits, gaps = search.snapshot_matches(view,term,a.search_scope,comments=annotations_rows)
+        hits, gaps = search.snapshot_matches(view,term,a.search_scope,comments=annotations_rows,regex=a.regex)
         filters={'query':a.query,'scope':a.search_scope}
+        if a.regex:filters['match']='regex'
         if revision and a.search_scope in ('names','comments','all'):filters['annotation_revision']=revision
         rows, cov = page(hits,a,aid,p.project_id,filters,order='search-kind/address/v1')
         cov['scope'] = 'committed image search: ' + a.search_scope

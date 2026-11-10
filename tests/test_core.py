@@ -28,7 +28,7 @@ import zipfile
 # Direct invocation and unittest discovery both work without installing a wheel.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from macscope import SCHEMA_VERSION
-from macscope import cli, doctor_probe, engine, engine_checks, jobs, macho, schema, storage
+from macscope import cli, doctor_probe, engine, engine_checks, jobs, macho, schema, search, storage
 from macscope.errors import Error
 
 
@@ -881,6 +881,41 @@ class CliTests(TemporaryCase):
     def test_search_rejects_empty_or_oversized_query(self):
         for value in ('', ' ', 'x' * 257, '\n'):
             self.error('search_query', cli.execute, self.args('search', value))
+
+    def test_regex_search_uses_the_saved_scope_and_binds_the_cursor_to_regex_mode(self):
+        expression = r'^DUPLI(CATE|CITY)$'
+        scope = ('--in', 'names', '--limit', '1')
+        literal = cli.execute(self.args('search', expression, *scope))
+        self.assertEqual(literal['data'], [])
+        first = cli.execute(self.args('search', expression, '--regex', *scope))
+        self.assertEqual([hit['function_id'] for hit in first['data']], ['function-0'])
+        cursor = first['coverage']['next_cursor']
+        second = cli.execute(self.args('search', expression, '--regex', *scope, '--cursor', cursor))
+        self.assertEqual([hit['function_id'] for hit in second['data']], ['function-1'])
+        self.error('stale_cursor', cli.execute, self.args('search', expression, *scope, '--cursor', cursor))
+        self.error('search_regex', cli.execute, self.args('search', '[', '--regex'))
+
+    def test_regex_search_bounds_context_text_and_matching_time(self):
+        note = 'a' * 1024 + '!'
+        cli.execute(self.args('comment', 'set', note, '--name', 'unique'))
+        scope = ('--regex', '--in', 'comments')
+        result = cli.execute(self.args('search', r'^a+!$', *scope))
+        hit, = result['data']
+        self.assertEqual(hit['context'], 'a' * search.MAX_CONTEXT)
+        self.assertTrue(hit['context_truncated'])
+        self.assertEqual(hit['function_id'], 'function-2')
+        with mock.patch.object(search, 'MAX_REGEX_BYTES', 128):
+            error = self.error('search_regex_limit', cli.execute, self.args('search', 'a', *scope))
+        self.assertEqual(error.exit_code, 7)
+        with mock.patch.object(search, 'MAX_REGEX_RECORDS', 1):
+            error = self.error('search_regex_limit', cli.execute,
+                               self.args('search', 'unique', '--regex', '--in', 'names'))
+        self.assertEqual(error.exit_code, 7)
+        with mock.patch.object(search, 'REGEX_TIMEOUT_SECONDS', 0.5):
+            error = self.error('search_regex_timeout', cli.execute, self.args('search', r'^(a+)+$', *scope))
+        self.assertEqual(error.exit_code, 7)
+        repeat = cli.execute(self.args('search', 'a!', '--in', 'comments'))
+        self.assertEqual(repeat['data'][0]['function_id'], 'function-2')
 
     def call_snapshot(self):
         snapshot = copy.deepcopy(self.snapshot)
