@@ -517,6 +517,14 @@ collections exceed documented bounds despite successful pseudocode output.
   before opening stored work. Eight corrupt-workspace queries returned
   typed errors. Five archived exports matched, and both owned architectures
   completed full headless analysis and fresh decompilation.
+- [x] Verify function identity at snapshot publication and reopening.
+  Two full-headless owned Calendar analyses reached normalization with an
+  injected duplicate entry or invalid instruction bytes. Each failed
+  with a typed job record and preserved the previous export. A clean
+  retry reproduced its analysis and replayed the receipt. Four rehashed
+  snapshot controls failed on reopen. All 46 checked archived snapshots
+  passed the identity checks, and five arm64 and x86_64 images reproduced
+  their cached exports and function lists.
 - [x] Verify [project status](cli.md#project-and-job-status) for current,
   partial, stale and unavailable analyses. Owned arm64 and x86_64 jobs
   verified function counts and recorded versions. Archived timeouts and a

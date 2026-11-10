@@ -417,11 +417,25 @@ class ProfileRunnerTests(unittest.TestCase):
                        (previous, image["image_id"], json.dumps(record)))
         wrong = raw_result("baseline")
         job = {"job_id": "d" * 32, "limits": {}, "analysis_profile": engine.analysis_profile("parameter-inference")}
+        job_path = self.project.path / "jobs" / job["job_id"] / "job.json"
+        job_path.parent.mkdir()
         with mock.patch.object(engine, "dependencies", return_value=self.deps), \
              mock.patch.object(engine, "run", return_value=(wrong, job)):
             with self.assertRaises(Error) as caught:
                 cli.execute(self.args("parameter-inference"))
         self.assertEqual(caught.exception.code, "profile_mismatch")
+        raw = raw_result("parameter-inference")
+        function = raw["functions"][0]
+        for functions, code in (
+                ([function, dict(function, entry_va="0x0100000000")], "snapshot_function_identity"),
+                ([dict(function, instructions=[dict(function["instructions"][0], bytes="invalid")])], "snapshot_format")):
+            with self.subTest(code=code), mock.patch.object(engine, "dependencies", return_value=self.deps), \
+                 mock.patch.object(engine, "run", return_value=(dict(raw, functions=functions), job)):
+                with self.assertRaises(Error) as caught:
+                    cli.execute(self.args("parameter-inference"))
+                self.assertEqual(caught.exception.code, code)
+                record = json.loads(job_path.read_bytes())
+                self.assertEqual((record["status"], record["error"]["code"]), ("failed", code))
         with mock.patch.object(engine, "dependencies", return_value=self.deps), \
              mock.patch.object(engine, "run", return_value=(wrong, job)), \
              mock.patch.object(cli, "normalize", return_value={"analysis_id": "too-large"}), \

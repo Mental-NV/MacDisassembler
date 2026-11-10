@@ -27,6 +27,7 @@ class QueryResumeTests(TemporaryCase):
         self.entry = "0x100000000"
         self.function = {
             "function_id": self.function_id, "entry_va": self.entry, "engine_entry": self.entry,
+            "image_id": self.image_id, "analysis_id": self.aid, "arch": self.image["arch"],
             "names": [{"origin": "ghidra", "name": "owned"}], "is_external": False, "is_thunk": False,
         }
         snapshot = {"analysis_id": self.aid, "image": self.image, "functions": [self.function], "engine": {},

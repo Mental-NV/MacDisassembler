@@ -394,9 +394,21 @@ class ProjectTests(TemporaryCase):
         project = self.project()
         snapshot, record = synthetic_snapshot(project)
         target = project.path / 'snapshots' / (snapshot['analysis_id'] + '.json')
+        first, second, _ = snapshot['functions']
+        wrong_functions = (
+            [first, first],
+            [first, dict(second, function_id=first['function_id'])],
+            [first, dict(second, entry_va='0x0100000000', engine_entry='0x0100000000')],
+            [dict(first, analysis_id='e' * 64)],
+            [dict(first, image_id='e' * 64)],
+            [dict(first, arch='x86_64')],
+            [dict(first, engine_entry=second['engine_entry'])],
+        )
         for changed, code in ((dict(snapshot, analysis_id='e' * 64), 'snapshot_identity'),
                               (dict(snapshot, image=dict(snapshot['image'], arch='x86_64')), 'snapshot_identity'),
-                              (dict(snapshot, functions=[None]), 'snapshot_format'), ([], 'snapshot_format')):
+                              (dict(snapshot, functions=[None]), 'snapshot_format'), ([], 'snapshot_format'),
+                              *((dict(snapshot, functions=functions), 'snapshot_function_identity')
+                                for functions in wrong_functions)):
             with self.subTest(code=code, value=type(changed)):
                 payload = storage.canonical(changed) + b'\n'
                 storage.atomic(target, payload, force=True, mode=0o400)

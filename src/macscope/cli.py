@@ -16,7 +16,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
-                      canonical, canonical_chunks, identity, is_digest, write_json)
+                      canonical, canonical_chunks, identity, is_digest, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
@@ -382,6 +382,7 @@ def normalize(raw, image, deps, manifest):
             })
         validate_function(f)
         functions.append(f)
+    validate_snapshot_functions(functions,image,aid)
     entries = {f['engine_entry']:f['function_id'] for f in functions}
     for f in functions:
         if target := f.get('thunk_target'):
@@ -798,7 +799,15 @@ def analyze_image(project, image, args, deps, command, *, resumed_from=None, man
 
 
 def publish_analysis(project, image, deps, command, raw, job, resumed_from):
-    normalized=normalize(raw,image,deps,job)
+    try:
+        normalized=normalize(raw,image,deps,job)
+    except (Error, AttributeError, KeyError, TypeError, ValueError) as error:
+        failure = error if isinstance(error,Error) else Error('snapshot_format','Worker evidence could not be normalized')
+        job.update(status='failed',error={'code':failure.code,'message':str(failure)})
+        write_json(project.path/'jobs'/job['job_id']/'job.json',job,force=True)
+        if failure is error:
+            raise
+        raise failure from error
     aid=normalized['analysis_id']
     out=project.path/'snapshots'/(aid+'.json')
     payload=canonical(normalized)+b'\n'

@@ -15,6 +15,7 @@ from .macho import checked_path, open_directory, read_regular
 
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
 SHA256 = re.compile(r'[0-9a-f]{64}')
+UNSLID_VA = re.compile(r'0x[0-9a-fA-F]{1,16}')
 WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
 WORKSPACE_RESERVED = frozenset((*WORKSPACE_DIRECTORIES, 'project.json', 'writer.lock',
                                 'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm'))
@@ -38,6 +39,30 @@ def identity(value):
 
 def is_digest(value):
     return isinstance(value, str) and SHA256.fullmatch(value) is not None
+
+
+def validate_snapshot_functions(functions, image, analysis_id):
+    ids, entries = set(), set()
+    for function in functions:
+        fid = function.get('function_id')
+        entry = function.get('entry_va')
+        engine_entry = function.get('engine_entry')
+        if (not isinstance(fid, str) or not fid or 'entry_va' not in function
+                or not isinstance(engine_entry, str) or not engine_entry
+                or function.get('analysis_id') != analysis_id
+                or function.get('image_id') != image['image_id'] or function.get('arch') != image['arch']):
+            raise Error('snapshot_function_identity', 'Function identity does not match its saved analysis and image')
+        if entry is None and not engine_entry.startswith('0x'):
+            key = ('engine', engine_entry)
+        elif (isinstance(entry, str) and UNSLID_VA.fullmatch(entry) and UNSLID_VA.fullmatch(engine_entry)
+                and int(entry, 16) == int(engine_entry, 16)):
+            key = ('ram', int(entry, 16))
+        else:
+            raise Error('snapshot_function_identity', 'Function entry disagrees with its recorded engine address')
+        if fid in ids or key in entries:
+            raise Error('snapshot_function_identity', 'Analysis contains duplicate function IDs or entry addresses')
+        ids.add(fid)
+        entries.add(key)
 
 
 def strict_json(payload):
@@ -292,4 +317,5 @@ class Project:
                 or any(stored_image.get(key) != image.get(key)
                        for key in ('image_id', 'arch', 'sha256', 'artifact_sha256'))):
             raise Error('snapshot_identity', 'Saved snapshot belongs to a different analysis or image')
+        validate_snapshot_functions(snapshot['functions'], image, aid)
         return snapshot, record

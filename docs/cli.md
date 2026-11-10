@@ -2040,6 +2040,13 @@ identity. Invalid receipts, malformed snapshots and identity mismatches
 return `snapshot_record`, `snapshot_format` and `snapshot_identity`
 respectively, all with exit 5.
 
+Publication and reopening both check that each function row belongs to
+the selected image, architecture and analysis. Function IDs and entry
+addresses must be unique. Different hexadecimal spellings of one RAM
+address count as the same entry. A conflicting row returns
+`snapshot_function_identity`. Evidence that fails normalization records
+the analysis job as failed and preserves the previous active snapshot.
+
 The installed CLI rejected eight corrupt-workspace queries, including a
 path that led outside the project and a snapshot from another slice with
 a valid recorded digest. The test preserved the selected workspaces and
