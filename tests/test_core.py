@@ -985,6 +985,28 @@ class CliTests(TemporaryCase):
         self.assertIsNone(edge['caller_function_id'])
         self.assertEqual(edge['resolution'], 'unresolved_caller')
 
+    def test_calls_uses_recovered_references_and_keeps_computed_targets_unresolved(self):
+        snapshot = self.call_snapshot()
+        first, second, third = snapshot['functions']
+        first.update(xrefs_from_truncated=True, coverage={'body_ranges': {'status': 'complete', 'emitted': 1}})
+        added = {'from': '0x100000002', 'to': third['entry_va'], 'type': 'UNCONDITIONAL_CALL'}
+        hint = {'from': '0x100000003', 'to': third['entry_va'], 'type': 'UNCONDITIONAL_CALL'}
+        first['instructions'].append({'addr': added['from'], 'flow': 'UNCONDITIONAL_CALL'})
+        raw = snapshot['engine']
+        raw['address_references'] = [*first['xrefs_from_sample'], added, hint]
+        raw['computed_flow_sites'] = [{'addr': hint['from'], 'flow': 'COMPUTED_CALL'}]
+        for key in ('address_references', 'computed_flow_sites'):
+            raw['coverage'][key] = {'status': 'complete', 'emitted': len(raw[key])}
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            result = cli.execute(self.args('calls', '--function-id', first['function_id'], '--direction', 'callees'))
+        self.assertEqual(result['status'], 'complete')
+        first_call, recovered, computed = result['data']['edges']
+        self.assertEqual(first_call['callee_function_id'], second['function_id'])
+        self.assertEqual(recovered['callee_function_id'], third['function_id'])
+        self.assertEqual(recovered['callsite'], added['from'])
+        self.assertIsNone(computed['callee_function_id'])
+        self.assertEqual(computed['resolution'], 'indirect_or_inferred')
+
     def test_fresh_decompile_requires_explicit_trust_and_single_function(self):
         with mock.patch.object(engine, 'dependencies') as deps:
             self.error('isolation_required', cli.execute,

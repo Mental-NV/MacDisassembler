@@ -1,4 +1,8 @@
 """Address-scoped views of committed reference and instruction evidence."""
+from bisect import bisect_left, bisect_right
+from collections import Counter, defaultdict
+from functools import cached_property
+
 from .metadata import VA
 from .storage import canonical
 
@@ -11,6 +15,72 @@ def complete(engine, key):
     facet = engine.get("coverage", {}).get(key, {})
     return (key in engine and facet.get("status") == "complete" and not facet.get("truncated")
             and not facet.get("error") and facet.get("emitted") == len(engine[key]))
+
+
+def function_ranges(function):
+    rows = function.get("body_ranges", ())
+    facet = function.get("coverage", {}).get("body_ranges", {})
+    if (not rows or facet.get("status") != "complete" or facet.get("truncated")
+            or facet.get("error") or facet.get("emitted") != len(rows)):
+        return None
+    ranges = []
+    for pair in rows:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return None
+        first, last = pair
+        if not all(isinstance(value, str) and VA.fullmatch(value) for value in (first, last)):
+            return None
+        start, end = int(first, 16), int(last, 16)
+        if start > end or (ranges and start <= ranges[-1][1]):
+            return None
+        ranges.append((start, end))
+    return ranges
+
+
+class FunctionReferences:
+    def __init__(self, engine):
+        self.engine = engine
+        self.complete = (complete(engine, REFERENCES) and not engine.get("analysis_timed_out")
+                         and not engine.get("output_budget_reached"))
+
+    @cached_property
+    def targets(self):
+        targets = defaultdict(list)
+        for row in self.engine[REFERENCES]:
+            targets[row["to"]].append(row)
+        return targets
+
+    @cached_property
+    def sources(self):
+        pairs = [(int(row["from"], 16), row) for row in self.engine[REFERENCES]
+                 if isinstance(row["from"], str) and VA.fullmatch(row["from"])]
+        pairs.sort(key=lambda pair: pair[0])
+        return [address for address, _ in pairs], [row for _, row in pairs]
+
+    def records(self, function, direction):
+        facet, key = ("xrefs_to_entry", "xrefs_to_entry") if direction == "to" else (
+            "xrefs_from", "xrefs_from_sample")
+        sample = function.get(key, ())
+        state = function.get("coverage", {}).get(facet, {})
+        truncated = function.get(facet + "_truncated") or state.get("truncated")
+        incomplete = (key not in function or truncated or function.get(facet + "_error")
+                      or state.get("error") or state.get("status", "complete") != "complete")
+        if not incomplete or not self.complete:
+            return sample, bool(incomplete), False
+        if direction == "to":
+            rows = self.targets.get(function["engine_entry"], [])
+        else:
+            ranges = function_ranges(function)
+            if ranges is None:
+                return sample, True, False
+            positions, index = self.sources
+            rows = []
+            for start, end in ranges:
+                rows.extend(index[bisect_left(positions, start):bisect_right(positions, end)])
+        if ((truncated and len(rows) <= len(sample))
+                or not Counter(map(canonical, sample)) <= Counter(map(canonical, rows))):
+            return sample, True, False
+        return rows, False, True
 
 
 def flow_kind(value):

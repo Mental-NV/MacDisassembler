@@ -177,8 +177,8 @@ def parser():
             selections.add_argument('--to',dest='xref_to',metavar='VA',help='Show references to this unslid address')
             selections.add_argument('--from',dest='xref_from',metavar='VA',help='Show references from this unslid address')
             s.add_argument('--direction',choices=('to','from','both'),help='Direction for function selectors (default both)')
-            s.add_argument('--limit',type=int,help='Page size for address selectors (default 100)')
-            s.add_argument('--cursor',help='Continue an address query')
+            s.add_argument('--limit',type=int,help='Page size (address selectors default to 100)')
+            s.add_argument('--cursor',help='Continue a reference query')
     s=sub.add_parser('search');project(s);common(s);pagination(s)
     s.add_argument('query')
     s.add_argument('--regex',action='store_true',help='Use a case-insensitive regular expression with a matching deadline')
@@ -1108,6 +1108,47 @@ def execute(a):
     return dict(execute_command(args,selection),address_selection=selection)
 
 
+def function_xrefs(args, project, snapshot, function):
+    data = {'function_id':function['function_id']}
+    sides = ('to','from') if args.direction == 'both' else (args.direction,)
+    refs = address_xrefs.FunctionReferences(snapshot['engine'])
+    groups, sources, gaps = {}, {}, []
+    for side in sides:
+        key = 'to_entry' if side == 'to' else 'from_body'
+        rows, incomplete, recovered = refs.records(function,side)
+        groups[key] = list(rows)
+        if incomplete:
+            gaps.append('xrefs_to_entry_incomplete' if side == 'to' else 'xrefs_from_incomplete')
+        if recovered:
+            sources[key] = 'image_reference_index'
+    if sources:
+        data['reference_sources'] = sources
+    if 'from' in sides and 'control_flow_gaps' in function:
+        gaps.append('unresolved_control_flow')
+        data.update(control_flow_gaps=function['control_flow_gaps'],control_flow_review=function['control_flow_review'])
+
+    scope = 'selected function xrefs'
+    aid = snapshot['analysis_id']
+    if args.limit is not None or args.cursor is not None:
+        paging = argparse.Namespace(limit=args.limit or 100,cursor=args.cursor)
+        combined = [(key,row) for key,rows in groups.items() for row in rows]
+        selected,cov = page(combined,paging,aid,project.project_id,
+                            {'function_id':function['function_id'],'direction':args.direction},
+                            order='xref-function/v1')
+        data.update({key:[] for key in groups})
+        for key,row in selected:
+            data[key].append(row)
+        cov['scope'] = scope
+        if gaps:
+            reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+            cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+    else:
+        data.update(groups)
+        count = sum(map(len,groups.values()))
+        cov = coverage(scope,count,count if sources and not gaps else None,bool(gaps),reason=';'.join(gaps) or None)
+    return envelope('xrefs',data,aid,'partial' if gaps else 'complete',cov)
+
+
 def execute_command(a, address_selection=None):
     limits(a)
     xref_address = None
@@ -1119,8 +1160,6 @@ def execute_command(a, address_selection=None):
             direction = 'to' if target is not None else 'from'
             xref_address = hex(metadata.hex_address(target if target is not None else source,'Unslid virtual address'))
         else:
-            if getattr(a,'limit',None) is not None or getattr(a,'cursor',None) is not None:
-                raise Error('xref_scope','Pagination requires --to or --from',2)
             a.direction = a.direction or 'both'
     va_range = getattr(a,'va_range',None) if a.command == 'disasm' else None
     if va_range is not None:
@@ -1358,6 +1397,8 @@ def execute_command(a, address_selection=None):
             cov.update(status='partial', truncation_reason=';'.join(filter(None, (cov['truncation_reason'], reason))))
         return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if partial else 'complete',cov)
     f=select_function(functions,a)
+    if a.command=='xrefs':
+        return function_xrefs(a,p,snapshot,f)
     if fresh:
         hints=annotations.type_hints(annotations_rows,functions) if with_hints else None
         policy = next((policy for enabled, policy in ((recover_switch, switch_tables), (recover_forwarded, forwarded_returns), (recover_parameters, callee_parameters),
@@ -1386,17 +1427,11 @@ def execute_command(a, address_selection=None):
         data=f
         partial=f['decompile_status'] not in ('complete','not_requested') or f.get('pseudocode_truncated',False)
         count=1
-    elif a.command=='cfg':
+    else:
         data={'function_id':f['function_id'],'blocks':f['blocks']}
         partial=bool(f.get('blocks_truncated') or f.get('cfg_error') or f.get('edges_truncated'))
         count=len(f['blocks'])
-    else:
-        data={'function_id':f['function_id']}
-        if a.direction in ('to','both'):data['to_entry']=f['xrefs_to_entry']
-        if a.direction in ('from','both'):data['from_body']=f['xrefs_from_sample']
-        partial=bool((a.direction in ('to','both') and (f.get('xrefs_to_entry_truncated') or f.get('xrefs_to_entry_error'))) or (a.direction in ('from','both') and (f.get('xrefs_from_truncated') or f.get('xrefs_from_error'))))
-        count=sum(len(v) for v in data.values() if isinstance(v,list))
-    unresolved = 'control_flow_gaps' in f and (a.command != 'xrefs' or a.direction != 'to')
+    unresolved = 'control_flow_gaps' in f
     if unresolved and a.command != 'decompile':
         data.update(control_flow_gaps=f['control_flow_gaps'], control_flow_review=f['control_flow_review'])
     partial = partial or unresolved

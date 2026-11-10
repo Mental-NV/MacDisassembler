@@ -1,5 +1,6 @@
 """Bounded traversal of recorded call evidence in one image."""
 from collections import deque
+from . import address_xrefs
 
 DIRECT_CALLS = {"UNCONDITIONAL_CALL", "CONDITIONAL_CALL"}
 
@@ -26,6 +27,10 @@ def graph(snapshot, root, direction, depth, max_edges):
     edges = {}
     gaps = set()
     engine = snapshot["engine"]
+    references = address_xrefs.FunctionReferences(engine)
+    computed_complete = address_xrefs.complete(engine, address_xrefs.COMPUTED)
+    computed_sites.update(row["addr"] for row in engine.get(address_xrefs.COMPUTED, ())
+                          if "COMPUTED_CALL" in row["flow"])
     if engine.get("functions_truncated") or engine.get("analysis_timed_out") or engine.get("output_budget_reached"):
         gaps.add("incomplete_analysis")
     if engine.get("coverage", {}).get("functions", {}).get("status", "complete") != "complete":
@@ -40,10 +45,10 @@ def graph(snapshot, root, direction, depth, max_edges):
         for side in directions:
             incoming = side == "callers"
             facet = "xrefs_to_entry" if incoming else "xrefs_from"
-            key = facet if incoming else "xrefs_from_sample"
-            if key not in function or function.get(facet + "_truncated") or function.get(facet + "_error"):
+            rows, incomplete, recovered = references.records(function, "to" if incoming else "from")
+            if incomplete:
                 gaps.add(facet + "_incomplete")
-            refs = [row for row in function.get(key, ()) if "CALL" in row["type"]]
+            refs = [row for row in rows if "CALL" in row["type"]]
             if not incoming:
                 if function.get("control_flow_gaps"):
                     gaps.add("unresolved_control_flow")
@@ -58,8 +63,9 @@ def graph(snapshot, root, direction, depth, max_edges):
                 if incoming:
                     caller = owners.get(site)
                 else:
-                    caller = fid if owners.get(site, fid) == fid else None
-                direct = ref_type in DIRECT_CALLS and site not in computed_sites
+                    caller = fid if owners.get(site, None if recovered else fid) == fid else None
+                direct = (ref_type in DIRECT_CALLS and site not in computed_sites
+                          and (not recovered or site in owners or computed_complete))
                 callee = entries.get(target) if direct else None
                 if not direct:
                     resolution = "indirect_or_inferred"

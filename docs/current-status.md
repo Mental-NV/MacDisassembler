@@ -114,6 +114,10 @@ collections exceed documented bounds despite successful pseudocode output.
   from a bounded image capture. All 32 owned thin address queries matched
   exact Ghidra queries and reproduced on universal slices. The installed
   CLI preserved unresolved computed targets and reported the capture cap.
+- [x] Recover and page [capped function references](cli.md#implemented-commands)
+  from a complete saved image capture. On six owned slices, independent
+  Ghidra queries matched 2,497 additional outgoing and 34 additional incoming
+  records. Call graphs recovered 649 reference edges across the tested queries.
 - [x] [Compare committed exports](cli.md#comparing-committed-exports) by
   metadata, functions, and pseudocode. Owned arm64 and x86_64 pairs
   verified changed code, renamed and added entries, ambiguous bodies,

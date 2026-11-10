@@ -75,7 +75,49 @@ class AddressReferenceTests(TemporaryCase):
         self.assertEqual([row['from'] for row in rows], ['0x4', '0x22', '0x100'])
         self.error('stale_cursor', self.query, '--from', '0x80', '--cursor', cursor)
         self.error('xref_scope', self.query, '--from', '0x80', '--direction', 'to')
-        self.error('xref_scope', self.query, '--name', 'unique', '--limit', '1')
+        self.assertEqual(self.query('--name', 'unique', '--limit', '1')['coverage']['known_total'], 0)
         self.error('address', self.query, '--to', '80')
         self.error('usage', self.args, '--to', '0x1', '--from', '0x2')
         self.assertEqual(set(self.query('--name', 'unique')['data']), {'function_id', 'to_entry', 'from_body'})
+
+    def test_truncated_function_samples_recover_exact_disjoint_body_and_entry_pages(self):
+        function = self.snapshot['functions'][0]
+        start = function['entry_va']
+        selected = ['0x100000003', '0x100000006', '0x100000009']
+        outgoing = [{'from': va, 'to': '0x10', 'type': 'DATA'} for va in selected]
+        incoming = [{'from': '0x80', 'to': start, 'type': 'DATA'}]
+        outside = {'from': '0x100000004', 'to': '0x10', 'type': 'DATA'}
+        self.index([outside, *reversed(outgoing), *incoming])
+        function.update(body_ranges=[[start, selected[0]], [selected[1], selected[2]]],
+                        coverage={'body_ranges': {'status': 'complete', 'emitted': 2}},
+                        xrefs_from_truncated=True, xrefs_from_sample=outgoing[:1], xrefs_to_entry_truncated=True)
+        selector = ('--function-id', function['function_id'])
+        result = self.query(*selector)
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['data']['from_body'], outgoing)
+        self.assertEqual(result['data']['to_entry'], incoming)
+        self.assertEqual(result['data']['reference_sources'],
+                         {'from_body': 'image_reference_index', 'to_entry': 'image_reference_index'})
+        page = self.query(*selector, '--limit', '2')
+        self.assertEqual(page['data']['from_body'], outgoing[:1])
+        self.assertEqual(page['data']['to_entry'], incoming)
+        self.assertEqual(page['coverage']['known_total'], 4)
+        cursor = page['coverage']['next_cursor']
+        next_page = self.query(*selector, '--limit', '2', '--cursor', cursor)
+        self.assertEqual(next_page['data']['from_body'], outgoing[1:])
+        self.assertEqual(next_page['data']['to_entry'], [])
+        self.error('stale_cursor', self.query, *selector, '--direction', 'from', '--cursor', cursor)
+
+        function['coverage']['body_ranges']['status'] = 'partial'
+        self.assertEqual(self.query(*selector)['data']['from_body'], outgoing[:1])
+        function['coverage']['body_ranges']['status'] = 'complete'
+        function['xrefs_from_sample'] = [outside]
+        mismatch = self.query(*selector)
+        self.assertEqual(mismatch['data']['from_body'], [outside])
+        self.assertEqual(mismatch['coverage']['truncation_reason'], 'xrefs_from_incomplete')
+        function['xrefs_from_sample'] = outgoing[:1]
+        self.index([*incoming, outgoing[0]])
+        self.assertEqual(self.query(*selector)['coverage']['truncation_reason'], 'xrefs_from_incomplete')
+        self.index([*incoming, *outgoing])
+        self.snapshot['engine']['coverage'][address_xrefs.REFERENCES]['truncated'] = True
+        self.assertEqual(self.query(*selector)['data']['from_body'], outgoing[:1])

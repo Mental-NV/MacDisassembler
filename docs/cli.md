@@ -282,8 +282,25 @@ Use `--limit` and `--cursor` to page an address query. When the saved
 capture is complete, an empty list means Ghidra recorded no references
 in that direction at the address. Older snapshots and capped captures
 reuse available function samples and return partial coverage. The
-function-selector form retains `--direction to|from|both`. Both forms
-use committed evidence without starting a worker.
+function-selector form uses `--direction to|from|both`. It can recover
+references beyond a capped function sample when the complete image capture
+contains that sample. Outgoing recovery also requires complete saved body
+ranges, including every disjoint range. The result identifies a recovered
+direction in `reference_sources`. When recovery is unavailable, coverage
+identifies the incomplete direction and the saved sample remains available.
+
+Use `--limit` and `--cursor` to page function references as well. For
+`--direction both`, incoming records come before outgoing records. A cursor
+binds to the analysis, function and direction. Both selector forms use
+committed evidence without starting a worker.
+
+Independent read-only Ghidra queries verified the recovered records for 12
+functions on six owned arm64 and x86_64 slices. The installed CLI returned
+2,497 additional outgoing and 34 additional incoming records. Paged queries
+reproduced those results, and the call graph returned 649 additional
+reference edges across the tested queries. The capped image capture still
+reported partial coverage. The validation report SHA-256 is
+`d0ce5bded7a206c947b64234f527666869c1232fe61f5885332e8bd9fa66d871`.
 
 The installed wheel checked 32 address queries on owned arm64 and x86_64
 executables against separate exact queries on read-only Ghidra Program
@@ -313,7 +330,8 @@ inferred target hints without traversing them. Incoming references with
 ambiguous or unavailable instruction ownership retain an unresolved caller.
 Depth defines the requested scope. A reached `--max-edges` bound (default 500,
 maximum 2000) or incomplete scanned facets produces partial coverage. Call
-traversal uses the selected snapshot and does not enumerate runtime targets.
+traversal uses the same recovery for capped reference samples. It follows
+direct edges only when the saved evidence supports the instruction and target.
 
 ## User labels and comments
 
