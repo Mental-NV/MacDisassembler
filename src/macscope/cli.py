@@ -444,7 +444,8 @@ def analyze_image(project, image, args, deps, command, *, resumed_from=None):
         boundary_request = flow_boundaries.recovery_request(data,image)
         recovery = flow_boundaries.recovery_identity(boundary_request)
     baseline = project.path/'engine'/image['image_id']
-    if not baseline.is_dir() or engine.tree_digest(baseline)!=image['engine_baseline_sha256']:
+    if (baseline.is_symlink() or not baseline.is_dir()
+            or engine.tree_digest(baseline) != image['engine_baseline_sha256']):
         raise Error('baseline_integrity','Saved import Program DB changed; create a fresh project')
     raw,job=engine.run(project,image,'analyze',args,deps,boundary_request=boundary_request,
                        analysis_request=jobs.analysis_request(project,image,recovery),resumed_from=resumed_from)
@@ -520,7 +521,7 @@ def replay_worker_request(args, project, record, *, query_profile=None):
         raise Error('job_resume_policy','The recorded profile or worker limits differ from the supported policy',3)
     deps = engine.dependencies(args.ghidra,args.java_home,full=True)
     if (deps != record.get('dependencies')
-            or hashlib.sha256(engine.profile(project,deps).encode()).hexdigest() != record.get('sandbox_sha256')):
+            or engine.job_sandbox_sha256(project, deps, record.get('job_id')) != record.get('sandbox_sha256')):
         raise Error('job_resume_engine','Select the exact recorded engine, JDK and isolation policy to restart',4)
     return replay,deps
 

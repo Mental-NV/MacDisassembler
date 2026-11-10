@@ -185,8 +185,23 @@ class ProfileRunnerTests(unittest.TestCase):
                                                           side_effect=self.mock_runner(name)):
                 _, job = engine.run(self.project, self.image, "analyze", self.args(name), self.deps)
             self.assertEqual(job["analysis_profile"], engine.analysis_profile(name))
+            directory = self.project.path / "jobs" / job["job_id"]
+            self.assertEqual(Path(job["environment"]["HOME"]), directory / "home")
+            self.assertEqual(job["sandbox_sha256"], engine.job_sandbox_sha256(self.project, self.deps, job["job_id"]))
+            self.assertNotEqual(job["sandbox_sha256"], engine.job_sandbox_sha256(self.project, self.deps, "1" * 32))
             next_arg = self.seen[self.seen.index("MacscopeProfile.java") + 1]
             self.assertEqual(next_arg, "parameter-inference" if name != "baseline" else "-scriptPath")
+
+    def test_program_copy_declines_nested_links_before_launch(self):
+        outside = self.project.path / "prior-canary"
+        outside.write_bytes(b"owned outside marker")
+        baseline = self.project.path / "engine" / self.image["image_id"]
+        (baseline / "unexpected-link").symlink_to(outside)
+        with mock.patch.object(engine, "run_process") as run:
+            with self.assertRaises(Error) as caught:
+                engine.run(self.project, self.image, "analyze", self.args(), self.deps)
+        self.assertEqual(caught.exception.code, "analysis_program_integrity")
+        run.assert_not_called()
 
     def test_wrong_profile_worker_result_is_failed_not_published(self):
         with mock.patch.object(engine, "run_process", side_effect=self.mock_runner("baseline")):

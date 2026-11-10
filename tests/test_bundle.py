@@ -124,7 +124,8 @@ class BundleInventoryTests(unittest.TestCase):
             result = {"validation": {"headless_analysis_enabled": False},
                       "executable_format": "Mac OS X Mach-O", "language_id": imported["arch"],
                       "compiler_spec_id": "test", "executable_sha256": imported["sha256"]}
-            return result, {"job_id": job_id}
+            return result, {"job_id": job_id,
+                            "sandbox_sha256": engine.job_sandbox_sha256(workspace, dependencies, job_id)}
 
         with patch.object(engine, "dependencies", return_value={"ghidra_path": "/engine", "java_home": "/java"}), \
              patch.object(engine, "run", side_effect=worker) as run:

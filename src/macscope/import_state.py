@@ -126,7 +126,6 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
     request = request_for(project, image)
     destination = project.path / "engine" / image["image_id"]
     journal_path = destination.with_suffix(".import.json")
-    sandbox_sha256 = hashlib.sha256(engine.profile(project, deps).encode()).hexdigest()
     if journal_path.exists() or journal_path.is_symlink():
         try:
             journal = json.loads(read_regular(journal_path, 1024 * 1024))
@@ -134,7 +133,6 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
             raise Error("import_journal", "Invalid prepared import journal") from error
         if (not isinstance(journal, dict) or journal.get("request") != request
                 or journal.get("dependencies") != deps
-                or journal.get("sandbox_sha256") != sandbox_sha256
                 or journal.get("limits") != engine.worker_limits(args, args.max_functions)):
             raise Error("import_baseline_conflict", "The prepared import has a different input or worker request", 8)
         job_id, digest = journal.get("job_id"), journal.get("program_sha256")
@@ -146,6 +144,8 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
                 or evidence["executable_sha256"] != image["sha256"]
                 or (prior is not None and (not isinstance(prior, str) or not jobs.JOB_ID.fullmatch(prior)))):
             raise Error("import_journal", "Invalid prepared import provenance")
+        if journal.get("sandbox_sha256") != engine.job_sandbox_sha256(project, deps, job_id):
+            raise Error("import_baseline_conflict", "The prepared import has a different isolation policy", 8)
         if resumed_from is not None and resumed_from not in (job_id, prior):
             raise Error("import_baseline_conflict", "The prepared import belongs to a different attempt", 8)
         if prior is not None and resumed_from == job_id:
@@ -161,7 +161,7 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
     checked_path(source, directory=True)
     journal = {
         "request": request, "dependencies": deps, "limits": engine.worker_limits(args, args.max_functions),
-        "sandbox_sha256": sandbox_sha256,
+        "sandbox_sha256": job["sandbox_sha256"],
         "job_id": job["job_id"], "resumed_from": resumed_from,
         "program_sha256": engine.tree_digest(source), "loader_evidence": {k: raw[k] for k in LOADER_FIELDS},
     }

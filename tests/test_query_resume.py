@@ -51,7 +51,7 @@ class QueryResumeTests(TemporaryCase):
             "type_hints": self.hints, "type_hint_view_id": self.request["type_hint_view_id"],
             "analysis_profile": engine.analysis_profile(), "dependencies": self.deps,
             "limits": engine.worker_limits(original, 1),
-            "sandbox_sha256": hashlib.sha256(engine.profile(self.workspace, self.deps).encode()).hexdigest(),
+            "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, self.prior),
         }
         self.prior_path = self.workspace.path / "jobs" / self.prior / "job.json"
         self.prior_path.parent.mkdir()

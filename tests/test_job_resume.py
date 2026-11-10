@@ -41,7 +41,7 @@ class JobResumeTests(TemporaryCase):
                 120,
             ),
             "dependencies": self.deps,
-            "sandbox_sha256": hashlib.sha256(engine.profile(self.workspace, self.deps).encode()).hexdigest(),
+            "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, self.prior),
             "argv": ["/recorded/argv/must/not/run"],
         }
         storage.write_json(self.prior_path, self.record)
@@ -103,7 +103,9 @@ class JobResumeTests(TemporaryCase):
             ("job_resume_conflict", {"analysis_request": dict(self.record["analysis_request"], previous_analysis_id="other")}),
             ("job_manifest", {"limits": dict(self.record["limits"], timeout_seconds=True)}),
             ("job_resume_policy", {"limits": dict(self.record["limits"], jobs=2)}),
-            ("job_resume_engine", {"sandbox_sha256": "0" * 64}),
+            ("job_resume_engine", {
+                "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, "b" * 32),
+            }),
         )
         with patch.object(engine, "dependencies", return_value=self.deps), patch.object(engine, "run") as runner:
             for error, changes in scenarios:

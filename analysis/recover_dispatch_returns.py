@@ -185,7 +185,7 @@ def query(directory, project, image, saved, snapshot, plan, deps, excluded):
     sandbox = directory / "sandbox.sb"
     private = "".join("(deny file-read-data (subpath " + json.dumps(str(path)) + "))\n"
                       for path in sorted({*excluded, project.path, ROOT}))
-    sandbox.write_text(engine.profile(SimpleNamespace(path=directory), deps) + private)
+    sandbox.write_text(engine.profile(SimpleNamespace(path=directory), deps, write_root=directory) + private)
     argv = ["/usr/bin/sandbox-exec", "-f", str(sandbox),
             str(Path(deps["ghidra_path"]) / "support/analyzeHeadless"), str(directory / "program"), "image",
             "-process", image["image_id"] + ".macho", "-noanalysis", "-readOnly",

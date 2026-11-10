@@ -134,24 +134,33 @@ def dependencies(ghidra=None, java=None, full=False):
     version = (v.stderr+v.stdout).decode(errors='replace').strip()
     if v.returncode or '25.0.5.0.3' not in version:
         raise Error('incompatible_jdk', 'Requires tested JDK 25.0.5.0.3', 4)
-    result = {'ghidra_version':'12.2', 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), 'native_decompiler_sha256':digest(native), 'java_sha256':digest(j/'bin/java'), 'jvm_sha256':digest(j/'lib/server/libjvm.dylib'), 'bridge_sha256':identity({p.name:digest(p) for p in sorted(BRIDGE.glob('*.java'))}), 'application_properties_sha256':digest(g/'Ghidra/application.properties'), 'isolation':'experimental-trusted-owned-input-only; deny-network, restrict user-home reads and confine filesystem writes; not a hostile-input sandbox', 'hard_process_memory_limit':False}
+    result = {'ghidra_version':'12.2', 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), 'native_decompiler_sha256':digest(native), 'java_sha256':digest(j/'bin/java'), 'jvm_sha256':digest(j/'lib/server/libjvm.dylib'), 'bridge_sha256':identity({p.name:digest(p) for p in sorted(BRIDGE.glob('*.java'))}), 'application_properties_sha256':digest(g/'Ghidra/application.properties'), 'isolation':'experimental-trusted-owned-input-only; deny-network, restrict user-home reads and confine writes to the current job; not a hostile-input sandbox', 'hard_process_memory_limit':False}
     if full:
         result['ghidra_tree_sha256'] = tree_digest(g)
     return result
 
 
-def profile(project, dependencies):
+def profile(project, dependencies, *, write_root):
     # Seatbelt strings are JSON quoted, never shell interpolated.
     reads = [str(project.path), str(BRIDGE.resolve()), dependencies['ghidra_path'], dependencies['java_home']]
     ancestors = sorted({str(p) for p in project.path.parents} | {str(p) for p in BRIDGE.resolve().parents})
     literal = lambda p: json.dumps(p,ensure_ascii=False)
     exclusions = ' '.join('(require-not (subpath '+literal(p)+'))' for p in reads) + ' ' + ' '.join('(require-not (literal '+literal(p)+'))' for p in ancestors)
-    workspace = literal(str(project.path))
+    if not write_root.is_absolute() or not write_root.is_relative_to(project.path) or '..' in write_root.parts:
+        raise Error('worker_isolation_scope', 'Worker write directory must be inside the private workspace', 3)
+    writable = literal(str(write_root))
     return ('(version 1)\n(allow default)\n(deny network*)\n'
             '(deny file-read-data (require-all (subpath "/Users") '+exclusions+'))\n'
-            '(deny file-write* (require-all (require-not (subpath '+workspace+')) '
+            '(deny file-write* (require-all (require-not (subpath '+writable+')) '
             '(require-not (literal "/dev/null"))))\n')
 
+
+
+def job_sandbox_sha256(project, dependencies, job_id):
+    if not isinstance(job_id, str) or not jobs.JOB_ID.fullmatch(job_id):
+        raise Error('job_manifest', 'Invalid worker job identifier')
+    job = project.path/'jobs'/job_id
+    return hashlib.sha256(profile(project, dependencies, write_root=job).encode()).hexdigest()
 
 
 def worker_exited(proc):
@@ -315,7 +324,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if not re.fullmatch(r'[a-f0-9]{32}', active.get('job_id','')):
             raise Error('analysis_program_missing','Active analyzed Program reference is invalid')
         source = project.path/'jobs'/active['job_id']/'program'
-        if not source.is_dir() or active.get('analysis_program_sha256') != tree_digest(source):
+        if (source.parent.is_symlink() or source.is_symlink() or not source.is_dir()
+                or active.get('analysis_program_sha256') != tree_digest(source)):
             raise Error('analysis_program_integrity','Saved analyzed Program is missing or changed; rerun analyze')
     elif mode == 'analyze':
         # Fresh analysis starts from the saved no-analysis import.
@@ -324,17 +334,21 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     job = project.path/'jobs'/jobid
     job.mkdir(mode=0o700)
     (job/'tmp').mkdir(mode=0o700)
+    worker_home = job/'home'
+    worker_home.mkdir(mode=0o700)
     outfile = job/'bridge.json'
     sandbox = job/'sandbox.sb'
-    sandbox.write_text(profile(project, deps))
+    sandbox.write_text(profile(project, deps, write_root=job), encoding="utf-8")
     g, j = Path(deps['ghidra_path']), Path(deps['java_home'])
     engine_dir = job/'program'
     if mode == 'import':
         engine_dir.mkdir(mode=0o700)
     else:
-        if signature_plan is not None and (source.is_symlink() or any(p.is_symlink() for p in source.rglob('*'))):
-            raise Error('analysis_program_integrity', 'Saved signature query Program contains a symbolic link')
-        shutil.copytree(source, engine_dir, symlinks=False)
+        if source.is_symlink():
+            raise Error('analysis_program_integrity', 'Saved Program directory is a symbolic link')
+        shutil.copytree(source, engine_dir, symlinks=True)
+        if any(p.is_symlink() for p in engine_dir.rglob('*')):
+            raise Error('analysis_program_integrity', 'Saved Program contains a symbolic link')
     if signature_plan is not None:
         if tree_digest(engine_dir) != active['analysis_program_sha256']:
             raise Error('analysis_program_integrity', 'Copied Program differs from the saved signature query input')
@@ -370,11 +384,6 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         argv.append(str(request))
     argv += ['-max-cpu', '1', '-analysisTimeoutPerFile', str(args.timeout), '-log',
              str(job/'engine.log'), '-scriptlog', str(job/'script.log')]
-    worker_home = project.path/'home'
-    if entry is not None:
-        # Concurrent readers use independent Ghidra user settings.
-        worker_home = job/'home'
-        worker_home.mkdir(mode=0o700)
     env = {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'HOME':str(worker_home), 'USER':os.environ.get('USER','macscope'), 'TMPDIR':str(job/'tmp')+'/', 'JAVA_HOME':str(j), 'GHIDRA_HEADLESS_MAXMEM':str(args.heap_mib)+'M', 'JAVA_TOOL_OPTIONS':'-Duser.home='+json.dumps(str(worker_home),ensure_ascii=False)+' -Djava.io.tmpdir='+json.dumps(str(job/'tmp'),ensure_ascii=False), 'LANG':'en_US.UTF-8'}
     manifest = {'job_id':jobid, 'mode':mode, 'analysis_profile':requested_profile, 'image_id':image['image_id'], 'dependencies':deps, 'limits':worker_limits(args,max_functions), 'environment':env, 'sandbox_sha256':digest(sandbox)}
     if analysis_request is not None:

@@ -1,5 +1,4 @@
 """Recover an exact import slice across worker and index publication failures."""
-import hashlib
 from unittest.mock import patch
 
 from macscope import cli, engine, import_state, jobs, macho, storage
@@ -30,7 +29,7 @@ class ImportResumeTests(TemporaryCase):
                 self.args("import", "owned", "--timeout", "75", "--heap-mib", "768"), 1000,
             ),
             "dependencies": self.deps,
-            "sandbox_sha256": hashlib.sha256(engine.profile(self.workspace, self.deps).encode()).hexdigest(),
+            "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, self.prior),
         }
         storage.write_json(self.prior_path, self.record)
 
@@ -43,14 +42,16 @@ class ImportResumeTests(TemporaryCase):
     def worker(self, *args, **kwargs):
         self.source.mkdir(parents=True)
         (self.source / "image.gpr").write_bytes(b"owned prepared Program")
-        storage.write_json(self.source.parent / "job.json", dict(self.record, job_id=self.producer, status="complete"))
+        job = dict(self.record, job_id=self.producer, status="complete",
+                   sandbox_sha256=engine.job_sandbox_sha256(self.workspace, self.deps, self.producer))
+        storage.write_json(self.source.parent / "job.json", job)
         self.assertEqual(kwargs["import_request"], self.record["import_request"])
         self.assertEqual(kwargs["resumed_from"], self.prior)
         self.assertEqual(engine.worker_limits(args[3], args[3].max_functions), self.record["limits"])
         return ({"validation": {"headless_analysis_enabled": False},
                  "executable_format": "Mac OS X Mach-O", "language_id": "arm64",
                  "compiler_spec_id": "test", "executable_sha256": self.image["sha256"]},
-                {"job_id": self.producer})
+                job)
 
     def test_finish_prepared_import_before_and_after_promotion_without_relaunch(self):
         with (
