@@ -8,6 +8,8 @@ from .macho_view import MappedImage
 
 
 MAX_CLASSES = 2048
+MAX_CLASS_POINTERS = 8192
+MAX_CLASS_CHAIN_NODES = 262144
 MAX_METHODS = 10000
 MAX_PROPERTIES = 10000
 MAX_IVARS = 10000
@@ -24,9 +26,32 @@ CLASS_SYMBOL = "_OBJC_CLASS_$_"
 CLASS_DATA_MASK = 0x0F007FFFFFFFFFF8
 
 
+class ResolutionFailure(ValueError):
+    """A failed proof is not necessarily demonstrably corrupt metadata."""
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+def diagnostic_kind(reason):
+    if reason.endswith("_limit"):
+        return "exhausted_work"
+    if (reason.startswith("unsupported_") or reason.endswith("_unsupported") or reason.startswith("fixups_pointer_format_")
+            or any(reason.startswith("fixups_"+stream+suffix)
+                   for stream in ("rebase","bind","weak_bind","lazy_bind")
+                   for suffix in ("_opcode_","_type_","_unbacked_rebase"))
+            or reason in {"fixups_fixup_version", "fixups_imports_format", "fixups_symbols_format"}):
+        return "unsupported_layout"
+    if (reason.startswith("unresolved_") or reason.startswith("incomplete_")
+            or reason in {"external_class_pointer", "fixups_image_base"}):
+        return "incomplete_evidence"
+    return "malformed_metadata"
+
+
 class ObjCImage:
-    def __init__(self, data, image, parsed, *, scoped=False, pointer_limit=None):
-        self.view = MappedImage(data,parsed["segments"])
+    def __init__(self, data, image, parsed, *, scoped=False, pointer_limit=None, discovery=False):
+        self.parsed = parsed
+        self.view = MappedImage(data,parsed["segments"],reject_virtual_overlap=True)
         self.sections = parsed["sections"]
         self.scoped_lookup = (data,image,parsed) if scoped and any(
             row["kind"] == "chained_fixups" for row in parsed["loader"]["linkedit"]) else None
@@ -35,7 +60,15 @@ class ObjCImage:
         self.pointer_gaps = bool(gaps)
         self.pointer_limit = MAX_SELECTED_POINTERS if pointer_limit is None else pointer_limit
         self.pointer_limit_reason = "selected_pointer_limit" if pointer_limit is None else "metadata_pointer_limit"
+        self.discovery = discovery
+        if discovery:
+            self.pointer_limit = MAX_CLASS_POINTERS
+            self.pointer_limit_reason = "class_pointer_limit"
+        self.chain_work = dyld.ChainWorkBudget(MAX_CLASS_CHAIN_NODES) if discovery else None
+        self.class_slots = 0
+        self.first_class_slot = None
         self.selected_sites = set()
+        self.pointer_failures = {}
         self.page_cache = OrderedDict()
         self.page_queries = 0
         self.cached_fixups = 0
@@ -44,20 +77,26 @@ class ObjCImage:
         self.pointers.update((int(row["va"],16),row) for row in rows if row["kind"]=="bind")
 
     def relocation(self, site):
-        if self.scoped_lookup is not None:
+        if self.scoped_lookup is not None or self.discovery:
             if site not in self.selected_sites:
                 if len(self.selected_sites) >= self.pointer_limit:
                     self.gaps.add(self.pointer_limit_reason)
-                    raise ValueError("Objective-C pointer lookup limit reached")
+                    raise ResolutionFailure(self.pointer_limit_reason,"Objective-C pointer lookup limit reached")
                 self.selected_sites.add(site)
                 # A cached page can span a second overlapping virtual segment,
-                # even when that segment has no file bytes. Validate each slot.
+                # even when that segment has no file bytes. Raw/legacy class
+                # discovery needs the same unambiguous slot proof.
                 try:
-                    dyld.slot_segment(self.scoped_lookup[2],site)
+                    dyld.slot_segment(self.parsed,site)
                 except Error as error:
                     self.gaps.add("fixups_"+error.code)
                     self.pointers[site] = None
-                    raise ValueError("Pointer has an ambiguous segment mapping") from error
+                    self.pointer_failures[site] = "fixups_"+error.code
+                    raise ResolutionFailure("fixups_"+error.code,"Pointer has an ambiguous segment mapping") from error
+        # All views, including exact raw/legacy class-slot queries, must prove
+        # the source bytes. A predecoded relocation does not exempt its slot.
+        self.view.mapping(site,8)
+        if self.scoped_lookup is not None:
             if site not in self.pointers:
                 self.pointers[site] = None
                 page = next((key for key in self.page_cache if key[0] <= site and site+8 <= key[1]),None)
@@ -67,19 +106,24 @@ class ObjCImage:
                 else:
                     if self.page_queries >= MAX_SCOPED_PAGES:
                         self.gaps.add("fixup_page_limit")
-                        raise ValueError("Objective-C chained page lookup limit reached")
+                        self.pointer_failures[site] = "fixup_page_limit"
+                        raise ResolutionFailure("fixup_page_limit","Objective-C chained page lookup limit reached")
                     self.page_queries += 1
                     data,image,parsed = self.scoped_lookup
                     try:
-                        info,rows,gaps = dyld.chained_page(data,image,parsed,site)
+                        info,rows,gaps = dyld.chained_page(data,image,parsed,site,work_budget=self.chain_work)
                     except Error as error:
                         self.gaps.add("fixups_"+error.code)
+                        self.pointer_failures[site] = "fixups_"+error.code
                     else:
                         self.gaps.update("fixups_"+reason for reason in gaps)
+                        if gaps:
+                            self.pointer_failures[site] = "fixups_"+gaps[0]
                         if not gaps:
                             if len(rows) > MAX_SCOPED_FIXUPS:
                                 self.gaps.add("fixup_cache_limit")
-                                raise ValueError("Objective-C chained page exceeds the cache limit")
+                                self.pointer_failures[site] = "fixup_cache_limit"
+                                raise ResolutionFailure("fixup_cache_limit","Objective-C chained page exceeds the cache limit")
                             # Retain requested-slot results separately. Eviction
                             # must not discard failures or make lookup order
                             # change whether a pointer is trusted.
@@ -96,18 +140,19 @@ class ObjCImage:
                             self.pointers[site] = pointers.get(site,{})
         pointer = self.pointers.get(site,{})
         if pointer is None:
-            raise ValueError("Pointer lacks complete relocation evidence")
+            raise ResolutionFailure(self.pointer_failures.get(site,"incomplete_relocation_evidence"),
+                                    "Pointer lacks complete relocation evidence")
         return pointer
 
     def target(self, site):
         pointer = self.relocation(site)
         if pointer:
             if pointer["kind"]=="bind":
-                raise ValueError("External pointer has no local target")
+                raise ResolutionFailure("external_class_pointer","External pointer has no local target")
             return int(pointer["target_va"],16)
         raw, = self.view.unpack("<Q",site)
         if raw and self.pointer_gaps:
-            raise ValueError("Pointer lacks complete relocation evidence")
+            raise ResolutionFailure("incomplete_relocation_evidence","Pointer lacks complete relocation evidence")
         return raw
 
     def sites(self, names, limit, reason):
@@ -116,11 +161,15 @@ class ObjCImage:
             if section["name"] not in names:
                 continue
             va,size = int(section["va"],16),int(section["size"],16)
-            if section["file_offset"] is None or size%8:
+            if section["file_offset"] is None or size%8 or va%8:
                 self.gaps.add("invalid_pointer_section")
                 continue
             try:
-                self.view.mapping(va,size)
+                # The section's extent must be file-backed. Each yielded slot
+                # is checked separately so a bad later slot keeps earlier rows.
+                offset,_,_ = self.view.file_mapping(va,size)
+                if offset != int(section["file_offset"],16):
+                    raise ValueError("Pointer section and segment mappings disagree")
             except ValueError:
                 self.gaps.add("invalid_pointer_section")
                 continue
@@ -129,15 +178,19 @@ class ObjCImage:
                     self.gaps.add(reason)
                     return
                 seen += 1
+                if names == CLASS_LISTS:
+                    self.class_slots += 1
                 yield site
 
     def ro(self, address):
-        self.view.mapping(address,40)
+        # Validate structural extents without requiring unused/optional fields
+        # to be readable. Every consumed pointer/scalar is checked separately.
+        self.view.file_mapping(address,40)
         bits = self.target(address+32)
         if bits >> 63:
-            raise ValueError("Class data requires a runtime RW pointer")
+            raise ResolutionFailure("unsupported_class_data_pointer","Class data requires a runtime RW pointer")
         ro = bits & CLASS_DATA_MASK
-        self.view.mapping(ro,40)
+        self.view.file_mapping(ro,40)
         return ro
 
     def class_ref(self, site):
@@ -162,21 +215,44 @@ class ObjCImage:
                "list_entry_va":hex(site),"origin":"objc_class_list"}
         try:
             row["superclass"] = self.class_ref(address+8)
-        except ValueError:
+        except ValueError as error:
             row["superclass"] = {"origin":"unresolved"}
             self.gaps.add("unresolved_superclass")
+            if isinstance(error,ResolutionFailure):
+                self.gaps.add(error.reason)
         return row
 
     def classes(self):
         rows = {}
         for site in self.sites(CLASS_LISTS,MAX_CLASSES,"class_limit"):
+            if self.first_class_slot is None:
+                try:
+                    dyld.slot_segment(self.parsed,site)
+                except Error:
+                    pass
+                else:
+                    self.first_class_slot = site
             try:
                 address = self.target(site)
                 if address not in rows:
                     rows[address] = self.class_record(site,address)
+            except ResolutionFailure as error:
+                self.gaps.add(error.reason)
+                if diagnostic_kind(error.reason) == "malformed_metadata":
+                    self.gaps.add("invalid_class_record")
             except ValueError:
                 self.gaps.add("invalid_class_record")
         return list(rows.values())
+
+    def discovery_diagnostics(self):
+        return [
+            f"Class discovery work: class_slots={self.class_slots}/{MAX_CLASSES}; "
+            f"unique_pointer_sites={len(self.selected_sites)}/{self.pointer_limit}; "
+            f"decoded_chain_nodes={self.chain_work.used}/{self.chain_work.limit}; "
+            f"page_lookups={self.page_queries}/{MAX_SCOPED_PAGES}; "
+            f"cached_fixup_rows={self.cached_fixups}/{MAX_SCOPED_FIXUPS}.",
+            *(f"Class discovery {diagnostic_kind(reason)}: {reason}." for reason in sorted(self.gaps)),
+        ]
 
     def methods(self, list_site, class_name, class_method, category, remaining):
         address = self.target(list_site)
@@ -448,7 +524,8 @@ def selected_methods(data, image, class_slot):
     matches = [row for row in parsed["sections"] if row["name"] in CLASS_LISTS
                and row["file_offset"] is not None
                and (start := int(row["va"],16)) <= class_slot < start+int(row["size"],16)
-               and (class_slot-start)%8 == 0 and class_slot+8 <= start+int(row["size"],16)]
+               and class_slot%8 == 0 and (class_slot-start)%8 == 0
+               and class_slot+8 <= start+int(row["size"],16)]
     if len(matches) != 1:
         raise Error("objc_class_slot", "Select one aligned, file-backed Objective-C class list entry", 3)
     section, = matches
@@ -472,7 +549,7 @@ def selected_methods(data, image, class_slot):
     return [dict(row,class_slot=hex(class_slot)) for row in rows],sorted(objc.gaps)
 
 
-def inventory(data, image, scope):
+def inventory(data, image, scope, *, diagnostics=None):
     parsed = thin(data)
     names = {s["name"] for s in parsed["sections"]}
     lists = CLASS_LISTS if scope == "ivars" else (
@@ -482,11 +559,23 @@ def inventory(data, image, scope):
     try:
         # Resolve only metadata-relevant pages. An unrelated image-wide fixup
         # inventory cap must not hide classes, methods or selector references.
-        objc = ObjCImage(data,image,parsed,scoped=True,pointer_limit=MAX_INVENTORY_POINTERS)
+        objc = ObjCImage(data,image,parsed,scoped=True,pointer_limit=MAX_INVENTORY_POINTERS,
+                         discovery=scope=="classes")
     except ValueError:
+        if scope == "classes" and diagnostics is not None:
+            diagnostics.append("Class discovery malformed_metadata: invalid_macho_mapping.")
         return [], ["invalid_macho_mapping"]
     classes = objc.classes()
     if scope=="classes":
+        if diagnostics is not None:
+            diagnostics.extend(objc.discovery_diagnostics())
+            if objc.gaps and objc.first_class_slot is not None:
+                slot = hex(objc.first_class_slot)
+                diagnostics.append(f"Mapped class-list slot {slot} is available; its mapping alone does not prove "
+                                   'a matching class name. '
+                                   f"Try objc methods --class-slot {slot} with the same --project, --image and --arch. "
+                                   'This separately bounded query covers class/metaclass declarations only; '
+                                   'it can still be partial if the slot evidence is unsupported or malformed.')
         return classes,sorted(objc.gaps)
     if scope=="properties":
         rows = objc.property_rows(classes)

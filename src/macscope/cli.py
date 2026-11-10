@@ -1762,13 +1762,14 @@ def execute_command(a, address_selection=None):
         return fixup_collection(a,image,metadata.verified_slice(p,image),p.project_id)
     if a.command=='objc':
         raw = metadata.verified_slice(p,image)
+        diagnostics = []
         filters = {'action':a.action,'name_contains':a.name_contains}
         if getattr(a,'class_slot',None) is not None:
             slot = metadata.hex_address(a.class_slot,'Objective-C class list slot')
             records,gaps = objc.selected_methods(raw,image,slot)
             filters['class_slot'] = hex(slot)
         else:
-            records,gaps = objc.inventory(raw,image,a.action)
+            records,gaps = objc.inventory(raw,image,a.action,diagnostics=diagnostics)
         records=[dict(row,image_id=image['image_id'],arch=image['arch'])
                  for row in records if a.name_contains is None or a.name_contains in (row['name'] or '')]
         records.sort(key=lambda row:(row['name'] or '',row.get('class_name') or '',
@@ -1779,7 +1780,29 @@ def execute_command(a, address_selection=None):
         if gaps:
             reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
             cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
-        return envelope(command,rows,status='partial' if gaps else 'complete',cov=cov)
+        if a.action == 'classes':
+            diagnostics.append('Scope: declarations in the selected image class lists only; excludes categories, '
+                               'inherited methods, other images and runtime-generated classes.')
+            if gaps:
+                diagnostics.append('Class discovery is incomplete. An empty filtered result does not prove absence. '
+                                   'Pagination only pages captured rows; it cannot bypass exhausted discovery.')
+                if rows:
+                    slot = rows[0]['list_entry_va']
+                    diagnostics.append(f"For verified class-list slot {slot}, use objc methods --class-slot {slot} "
+                                       f"--image {image['image_id']} --arch {image['arch']} with the same --project. "
+                                       'This covers selected class/metaclass declarations, not categories or inherited methods.')
+                else:
+                    diagnostics.append(f"Manual fallback: pin the same binary SHA-256 {image['sha256']} and "
+                                       f"architecture {image['arch']}; inspect otool -arch {image['arch']} -ov BINARY "
+                                       f"or xcrun dyld_info -arch {image['arch']} -objc BINARY. Verify an aligned "
+                                       '__objc_classlist/__objc_nlclslist slot and method entry in that same slice, '
+                                       'then use objc methods --class-slot SLOT with the same --project, --image and --arch. '
+                                       'A class-object address is not a class-list slot. No Apple tool was run.')
+            elif not records:
+                diagnostics.append('No matching class declarations in the completely visited selected class-list scope.')
+        elif gaps:
+            diagnostics.extend(gaps)
+        return envelope(command,rows,status='partial' if gaps else 'complete',cov=cov,diagnostics=diagnostics)
     if a.command in metadata.PREFLIGHT_LISTS:
         return metadata_collection(a,p,image)
     if a.command == 'exports' and a.source == 'dyld':

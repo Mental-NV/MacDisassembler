@@ -1,10 +1,13 @@
 """Objective-C declarations resolve through bounded file mappings."""
+import hashlib
+import json
 import struct
 import unittest
 from unittest.mock import patch
 
 from macscope import cli, dyld, engine, import_state, macho, objc, storage
 from macscope.errors import Error
+from macscope.schema import validate_envelope
 from test_core import TemporaryCase
 from test_macho import command, image
 
@@ -63,19 +66,24 @@ def property_fixture(*, image_flags=0x40, image_version=0, protocol_size=96, bad
     return bytes(data)
 
 
-def chained_fixture(*, prefix_fixups=1):
+def chained_fixture(*, prefix_fixups=1, extra_class=False):
     """Project-owned bytes with unrelated relocations before the ObjC page."""
     source = fixture(relative=True)
     bias = ((0x400+prefix_fixups*8+4095)//4096)*4096
-    payload_offset = bias+4096
+    payload_offset = bias+(8192 if extra_class else 4096)
     pages = payload_offset//4096
     sections = b"".join(struct.pack("<16s16s2Q8I",name,b"__TEXT",BASE+bias+offset,
                                    8,bias+offset,3,0,0,0,0,0,0)
-                        for name,offset in ((b"__objc_classlist",0x300),(b"__objc_selrefs",0x308)))
+                        for name,offset in ((b"__objc_classlist",0x300),
+                                            (b"__objc_nlclslist" if extra_class else b"__objc_selrefs",0x308)))
     page_sites = {}
     values = {0x400+index*8:0x80 for index in range(prefix_fixups)}
     for offset in (0x300,0x308,0x420,0x458,0x460):
         values[bias+offset] = struct.unpack_from("<Q",source,offset)[0]-BASE+bias
+    if extra_class:
+        values[bias+0x308] = bias+4096+0x400
+        for offset in (0x420,0x458,0x460):
+            values[bias+4096+offset] = struct.unpack_from('<Q',source,offset)[0]-BASE+bias+4096
     for site in sorted(values):
         page_sites.setdefault(site//4096,[]).append(site)
     starts = [page_sites[page][0]%4096 if page in page_sites else 0xFFFF for page in range(pages)]
@@ -88,6 +96,8 @@ def chained_fixture(*, prefix_fixups=1):
                                     command(0x80000034,struct.pack("<2I",payload_offset,len(payload)))]))
     data.extend(bytes(length-len(data)))
     data[bias+0x300:bias+0x800] = source[0x300:0x800]
+    if extra_class:
+        data[bias+4096+0x300:bias+4096+0x800] = source[0x300:0x800]
     data[payload_offset:] = payload
     for sites in page_sites.values():
         for index,site in enumerate(sites):
@@ -96,7 +106,172 @@ def chained_fixture(*, prefix_fixups=1):
     return bytes(data),bias
 
 
+def class_list_fixture(addresses):
+    """Move the owned raw-pointer list so slot-count tests need no mock parser."""
+    data = bytearray(fixture())
+    data.extend(bytes(0x1000-len(data)))
+    data.extend(struct.pack('<'+'Q'*len(addresses),*addresses))
+    struct.pack_into('<Q',data,64,(len(data)+4095)//4096*4096)  # segment vmsize
+    struct.pack_into('<Q',data,80,len(data))  # segment filesize
+    struct.pack_into('<QQI',data,136,BASE+0x1000,len(addresses)*8,0x1000)
+    return bytes(data)
+
+
+def legacy_objc_fixture(stream,kind='rebase'):
+    data = bytearray(fixture())
+    count,size = struct.unpack_from('<II',data,16)
+    fields = [0]*10
+    index = {'rebase':0,'bind':2}[kind]
+    fields[index:index+2] = [0x780,len(stream)]
+    extra = command(0x80000022,struct.pack('<10I',*fields))
+    data[32+size:32+size+len(extra)] = extra
+    struct.pack_into('<II',data,16,count+1,size+len(extra))
+    data[0x780:0x780+len(stream)] = stream
+    return bytes(data)
+
+
+def overlapping_zero_fill(binary,address,*,size=1):
+    data = bytearray(binary)
+    count,command_size = struct.unpack_from('<II',data,16)
+    extra = command(0x19,struct.pack('<16s4Q4I',b'__BSS',address,size,0,0,3,3,0,0))
+    data[32+command_size:32+command_size+len(extra)] = extra
+    struct.pack_into('<II',data,16,count+1,command_size+len(extra))
+    return bytes(data)
+
+
+def metadata_mapping_fixtures():
+    yield 'raw',fixture(),0
+    yield 'legacy',legacy_objc_fixture(bytes.fromhex('11 20 80 06 51 20 a0 08 51 20 d8 08 51 00')),0
+    binary,bias = chained_fixture()
+    yield 'chained',binary,bias
+
+
 class ObjCCoverageTests(TemporaryCase):
+    def stage(self,binary,name='workspace',project=None):
+        project = project or self.project(name)
+        source = macho.inspect_bytes(binary)
+        image_data = dict(source['slices'][0],artifact_sha256=source['artifact_sha256'],input_name='owned')
+        import_state.stage_inputs(project,image_data,binary)
+        with project.db(False) as db:
+            db.execute('INSERT INTO images(id,arch,metadata,imported) VALUES(?,?,?,1)',
+                       (image_data['image_id'],image_data['arch'],storage.canonical(image_data).decode()))
+        return project,image_data
+
+    def query(self,project,*args):
+        return cli.execute(cli.parser().parse_args(['objc','classes','--project',str(project.path),*args]))
+
+    def test_true_zero_and_empty_partial_have_distinct_diagnostics(self):
+        binary,_ = chained_fixture()
+        project,image_data = self.stage(binary)
+        result = self.query(project,'--name-contains','Absent')
+        validate_envelope(result)
+        self.assertEqual((result['status'],result['coverage']['known_total'],result['data']),('complete',0,[]))
+        self.assertIn('completely visited',' '.join(result['diagnostics']))
+        with patch.object(objc,'MAX_CLASS_POINTERS',0):
+            partial = self.query(project,'--name-contains','Absent')
+        validate_envelope(partial)
+        messages = ' '.join(partial['diagnostics'])
+        self.assertEqual((partial['status'],partial['coverage']['known_total'],partial['data']),('partial',None,[]))
+        self.assertNotIn('invalid_class_record',partial['coverage']['truncation_reason'])
+        for text in ('does not prove absence','cannot bypass','exhausted_work','unique_pointer_sites=0/0',
+                     image_data['sha256'],'otool -arch arm64 -ov','xcrun dyld_info -arch arm64 -objc',
+                     'A class-object address is not a class-list slot',
+                     'Mapped class-list slot 0x100001300 is available; its mapping alone does not prove',
+                     'objc methods --class-slot 0x100001300'):
+            self.assertIn(text,messages)
+        self.assertIn('does not prove absence',cli.render(partial,'text').decode())
+        self.assertEqual(json.loads(cli.render(partial,'json')),partial)
+
+    def test_partial_preserves_match_and_suggests_real_slot_not_class_object(self):
+        project,_ = self.stage(class_list_fixture([BASE+0x400,BASE+0xDEAD]))
+        result = self.query(project,'--name-contains','Owned')
+        self.assertEqual((result['status'],result['coverage']['known_total']),('partial',None))
+        self.assertEqual([r['name'] for r in result['data']],['OwnedProbe'])
+        messages = ' '.join(result['diagnostics'])
+        self.assertIn('objc methods --class-slot 0x100001000',messages)
+        self.assertNotIn('objc methods --class-slot 0x100000400',messages)
+        self.assertIn('class/metaclass declarations',messages)
+        self.assertIn('malformed_metadata',messages)
+        empty = self.query(project,'--name-contains','Absent')
+        self.assertEqual(empty['data'],[])
+        self.assertIn('objc methods --class-slot 0x100001000',' '.join(empty['diagnostics']))
+        self.assertIn('does not prove a matching class name',' '.join(empty['diagnostics']))
+
+    def test_partial_pagination_and_changed_filter_cursor(self):
+        data = bytearray(class_list_fixture([BASE+0x400,BASE+0x800,BASE+0xDEAD]))
+        data[0x800:0x828] = data[0x400:0x428]
+        project,_ = self.stage(bytes(data))
+        first = self.query(project,'--limit','1')
+        cursor = first['coverage']['next_cursor']
+        self.assertIsNotNone(cursor)
+        second = self.query(project,'--limit','1','--cursor',cursor)
+        again = self.query(project,'--limit','1','--cursor',cursor)
+        self.assertEqual(second,again)
+        all_rows = self.query(project)['data']
+        self.assertEqual(first['data']+second['data'],all_rows)
+        self.assertIsNone(second['coverage']['next_cursor'])
+        self.assertIsNone(second['coverage']['known_total'])
+        with self.assertRaises(Error) as caught:
+            self.query(project,'--name-contains','Owned','--cursor',cursor)
+        self.assertEqual(caught.exception.code,'stale_cursor')
+
+    def test_metadata_query_is_read_only_and_does_not_launch_tools(self):
+        binary,_ = chained_fixture()
+        project,_ = self.stage(binary)
+        def fingerprints():
+            return {str(p.relative_to(project.path)):hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in project.path.rglob('*') if p.is_file()}
+        before = fingerprints()
+        with patch.object(engine,'dependencies',side_effect=AssertionError('engine probe')), \
+             patch('subprocess.Popen',side_effect=AssertionError('subprocess launch')):
+            self.query(project,'--name-contains','Owned')
+        self.assertEqual(fingerprints(),before)
+
+    def test_image_arch_ambiguity_and_changed_image_cursor(self):
+        data = bytearray(class_list_fixture([BASE+0x400,BASE+0x800]))
+        data[0x800:0x828] = data[0x400:0x428]
+        project,arm = self.stage(bytes(data))
+        struct.pack_into('<II',data,4,0x01000007,3)  # Routing test, not the A1 native fixture.
+        _,x86 = self.stage(bytes(data),project=project)
+        self.error('image_selector',self.query,project)
+        first = self.query(project,'--arch','arm64','--limit','1')
+        self.assertEqual(first['data'][0]['image_id'],arm['image_id'])
+        self.assertEqual(self.query(project,'--image',x86['image_id'])['data'][0]['arch'],'x86_64')
+        self.error('stale_cursor',self.query,project,'--arch','x86_64','--cursor',first['coverage']['next_cursor'])
+        data[0x500:0x50B] = b'OtherProbe\0'
+        self.stage(bytes(data),project=project)
+        self.error('image_selector',self.query,project,'--arch','x86_64')
+
+    def test_class_slot_fallback_cannot_bypass_ambiguous_required_bytes(self):
+        for kind,binary,bias in metadata_mapping_fixtures():
+            # Include a string suffix and its NUL, not just its first byte.
+            for offset in (0x300,0x420,0x440,0x448,0x500,0x505,0x50A):
+                with self.subTest(kind=kind,offset=hex(offset)):
+                    data = overlapping_zero_fill(binary,BASE+bias+offset)
+                    project,_ = self.stage(data,name=f'{kind}-{offset}')
+                    classes = self.query(project,'--name-contains','OwnedProbe')
+                    methods = cli.execute(cli.parser().parse_args([
+                        'objc','methods','--project',str(project.path),'--class-slot',hex(BASE+bias+0x300)]))
+                    for response in (classes,methods):
+                        validate_envelope(response)
+                        self.assertEqual((response['status'],response['data']),('partial',[]))
+                        self.assertIsNone(response['coverage']['known_total'])
+
+    def test_ambiguous_optional_superclass_retains_verified_name_and_partial_methods(self):
+        for kind,binary,bias in metadata_mapping_fixtures():
+            data = overlapping_zero_fill(binary,BASE+bias+0x408)
+            project,_ = self.stage(data,name=kind)
+            classes = self.query(project)
+            methods = cli.execute(cli.parser().parse_args([
+                'objc','methods','--project',str(project.path),'--class-slot',hex(BASE+bias+0x300)]))
+            self.assertEqual(classes['data'][0]['name'],'OwnedProbe')
+            self.assertEqual(classes['data'][0]['superclass'],{'origin':'unresolved'})
+            self.assertEqual(methods['data'][0]['name'],'probe')
+            for response in (classes,methods):
+                self.assertEqual(response['status'],'partial')
+                self.assertIsNone(response['coverage']['known_total'])
+                self.assertIn('unresolved_superclass',response['coverage']['truncation_reason'])
+
     def test_cli_reports_scoped_success_and_budget_failure_without_engine(self):
         project = self.project()
         binary,_ = chained_fixture()
@@ -113,12 +288,12 @@ class ObjCCoverageTests(TemporaryCase):
             self.assertEqual(result["status"],"complete")
             self.assertEqual(result["data"][0]["name"],"OwnedProbe")
             self.assertEqual(result["coverage"]["known_total"],1)
-            with patch.object(objc,"MAX_INVENTORY_POINTERS",0):
+            with patch.object(objc,"MAX_CLASS_POINTERS",0):
                 result = cli.execute(args)
             self.assertEqual(result["status"],"partial")
             self.assertEqual(result["coverage"]["status"],"partial")
             self.assertIsNone(result["coverage"]["known_total"])
-            self.assertIn("metadata_pointer_limit",result["coverage"]["truncation_reason"])
+            self.assertIn("class_pointer_limit",result["coverage"]["truncation_reason"])
 
 
 class ObjCMetadataTests(unittest.TestCase):
@@ -240,7 +415,8 @@ class ObjCMetadataTests(unittest.TestCase):
 
     def test_scoped_limits_remain_explicit_partial_diagnostics(self):
         binary,_ = chained_fixture()
-        for limit,reason in (("MAX_INVENTORY_POINTERS","metadata_pointer_limit"),
+        for limit,reason in (("MAX_CLASS_POINTERS","class_pointer_limit"),
+                             ("MAX_CLASS_CHAIN_NODES","fixups_fixup_work_limit"),
                              ("MAX_SCOPED_PAGES","fixup_page_limit"),
                              ("MAX_SCOPED_FIXUPS","fixup_cache_limit")):
             with self.subTest(limit=limit), patch.object(objc,limit,0):
@@ -252,6 +428,220 @@ class ObjCMetadataTests(unittest.TestCase):
             rows,gaps = objc.selected_methods(binary,{"offset":"0x0"},BASE+bias+0x300)
             self.assertEqual(rows,[])
             self.assertIn("selected_pointer_limit",gaps)
+
+    def test_class_budget_does_not_reduce_other_inventory_budgets(self):
+        binary,_ = chained_fixture()
+        with patch.object(objc,'MAX_CLASS_POINTERS',0), patch.object(objc,'MAX_CLASS_CHAIN_NODES',0):
+            for scope in ('methods','selectors'):
+                rows,gaps = objc.inventory(binary,{'offset':'0x0'},scope)
+                self.assertTrue(rows)
+                self.assertEqual(gaps,[])
+        with patch.object(objc,'MAX_INVENTORY_POINTERS',0):
+            rows,gaps = objc.inventory(binary,{'offset':'0x0'},'methods')
+            self.assertEqual(rows,[])
+            self.assertIn('metadata_pointer_limit',gaps)
+
+    def test_slot_and_unique_pointer_budgets_share_repeated_class_scope(self):
+        binary = class_list_fixture([BASE+0x400]*2049)
+        view = objc.ObjCImage(binary,{'offset':'0x0'},macho.thin(binary),scoped=True,discovery=True)
+        rows = view.classes()
+        self.assertEqual((len(rows),view.class_slots,len(view.selected_sites)),(1,2048,2051))
+        self.assertEqual(view.gaps,{'class_limit'})
+        self.assertEqual(view.chain_work.used,0)
+        self.assertNotIn('invalid_class_record',view.gaps)
+
+    def test_budget_after_valid_match_keeps_name_when_superclass_unavailable(self):
+        binary,_ = chained_fixture()
+        with patch.object(objc,'MAX_CLASS_POINTERS',3):
+            diagnostics=[]
+            rows,gaps = objc.inventory(binary,{'offset':'0x0'},'classes',diagnostics=diagnostics)
+        self.assertEqual([r['name'] for r in rows],['OwnedProbe'])
+        self.assertEqual(rows[0]['superclass'],{'origin':'unresolved'})
+        self.assertEqual(gaps,['class_pointer_limit','unresolved_superclass'])
+        self.assertIn('unique_pointer_sites=3/3',' '.join(diagnostics))
+
+    def test_cache_hits_do_not_spend_chain_work(self):
+        binary,bias = chained_fixture()
+        view = objc.ObjCImage(binary,{'offset':'0x0'},macho.thin(binary),scoped=True,discovery=True)
+        for offset in (0x300,0x308,0x420,0x458,0x460,0x408,0x300):
+            view.relocation(BASE+bias+offset)
+        self.assertEqual((view.chain_work.used,view.page_queries,len(view.selected_sites)),(5,1,6))
+
+    def test_evicted_page_redecode_is_charged_but_retained_slot_is_not(self):
+        binary,bias = chained_fixture(prefix_fixups=2)
+        view = objc.ObjCImage(binary,{'offset':'0x0'},macho.thin(binary),scoped=True,discovery=True)
+        with patch.object(objc,'MAX_SCOPED_FIXUPS',5):
+            view.relocation(BASE+0x400)
+            view.relocation(BASE+bias+0x300)
+            self.assertEqual(view.chain_work.used,7)
+            view.relocation(BASE+0x400)
+            self.assertEqual(view.chain_work.used,7)
+            view.relocation(BASE+0x408)
+            self.assertEqual((view.chain_work.used,view.page_queries),(9,3))
+            self.assertEqual(view.cached_fixups,2)
+
+    def test_failed_page_work_is_counted_without_publishing_any_rows(self):
+        binary,bias = chained_fixture()
+        data = bytearray(binary)
+        struct.pack_into('<Q',data,bias+0x460,1<<44)
+        view = objc.ObjCImage(bytes(data),{'offset':'0x0'},macho.thin(data),scoped=True,discovery=True)
+        with self.assertRaises(objc.ResolutionFailure):
+            view.relocation(BASE+bias+0x300)
+        self.assertEqual((view.chain_work.used,view.cached_fixups),(5,0))
+        with self.assertRaises(objc.ResolutionFailure):
+            view.relocation(BASE+bias+0x300)
+        self.assertEqual(view.chain_work.used,5)
+        with self.assertRaises(objc.ResolutionFailure):
+            view.relocation(BASE+bias+0x308)
+        self.assertEqual(view.chain_work.used,10)
+
+    def test_work_limit_stops_inside_page_without_relabeling_as_corruption(self):
+        binary,bias = chained_fixture()
+        with patch.object(objc,'MAX_CLASS_CHAIN_NODES',4), \
+             patch.object(dyld,'ordinary_pointer',wraps=dyld.ordinary_pointer) as decode:
+            view = objc.ObjCImage(binary,{'offset':'0x0'},macho.thin(binary),scoped=True,discovery=True)
+            self.assertEqual(view.classes(),[])
+        self.assertEqual((view.chain_work.used,decode.call_count,view.cached_fixups),(4,4,0))
+        self.assertEqual(view.gaps,{'fixups_fixup_work_limit'})
+
+    def test_chain_work_exhaustion_after_verified_class_keeps_the_match(self):
+        binary,_ = chained_fixture(extra_class=True)
+        with patch.object(objc,'MAX_CLASS_CHAIN_NODES',5):
+            view = objc.ObjCImage(binary,{'offset':'0x0'},macho.thin(binary),scoped=True,discovery=True)
+            rows = view.classes()
+        self.assertEqual([row['name'] for row in rows],['OwnedProbe'])
+        self.assertEqual(view.chain_work.used,5)
+        self.assertEqual(view.class_slots,2)
+        self.assertEqual(view.gaps,{'fixups_fixup_work_limit'})
+
+    def test_production_chain_budget_bounds_repeated_failed_decodes(self):
+        binary,_ = chained_fixture(prefix_fixups=384)
+        data = bytearray(binary)
+        # Last node on the first page fails. Each new requested site must
+        # validate that page again, and all failed work counts cumulatively.
+        struct.pack_into('<Q',data,0xFF8,1<<44)
+        view = objc.ObjCImage(bytes(data),{'offset':'0x0'},macho.thin(data),scoped=True,discovery=True)
+        with patch.object(dyld,'ordinary_pointer',wraps=dyld.ordinary_pointer) as decode:
+            for offset in range(0,3000,4):
+                with self.assertRaises(objc.ResolutionFailure):
+                    view.relocation(BASE+offset)
+                if 'fixups_fixup_work_limit' in view.gaps:
+                    break
+        self.assertEqual((view.chain_work.limit,view.chain_work.used,decode.call_count),(262144,262144,262144))
+        self.assertEqual(view.cached_fixups,0)
+        self.assertLess(view.page_queries,objc.MAX_SCOPED_PAGES)
+
+    def test_external_class_binding_is_missing_local_evidence_not_corrupt_metadata(self):
+        binary,bias = chained_fixture()
+        data = bytearray(binary)
+        payload = bias+4096
+        table = len(data)-payload
+        data.extend(struct.pack('<I',0)+b'_OBJC_CLASS_$_External\0')
+        struct.pack_into('<3I',data,payload+8,table,table+4,1)
+        struct.pack_into('<I',data,276,len(data)-payload)
+        struct.pack_into('<Q',data,80,len(data))
+        value, = struct.unpack_from('<Q',data,bias+0x300)
+        struct.pack_into('<Q',data,bias+0x300,(1<<63)|(value&(((1<<12)-1)<<51)))
+        rows,gaps = objc.inventory(bytes(data),{'offset':'0x0'},'classes')
+        self.assertEqual((rows,gaps),([],['external_class_pointer']))
+
+    def test_late_class_is_retained_until_the_shared_slot_ceiling(self):
+        for count,expected in ((2047,2),(2048,1)):
+            data = bytearray(class_list_fixture([BASE+0x400]*count+[BASE+0x800]))
+            data[0x800:0x828] = data[0x400:0x428]
+            rows,gaps = objc.inventory(bytes(data),{'offset':'0x0'},'classes')
+            self.assertEqual(len(rows),expected)
+            self.assertEqual(gaps,[] if expected==2 else ['class_limit'])
+
+    def test_unsupported_layout_is_not_labeled_invalid_class(self):
+        binary,bias = chained_fixture()
+        for offset,fmt,value in ((bias+4096+46,'H',7),(bias+4096,'I',1)):
+            data = bytearray(binary)
+            struct.pack_into('<'+fmt,data,offset,value)
+            rows,gaps = objc.inventory(bytes(data),{'offset':'0x0'},'classes')
+            self.assertEqual(rows,[])
+            self.assertNotIn('invalid_class_record',gaps)
+            self.assertTrue(all(objc.diagnostic_kind(gap)=='unsupported_layout' for gap in gaps),gaps)
+
+    def test_misaligned_and_non_file_backed_slots_fail_closed(self):
+        for address,offset in ((BASE+0x301,0x301),(BASE+0x900,0x900)):
+            data = bytearray(fixture())
+            struct.pack_into('<Q',data,136,address)
+            struct.pack_into('<I',data,152,offset)
+            # Test the metadata layer with a parsed section contract; the public
+            # Mach-O parser may reject these before Objective-C discovery.
+            parsed = macho.thin(fixture())
+            parsed['sections'][0].update(va=hex(address),file_offset=hex(offset))
+            view = objc.ObjCImage(bytes(data),{'offset':'0x0'},parsed,discovery=True)
+            self.assertEqual(view.classes(),[])
+            self.assertIn('invalid_pointer_section',view.gaps)
+
+    def test_raw_class_discovery_rejects_overlapping_unbacked_mappings(self):
+        for offset in (0x300,0x420,0x458):
+            data = bytearray(fixture())
+            count,size = struct.unpack_from('<II',data,16)
+            extra = command(0x19,struct.pack('<16s4Q4I',b'__BSS',BASE+offset,8,0,0,3,3,0,0))
+            data[32+size:32+size+len(extra)] = extra
+            struct.pack_into('<II',data,16,count+1,size+len(extra))
+            rows,gaps = objc.inventory(bytes(data),{'offset':'0x0'},'classes')
+            self.assertEqual(rows,[])
+            self.assertIn('fixups_fixup_address_unmapped',gaps)
+
+    def test_selected_methods_validate_all_consumed_mapping_ranges(self):
+        for kind,binary,bias in metadata_mapping_fixtures():
+            # Method header, pointer/relative record, selector and type strings
+            # including their terminators, and the executable entrypoint.
+            for offset in (0x480,0x488,0x520,0x523,0x525,0x540,0x544,0x547,0x600):
+                with self.subTest(kind=kind,offset=hex(offset)):
+                    data = overlapping_zero_fill(binary,BASE+bias+offset)
+                    classes,gaps = objc.inventory(data,{'offset':'0x0'},'classes')
+                    self.assertEqual(([row['name'] for row in classes],gaps),(['OwnedProbe'],[]))
+                    methods,gaps = objc.selected_methods(data,{'offset':'0x0'},BASE+bias+0x300)
+                    self.assertEqual(methods,[])
+                    self.assertTrue(gaps)
+
+    def test_unrelated_or_empty_virtual_overlap_does_not_hide_metadata(self):
+        for kind,binary,bias in metadata_mapping_fixtures():
+            for offset,size in ((0x700,8),(0x440,0),(0x50B,1)):
+                with self.subTest(kind=kind,offset=hex(offset),size=size):
+                    data = overlapping_zero_fill(binary,BASE+bias+offset,size=size)
+                    classes,gaps = objc.inventory(data,{'offset':'0x0'},'classes')
+                    self.assertEqual(([row['name'] for row in classes],gaps),(['OwnedProbe'],[]))
+                    methods,gaps = objc.selected_methods(data,{'offset':'0x0'},BASE+bias+0x300)
+                    self.assertEqual(([row['name'] for row in methods],gaps),(['probe'],[]))
+
+    def test_late_ambiguous_class_slot_does_not_discard_earlier_verified_class(self):
+        binary = class_list_fixture([BASE+0x400,BASE+0x400])
+        data = overlapping_zero_fill(binary,BASE+0x1008)
+        rows,gaps = objc.inventory(data,{'offset':'0x0'},'classes')
+        self.assertEqual([row['name'] for row in rows],['OwnedProbe'])
+        self.assertIn('fixups_fixup_address_unmapped',gaps)
+
+    def test_legacy_complete_and_truncated_evidence_keep_their_scope(self):
+        binary = legacy_objc_fixture(bytes.fromhex('11 20 80 06 51 20 a0 08 51 20 d8 08 51 00'))
+        rows,gaps = objc.inventory(binary,{'offset':'0x0'},'classes')
+        self.assertEqual(([r['name'] for r in rows],gaps),(['OwnedProbe'],[]))
+        methods,gaps = objc.selected_methods(binary,{'offset':'0x0'},BASE+0x300)
+        self.assertEqual(([r['name'] for r in methods],gaps),(['probe'],[]))
+        with patch.object(dyld,'MAX_FIXUPS',1):
+            rows,gaps = objc.inventory(binary,{'offset':'0x0'},'classes')
+        self.assertEqual(rows,[])
+        self.assertIn('fixups_fixup_limit',gaps)
+        self.assertIn('incomplete_relocation_evidence',gaps)
+        self.assertNotIn('invalid_class_record',gaps)
+
+    def test_unsupported_legacy_operations_are_not_labeled_malformed(self):
+        for kind,stream,reason in (
+                ('bind',b'\xd0\0','fixups_bind_opcode_0xd0'),
+                ('rebase',bytes.fromhex('12 20 80 06 51 00'),'fixups_rebase_type_2')):
+            diagnostics=[]
+            rows,gaps = objc.inventory(legacy_objc_fixture(stream,kind),{'offset':'0x0'},'classes',
+                                       diagnostics=diagnostics)
+            self.assertEqual(rows,[])
+            self.assertIn(reason,gaps)
+            self.assertEqual(objc.diagnostic_kind(reason),'unsupported_layout')
+            self.assertIn('unsupported_layout',' '.join(diagnostics))
+            self.assertNotIn('malformed_metadata',' '.join(diagnostics))
 
     def test_selector_declaration_and_reference_are_separate(self):
         rows,gaps = self.inventory("selectors",relative=True)
