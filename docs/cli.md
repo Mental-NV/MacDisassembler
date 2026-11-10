@@ -402,6 +402,28 @@ preflight is **not** a complete Mach-O/dyld parser or a security proof.
 Select the ordinary slice explicitly when a universal input also contains
 arm64e. An all-slices import requires every slice to support engine import.
 
+### Bundle resources
+
+`resources list APP` lists physical regular non-image files across the
+bundle, including resources inside versioned frameworks. Each row includes
+the bundle name, relative path, inferred type, size, SHA-256 when available,
+and inventory ID. The query reads files in place and works without Ghidra.
+
+Use `--type TYPE` to match a case-insensitive filename extension without
+the dot, or `--type file` for extensionless resources. Filtering happens
+before hashing. `--limit` and `--cursor` page by relative path within the
+selected inventory and filter. JSONL emits an envelope for each row. The
+same scan and hash bounds apply as for `bundle list`. An incomplete scan
+reports its coverage gaps and exits 6.
+
+The installed CLI matched all six resource sizes and hashes in an owned
+app and framework and reproduced the three text rows across paginated
+JSON and JSONL. All four arm64 and x86_64 app and framework slices
+completed full headless Ghidra analysis. The resource inventory and bundle
+contents matched afterward. A 257 MiB resource made the unfiltered scan
+partial, and the text-only scan completed. The validation report SHA-256 is
+`de71ca38df8dc852b1125234ba6e2f5605900d9eade1b73c6b5e17024790502f`.
+
 ## Persistence, identity and freshness
 
 `headers`, `segments`, and `sections` query imported Mach-O metadata and

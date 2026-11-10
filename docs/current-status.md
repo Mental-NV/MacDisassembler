@@ -124,6 +124,10 @@ collections exceed documented bounds despite successful pseudocode output.
   clear. The saved Programs and unassisted exports matched afterward.
 - [x] Inventory physical bundle images and resources with hashes and
   resumable pages.
+- [x] Verify [`resources list`](cli.md#bundle-resources) on an owned app
+  and framework. Six sizes and hashes matched. Type filtering, cursor
+  binding, JSONL and partial hash coverage passed. The inventory reproduced
+  after all four arm64 and x86_64 slices completed full headless analysis.
 - [x] Import explicit embedded images and resolve bounded in-bundle framework
   links. The owned arm64 main and x86_64 helper passed real Ghidra import.
 - [x] Query imported headers, segments, sections and file-backed bytes,

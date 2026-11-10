@@ -84,6 +84,10 @@ def parser():
     s=sub.add_parser('bundle');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('list');s.add_argument('path');common(s);pagination(s)
     s.add_argument('--kind',choices=('all','images','resources'),default='all')
+    s=sub.add_parser('resources');ss=s.add_subparsers(dest='action',required=True)
+    s=ss.add_parser('list');s.add_argument('path');common(s);pagination(s)
+    s.add_argument('--type',dest='resource_type',type=str.lower,
+                   help='Match a filename extension without the dot, or file for extensionless resources')
     s=sub.add_parser('project');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('create');s.add_argument('path');common(s)
     s=sub.add_parser('import');s.add_argument('input');s.add_argument('--project',required=True);s.add_argument('--arch',choices=('arm64','x86_64','all'));common(s);budgets(s)
@@ -238,7 +242,7 @@ def output_relative_to(target, protected):
 
 def protect_output(args, target):
     inputs = [getattr(args, name, None) for name in ('input', 'left', 'right')]
-    if args.command == 'bundle' or (args.command == 'annotations' and args.action == 'import'):
+    if args.command in ('bundle','resources') or (args.command == 'annotations' and args.action == 'import'):
         inputs.append(args.path)
     for source in inputs:
         if source is not None and output_relative_to(target, source) is not None:
@@ -1060,15 +1064,26 @@ def execute(a):
         return envelope(command,data,status='partial' if gaps else 'complete',
                         cov=coverage('Mach-O preflight',len(data['slices']),len(data['slices']),bool(gaps),
                                      reason='loader_metadata_incomplete' if gaps else None),diagnostics=gaps)
-    if a.command=='bundle':
-        inventory,gaps=bundle.inventory(a.path,a.kind)
+    if a.command in ('bundle','resources'):
+        resource_list = a.command == 'resources'
+        kind = 'resources' if resource_list else a.kind
+        resource_type = a.resource_type if resource_list else None
+        inventory,gaps=bundle.inventory(a.path,kind,resource_type=resource_type)
         inventory_id=identity({'inventory':inventory,'gaps':gaps})
+        filters = {'kind':kind}
+        if resource_list:
+            filters.update(command=command,resource_type=resource_type)
         rows,cov=page(inventory['records'],a,inventory_id,identity(os.path.abspath(a.path)),
-                      {'kind':a.kind},order='bundle-relative-path/v1')
-        cov['scope']='physical entries in selected bundle: '+a.kind
+                      filters,order='bundle-relative-path/v1')
+        cov['scope']='physical entries in selected bundle: '+kind
+        if resource_type is not None:
+            cov['scope'] += ' of type '+resource_type
         if gaps:
             reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
             cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+        if resource_list:
+            data = [dict(row,bundle_name=inventory['bundle_name'],inventory_id=inventory_id) for row in rows]
+            return envelope(command,data,status='partial' if gaps else 'complete',cov=cov,diagnostics=gaps)
         data=dict(inventory,inventory_id=inventory_id,records=rows)
         return envelope(command,data,status='partial' if gaps else 'complete',cov=cov)
     if a.command=='demangle':

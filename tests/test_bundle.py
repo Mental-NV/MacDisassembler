@@ -1,5 +1,6 @@
 """Bundle inventory works without opening an analyzed executable."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -32,6 +33,9 @@ class BundleInventoryTests(unittest.TestCase):
     def run_inventory(self, *args):
         return cli.execute(cli.parser().parse_args(["bundle", "list", str(self.app), *args]))
 
+    def run_resources(self, *args):
+        return cli.execute(cli.parser().parse_args(["resources", "list", str(self.app), *args]))
+
     def test_inventory_hashes_images_and_resources_and_labels_main(self):
         framework = self.contents / "Frameworks" / "Test.framework"
         real = framework / "Versions" / "A" / "Test"
@@ -49,6 +53,53 @@ class BundleInventoryTests(unittest.TestCase):
         resources = self.run_inventory("--kind", "resources")["data"]["records"]
         self.assertEqual(resources[-1]["resource_type"], "txt")
         self.assertEqual(resources[-1]["sha256"], hashlib.sha256(b"hello").hexdigest())
+
+    def test_resource_type_filter_hashes_matching_assets_only(self):
+        (self.assets / "Earlier.bin").write_bytes(b"unrelated resource")
+        (self.assets / "Helper.txt").write_bytes(image())
+        (self.assets / "Note.TXT").write_bytes(b"!")
+        os.mkfifo(self.assets / "Pipe.txt")
+        (self.assets / "Alias.txt").symlink_to(self.asset)
+        with patch.object(bundle, "MAX_HASH_BYTES", 6), \
+             patch.object(engine, "dependencies", side_effect=AssertionError("resource query probed Ghidra")):
+            result = self.run_resources("--type", "TXT")
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["coverage"]["known_total"], 2)
+        self.assertEqual([(row["relative_path"], row["resource_type"], row["size"], row["sha256"])
+                          for row in result["data"]], [
+            ("Contents/Resources/Greeting.txt", "txt", 5, hashlib.sha256(b"hello").hexdigest()),
+            ("Contents/Resources/Note.TXT", "txt", 1, hashlib.sha256(b"!").hexdigest()),
+        ])
+        lines = [json.loads(line) for line in cli.render(result, "jsonl").splitlines()]
+        self.assertEqual([line["data"] for line in lines], result["data"])
+        self.assertTrue(all(line["command"] == "resources list" for line in lines))
+        self.assertEqual(self.run_resources("--type", "missing")["data"], [])
+
+    def test_resource_pages_bind_filter_and_inventory_and_protect_output(self):
+        (self.assets / "Note.txt").write_bytes(b"text")
+        (self.assets / "Unrelated.bin").write_bytes(b"unrelated")
+        first = self.run_resources("--type", "txt", "--limit", "1")
+        cursor = first["coverage"]["next_cursor"]
+        self.assertIsNotNone(cursor)
+        second = self.run_resources("--type", "TXT", "--cursor", cursor)
+        self.assertEqual(second["data"][0]["relative_path"], "Contents/Resources/Note.txt")
+        for query in [("--type", "bin"), ()]:
+            with self.assertRaises(Error) as caught:
+                self.run_resources(*query, "--cursor", cursor)
+            self.assertEqual(caught.exception.code, "stale_cursor")
+        self.asset.write_bytes(b"changed")
+        with self.assertRaises(Error) as caught:
+            self.run_resources("--type", "txt", "--cursor", cursor)
+        self.assertEqual(caught.exception.code, "stale_cursor")
+        with patch.object(bundle, "MAX_HASH_BYTES", 1):
+            partial = self.run_resources("--type", "txt")
+        self.assertEqual(partial["status"], "partial")
+        self.assertEqual(partial["diagnostics"], ["hash_limit"])
+        self.assertTrue(all(row["sha256"] is None for row in partial["data"]))
+        with self.assertRaises(Error) as caught:
+            self.run_resources("--output", str(self.asset), "--force")
+        self.assertEqual(caught.exception.code, "output_input_conflict")
+        self.assertEqual(self.asset.read_bytes(), b"changed")
 
     def test_inventory_lists_symlinks_and_special_files_without_following_them(self):
         outside = self.root / "outside"

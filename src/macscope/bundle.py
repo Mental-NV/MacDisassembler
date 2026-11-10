@@ -34,7 +34,7 @@ def fingerprint(info):
     return info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
-def inventory(path, kind):
+def inventory(path, kind, *, resource_type=None):
     path = Path(os.path.abspath(path))
     if path.suffix.lower() != ".app":
         raise Error("bundle_required", "Select a macOS .app bundle", 2)
@@ -47,6 +47,9 @@ def inventory(path, kind):
 
     def file_record(directory, name, info, row):
         nonlocal hashed
+        suffix = Path(name).suffix.lower().lstrip(".") or "file"
+        if resource_type is not None and suffix != resource_type:
+            return
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
         try:
             before = os.fstat(fd)
@@ -63,7 +66,7 @@ def inventory(path, kind):
                 return
             row["type"] = "macho_candidate" if is_image else "resource"
             row["size"] = before.st_size
-            row["resource_type"] = None if is_image else Path(name).suffix.lower().lstrip(".") or "file"
+            row["resource_type"] = None if is_image else suffix
             if before.st_size > MAX_INPUT or hashed + before.st_size > MAX_HASH_BYTES:
                 row["status"] = "hash_limit"
                 gaps.add("hash_limit")
