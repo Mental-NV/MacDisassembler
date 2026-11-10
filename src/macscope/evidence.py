@@ -29,7 +29,7 @@ FUNCTION_FIELDS = (
     "is_external", "is_thunk", "thunk_target", "instructions", "instruction_bytes_sha256",
     "pseudocode", "decompile_status", "decompile_error", "pseudocode_truncated", "address_spans",
     "facets", "coverage", "origin", "control_flow_review", "control_flow_gaps", "body_overlap",
-    "tail_call_recovery", "native_scope", "control_flow_traps",
+    "tail_call_recovery", "native_scope", "control_flow_traps", "engine_decompile_status",
 )
 
 

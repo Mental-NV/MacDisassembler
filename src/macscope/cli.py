@@ -19,7 +19,7 @@ from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, a
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
                       program_history, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
+from . import body_ownership, engine_checks, evidence, flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -552,6 +552,7 @@ def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_fr
                         **{key:deps[key] for key in ('ghidra_version','ghidra_tree_sha256','bridge_sha256')}})
     for key in ('xrefs_to_entry','xrefs_from_sample'):
         data[key] = sorted(data[key],key=canonical)
+    data = flow_gap_evidence.annotate(data)
     diagnostics = [function['decompile_error']] if function.get('decompile_error') else []
     response = envelope('decompile',redact(data),status='partial' if reasons else 'complete',
                         cov=coverage('one selected linker extent from the saved import',1,1,bool(reasons),

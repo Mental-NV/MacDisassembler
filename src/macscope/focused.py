@@ -2,7 +2,7 @@
 
 from hashlib import sha256
 
-from . import focused_boundaries, focused_tailcalls, macho_load, metadata
+from . import flow_gap_evidence, focused_boundaries, focused_tailcalls, macho_load, metadata
 from .direct_signatures import arm64_direct_target
 from .dispatch_returns import direct_target
 from .errors import Error
@@ -140,6 +140,10 @@ def validate_result(result, proof):
             if focused_boundaries.gaps(function, proof) and (result["status"] == "complete"
                     or function["decompile_status"] == "complete"):
                 raise ValueError("Focused control flow is not confined to its body; capture a new query")
+        flow_gap_evidence.validate(function, proof)
+        if any(isinstance(gap, dict) and "evidence" in gap for gap in function.get("control_flow_gaps", ())):
+            if result["status"] != "partial":
+                raise ValueError("Control-flow gap evidence requires a partial result")
     except (KeyError, TypeError, ValueError) as error:
         raise Error("query_receipt", str(error), 3) from error
 

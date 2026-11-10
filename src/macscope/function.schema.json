@@ -24,7 +24,20 @@
    }
   }},
   "facets":{"type":"object"},
-  "origin":{"type":"object"}
+  "origin":{"type":"object"},
+  "control_flow_gaps":{"type":"array","items":{
+   "type":"object",
+   "properties":{"evidence":{
+    "type":"object","required":["policy","function","location","classification"],
+    "properties":{
+     "policy":{"const":"macscope-control-flow-gap-evidence/1"},
+     "function":{"type":"object"},
+     "location":{"type":"object"},
+     "classification":{"type":"object"}
+    },
+    "additionalProperties":false
+   }}
+  }}
  },
  "additionalProperties":true
 }
