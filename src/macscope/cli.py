@@ -161,7 +161,10 @@ def parser():
                                     help='Show saved instructions in an unslid VA range (exclusive end)')
         if c=='decompile':
             pagination(s);budgets(s)
-            s.add_argument('--fresh',action='store_true',help='Reopen the saved Program and decompile one function')
+            source = s.add_mutually_exclusive_group()
+            source.add_argument('--fresh',action='store_true',help='Reopen the saved analyzed Program and decompile one function')
+            source.add_argument('--from-import',action='store_true',
+                                help='Disassemble and decompile one exact --address from the saved no-analysis import')
             s.add_argument('--with-type-hints',action='store_true',help='Apply accepted type hints in the fresh query copy')
             s.add_argument('--recover-dispatch-return',action='store_true',
                            help='Use verified x86_64 dispatch return evidence in a fresh query')
@@ -494,6 +497,29 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
         response['address_selection'] = address_selection
     with jobs.result_publication('query',job['job_id'],resumed_from):
         return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
+
+
+def focused_decompile(args, project, image):
+    entry = hex(metadata.hex_address(args.address, 'Unslid function entry'))
+    deps = engine.dependencies(args.ghidra,args.java_home,full=True)
+    result, job = engine.run(project,image,'query',args,deps,entry=entry,from_import=True)
+    function = flow_evidence.review(result['functions'][0])
+    proof = job['focused_import']
+    decoded_bytes = sum(len(row['bytes']) // 2 for row in function['instructions'])
+    reasons = []
+    if not function.get('pseudocode') or function['coverage']['pseudocode']['status'] != 'complete':
+        reasons.append('unresolved_control_flow' if 'control_flow_gaps' in function else 'pseudocode_incomplete')
+    if decoded_bytes != proof['length']:
+        reasons.append('linker_extent_bytes_undecoded')
+    spans, span_coverage = address_spans(function,redact(function['pseudocode']))
+    data = dict(function, image_id=image['image_id'], arch=image['arch'], slice_sha256=image['sha256'],
+                decoded_bytes=decoded_bytes, address_spans=spans, address_span_coverage=span_coverage,
+                origin={'mode':'focused_readonly_import','job_id':job['job_id'],
+                        'bridge_version':result['bridge_version'],'extent':proof})
+    diagnostics = [function['decompile_error']] if function.get('decompile_error') else []
+    return envelope('decompile',redact(data),status='partial' if reasons else 'complete',
+                    cov=coverage('one selected linker extent from the saved import',1,1,bool(reasons),
+                                 reason=';'.join(reasons) or None),diagnostics=redact(diagnostics))
 
 
 def revise_annotation(args, project, command, address_selection):
@@ -1310,6 +1336,7 @@ def execute_command(a, address_selection=None):
     if va_range is not None:
         va_range = disassembly.parse_range(va_range)
     fresh = a.command == 'decompile' and a.fresh
+    from_import = a.command == 'decompile' and a.from_import
     with_hints = a.command == 'decompile' and a.with_type_hints
     recover_dispatch = a.command == 'decompile' and a.recover_dispatch_return
     recover_direct = a.command == 'decompile' and a.recover_direct_signatures
@@ -1334,6 +1361,8 @@ def execute_command(a, address_selection=None):
         raise Error('switch_table_scope','Switch-table recovery requires --fresh and its own query',3)
     if fresh and a.all:
         raise Error('fresh_selection','--fresh requires one function selector',2)
+    if from_import and (a.address is None or address_selection is not None):
+        raise Error('focused_scope','--from-import requires an exact unslid --address',2)
     term = search.pattern(a.query,regex=a.regex) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
@@ -1415,7 +1444,7 @@ def execute_command(a, address_selection=None):
         return revise_annotation(a,p,command,address_selection)
     if a.command == 'annotations' and a.action == 'import':
         return import_annotations(a,p)
-    if fresh or a.command in ('import','analyze'):
+    if fresh or from_import or a.command in ('import','analyze'):
         check_engine_access(a,p)
     if a.command=='status':
         return project_status(a,p)
@@ -1429,6 +1458,8 @@ def execute_command(a, address_selection=None):
     image=p.select(a.image,a.arch)
     if address_selection is not None:
         address_selection.update(image_id=image['image_id'],arch=image['arch'])
+    if from_import:
+        return focused_decompile(a,p,image)
     if a.command=='headers':
         data=metadata.headers(p,image)
         gaps=metadata.loader_gaps([data])

@@ -1429,6 +1429,33 @@ saved JSON evidence, every function link resolved locally, and annotation
 markup remained literal text. The validation report SHA-256 is
 `1eb844748432ae3e8e8a5971aa9b9e6327ebf700ab75bbe070c5f97599efeba3`.
 
+### Decompile one function from an import
+
+Use `decompile --from-import --address` when you know an exact unslid
+function address and have already imported the owned image. The command
+opens a disposable read-only copy of the import and runs Ghidra on the
+selected function without waiting for whole-image analysis.
+
+```sh
+macscope decompile --from-import --address 0x100000920 \
+  --project workspaces/calendar --image IMAGE_ID \
+  --experimental-trusted-input --json
+```
+
+The address must appear in `LC_FUNCTION_STARTS` and have a following entry
+in the same file-backed instruction section. Use the address from your own
+build. Exact lookup scans the bounded linker table even when the general
+inventory has reached its 10,000-entry limit. The selected extent can be
+up to 8 KiB and must exclude declared embedded data and encrypted bytes.
+
+The result includes the linker extent, its slice and container offsets,
+its digest, the verified instruction bytes and available pseudocode. It
+reports incomplete decompilation or undecoded bytes as partial coverage.
+References come from the local Program copy with automatic analysis
+disabled. The result has a job ID and no snapshot analysis ID. Use the
+same command to run it again. Use `--fresh` to query an existing analyzed
+Program and apply saved-analysis options.
+
 ### Selected evidence handoff
 
 `evidence` exports a reviewer-selected list from committed analyses. It

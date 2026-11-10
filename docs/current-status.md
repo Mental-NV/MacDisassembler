@@ -57,12 +57,19 @@ decision. Reuse recorded observations for gestures already covered.
   recovered six exact Week functions from a read-only copy of the import.
   A second copy reproduced all six pseudocode outputs byte for byte.
   The installed worker keeps its owned-input policy.
-- [ ] **Repeat the selected Calendar workflow through the standard CLI.**
-  The main image reached the default relocation and function-start limits
-  before the selected Week records. A private bounded diagnostic recovered
-  the exact records. Add a bounded path for exact selections that can run
-  independently of whole-image analysis. Verify exact byte links, repeatable
-  output and explicit coverage for missing or unresolved evidence.
+- [x] **Decompile one exact function without whole-image analysis.**
+  [`decompile --from-import`](cli.md#decompile-one-function-from-an-import)
+  verifies the linker extent and each emitted instruction against the slice.
+  The installed CLI reproduced focused results on the owned Calendar main
+  and framework while both images had no active snapshot. The trust gate
+  and typed missing-entry result were verified on both images. A generated
+  arm64 image exercised an exact entry beyond the 10,000-row inventory
+  limit. An x86_64 fixture returned pseudocode and reported the undecoded
+  bytes in its linker extent as partial coverage.
+- [ ] **Repeat the complete selected Calendar handoff through the standard CLI.**
+  Add targeted relocation lookup beyond the inventory cap and support focused
+  results in the pinned handoff. Verify provenance, replay and explicit
+  missing or unresolved coverage through the normal command sequence.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

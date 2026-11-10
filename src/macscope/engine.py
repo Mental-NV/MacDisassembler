@@ -17,6 +17,7 @@ import time
 import uuid
 from copy import deepcopy
 from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, manual_boundaries, scalar_signatures, switch_tables, worker_lifecycle
+from . import focused
 from .annotations import MAX_TYPE_HINTS, structure_definitions
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -25,7 +26,7 @@ from .macho import read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
-BRIDGE_VERSION = '1.12.0'
+BRIDGE_VERSION = '1.13.0'
 STARTUP_TIMEOUT_SECONDS = 300
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
@@ -124,13 +125,16 @@ def bridge_digest():
     return identity({path.name: digest(path) for path in sorted(BRIDGE.glob('*.java'))})
 
 
-def tree_digest(root):
+def tree_digest(root, *, ignore=()):
     h = hashlib.sha256()
     for p in sorted(root.rglob('*')):
+        relative = p.relative_to(root)
+        if str(relative) in ignore and not p.is_symlink() and p.is_file():
+            continue
         if p.is_symlink():
-            h.update(str(p.relative_to(root)).encode()+b'\0link\0'+os.readlink(p).encode()+b'\n')
+            h.update(str(relative).encode()+b'\0link\0'+os.readlink(p).encode()+b'\n')
         elif p.is_file():
-            h.update(str(p.relative_to(root)).encode()+b'\0'+digest(p).encode()+b'\n')
+            h.update(str(relative).encode()+b'\0'+digest(p).encode()+b'\n')
     return h.hexdigest()
 
 
@@ -361,7 +365,7 @@ def decompiler_timing(result, max_functions):
 
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
         import_request=None, query_request=None, resumed_from=None, boundary_request=None, signature_plan=None,
-        manual_request=None):
+        manual_request=None, from_import=False):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
@@ -374,6 +378,9 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         raise Error('hard_memory_unsupported', 'A hard process-memory budget cannot be enforced here. --heap-mib caps only the Java heap.', 3)
     if entry is not None and (mode != 'query' or not re.fullmatch(r'0x[0-9a-f]{1,16}', entry)):
         raise Error('query_entry', 'Selected query requires an exact saved RAM function entry', 2)
+    if from_import and (mode != 'query' or entry is None or any(value is not None for value in
+            (hints, query_request, signature_plan, resumed_from))):
+        raise Error('focused_scope', 'Focused import requires one exact entry without saved-analysis options', 2)
     if hints is not None and (entry is None or not 1<=len(hints)<=MAX_TYPE_HINTS):
         raise Error('type_hint_scope', 'Accepted hints require a bounded selected-function query', 2)
     hint_request = None
@@ -399,7 +406,20 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     elif bound_recoveries:
         raise Error('signature_recovery_scope', 'The selected query is missing its signature recovery plan', 2)
     requested_profile = analysis_profile(getattr(args, 'profile', 'baseline')) if mode == 'analyze' else None
-    if mode == 'query':
+    if from_import:
+        imported_engine = image.get('import_dependencies')
+        if (not image['imported'] or not deps.get('ghidra_tree_sha256') or
+                not isinstance(imported_engine, dict) or
+                imported_engine.get('ghidra_tree_sha256') != deps['ghidra_tree_sha256']):
+            raise Error('focused_import_engine', 'Focused query requires a committed import from the selected Ghidra', 4)
+        proof, payload = focused.select(project, image, entry)
+        source = project.path/'engine'/image['image_id']
+        baseline_digest = image.get('engine_baseline_sha256')
+        if (not baseline_digest or source.is_symlink() or not source.is_dir()
+                or tree_digest(source) != baseline_digest):
+            raise Error('baseline_integrity', 'Saved import Program is missing or differs from its digest', 4)
+        program_content_digest = tree_digest(source, ignore=focused.PROJECT_BACKUPS)
+    elif mode == 'query':
         saved_snapshot, active = project.snapshot(image)
         requested_profile = profile_for_snapshot(saved_snapshot)
         if entry is not None:
@@ -436,6 +456,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             raise Error('analysis_program_integrity', 'Saved Program contains a symbolic link')
     if (hints is not None or signature_plan is not None) and tree_digest(engine_dir) != active['analysis_program_sha256']:
         raise Error('analysis_program_integrity', 'Copied Program differs from the saved query input')
+    if from_import and tree_digest(engine_dir) != baseline_digest:
+        raise Error('baseline_integrity', 'Copied Program differs from the saved import')
     if signature_plan is not None:
         recovery_request = job/(recovery_stem + '-request.json')
         recovery_report = job/(recovery_stem + '-result.json')
@@ -447,6 +469,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         argv += ['-process', image['image_id']+'.macho']
         if mode == 'query':
             argv += ['-readOnly', '-noanalysis']
+            if from_import:
+                focus_report = job/'focused-proof.json'
+                argv += ['-preScript', 'MacscopeFocus.java', str(focus_report), image['sha256'],
+                         proof['entry_va'], proof['end_va_exclusive'], proof['extent_sha256']]
             if signature_plan is not None and signature_plan['requests']:
                 script = getattr(recovery_policy, 'SCRIPT', 'RecoverCallSignatures.java')
                 argv += ['-preScript', script, str(recovery_request), str(recovery_report),
@@ -468,6 +494,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         argv.append(str(boundaries))
     if entry is not None:
         argv.append(entry)
+    if from_import:
+        argv.append('--from-import')
     if hints is not None:
         request = job/'type-hints.json'
         write_json(request,hint_request,mode=0o400)
@@ -480,11 +508,11 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         manifest['analysis_request'] = analysis_request
     if boundary_request is not None:
         manifest['boundary_recovery'] = flow_boundaries.recovery_identity(boundary_request)
-    if mode == 'query' and 'boundary_recovery' in saved_snapshot['identity']:
+    if mode == 'query' and not from_import and 'boundary_recovery' in saved_snapshot['identity']:
         manifest['boundary_recovery'] = saved_snapshot['identity']['boundary_recovery']
     if manual_request is not None:
         manifest['manual_boundaries'] = manual_boundaries.request_identity(manual_request)
-    if mode == 'query' and 'manual_boundaries' in saved_snapshot['identity']:
+    if mode == 'query' and not from_import and 'manual_boundaries' in saved_snapshot['identity']:
         manifest['manual_boundaries'] = saved_snapshot['identity']['manual_boundaries']
     if import_request is not None:
         manifest['import_request'] = import_request
@@ -495,7 +523,9 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     if resumed_from is not None:
         manifest['resumed_from'] = resumed_from
     if entry is not None:
-        manifest.update(selected_entry=entry, source_analysis_id=image['active_analysis'])
+        manifest.update(selected_entry=entry, source_analysis_id=None if from_import else image['active_analysis'])
+    if from_import:
+        manifest['focused_import'] = dict(proof, program_sha256=baseline_digest)
     if hints is not None:
         manifest.update(type_hint_view_id=identity({'source_analysis_id':image['active_analysis'],'hints':hints}),
                         type_hints_sha256=digest(request),type_hints=hints)
@@ -543,7 +573,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         timing = decompiler_timing(result,max_functions)
         if timing is not None:
             manifest['decompiler_timing'] = timing
-        if mode != 'import':
+        if mode != 'import' and not from_import:
             validate_analysis_profile(result, requested_profile, mode)
         flow_boundaries.verify_recovery(result,boundary_request)
         manual_boundaries.verify(result,manual_request)
@@ -552,6 +582,17 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             if (result.get('selected_entry') != entry or len(rows) != 1
                     or rows[0].get('entry_va') != entry):
                 raise Error('query_result_mismatch', 'Worker did not return the exact selected function', 10)
+        if from_import:
+            if result.get('validation', {}).get('headless_analysis_enabled') is not False:
+                raise Error('query_analysis', 'Focused query unexpectedly enabled autoanalysis', 10)
+            try:
+                report = json.loads(read_regular(focus_report, 4096))
+            except (ValueError, Error) as error:
+                raise Error('focused_worker_proof', 'Worker did not publish the selected range proof', 10) from error
+            focused.verify(proof, payload, report, rows[0])
+            if (tree_digest(source) != baseline_digest or
+                    tree_digest(engine_dir, ignore=focused.PROJECT_BACKUPS) != program_content_digest):
+                raise Error('baseline_integrity', 'Focused query changed a saved Program database', 10)
         applied = result.get('applied_type_hints', [])
         if not isinstance(applied,list) or any(not isinstance(row,dict) for row in applied):
             raise Error('type_hint_result_mismatch','Worker returned malformed type-hint provenance',10)

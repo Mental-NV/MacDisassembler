@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from macscope import macho
+from macscope import focused, macho, macho_load
 from macscope.errors import Error
 
 
@@ -105,6 +105,36 @@ class ErrorAssertions(unittest.TestCase):
             self.assertEqual(exit_code, caught.exception.exit_code)
         self.assertTrue(str(caught.exception))
         return caught.exception
+
+
+class FocusedFunctionTests(ErrorAssertions):
+    def test_exact_linker_selection_beyond_inventory_limit_validates_the_tail(self):
+        base = 0x100000000
+        count = macho_load.MAX_TABLE_ROWS + 3
+        payload = b"\x04" * count + b"\0"
+        text = {"va": hex(base), "file_size": hex((count + 1) * 4)}
+        entry = base + 4 * (macho_load.MAX_TABLE_ROWS + 1)
+        extent = [(0, len(payload))]
+        self.assertEqual(macho_load.function_starts(payload, extent, text)["status"], "partial")
+        self.assertEqual(macho_load.function_starts(payload, extent, text, selected=entry),
+                         {"status": "complete", "addresses": [hex(entry), hex(entry + 4)]})
+        self.assertEqual(macho_load.function_starts(payload, extent, text, selected=entry + 1)["addresses"], [])
+        malformed = payload[:-1] + b"\x80"
+        self.assertEqual(macho_load.function_starts(malformed, extent, text, selected=entry)["status"],
+                         "malformed")
+
+    def test_worker_instruction_bytes_must_match_the_selected_extent(self):
+        report = {"entry_va": "0x1000", "end_va_exclusive": "0x1004", "extent_sha256": "a" * 64}
+        proof = dict(report, length=4)
+        payload = bytes.fromhex("1f2003d5")
+        instructions = [{"addr": "0x1000", "bytes": payload.hex()}]
+        function = {"entry_va": "0x1000", "instructions": instructions}
+        focused.verify(proof, payload, report, function)
+        self.assert_error("focused_worker_proof", focused.verify, proof, payload, {}, function)
+        instructions[0]["bytes"] = "00000000"
+        self.assert_error("focused_instructions", focused.verify, proof, payload, report, function)
+        instructions[0]["addr"] = "0x1004"
+        self.assert_error("focused_instructions", focused.verify, proof, payload, report, function)
 
 
 class ThinMachOTests(ErrorAssertions):

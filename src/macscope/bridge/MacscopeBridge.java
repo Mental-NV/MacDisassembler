@@ -99,7 +99,7 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.12.0";
+    static final String VERSION = "1.13.0";
     static final String HINT_IDENTIFIER = "[A-Za-z_][A-Za-z0-9_]{0,47}";
     static final Pattern HINT_STRUCT = Pattern.compile("(struct (" + HINT_IDENTIFIER + ")\\{([^{}]+)\\})(\\*{0,2})");
     static final Pattern HINT_FIELD = Pattern.compile("(" + HINT_IDENTIFIER + "):(.+)");
@@ -138,7 +138,7 @@ public class MacscopeBridge extends HeadlessScript {
     public void run() throws Exception {
         String[] args = getScriptArgs();
         if (args.length < 4 || args.length > 6) {
-            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [BOUNDARY_REQUEST | QUERY_ENTRY [TYPE_HINTS]]");
+            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [BOUNDARY_REQUEST | QUERY_ENTRY [TYPE_HINTS | --from-import]]");
         }
         mode = args[1];
         if (!mode.equals("import") && !mode.equals("analyze") && !mode.equals("query")) {
@@ -148,7 +148,8 @@ public class MacscopeBridge extends HeadlessScript {
         int timeout = boundedInt(args[3], 1, 300, "FUNCTION_TIMEOUT");
         Path boundaries = mode.equals("analyze") && args.length == 5 ? Path.of(args[4]) : null;
         String entry = args.length >= 5 && boundaries == null ? args[4] : null;
-        Path typeHints = args.length == 6 ? Path.of(args[5]) : null;
+        boolean fromImport = args.length == 6 && "--from-import".equals(args[5]);
+        Path typeHints = args.length == 6 && !fromImport ? Path.of(args[5]) : null;
         if (entry != null && (!mode.equals("query") || maxFunctions != 1 || !entry.matches("0x[0-9a-f]{1,16}"))) {
             throw new IllegalArgumentException("Selected decompilation requires query mode and one RAM entry");
         }
@@ -220,7 +221,7 @@ public class MacscopeBridge extends HeadlessScript {
                 strings();
             }
             if (!fatal && !mode.equals("import")) {
-                if (typeHints == null) functions(maxFunctions, timeout, entry);
+                if (typeHints == null) functions(maxFunctions, timeout, entry, fromImport);
                 else hintedDecompile(timeout, entry, typeHints);
             }
             else coverage.add("functions", facet(0, 0, false, null,
@@ -807,7 +808,7 @@ public class MacscopeBridge extends HeadlessScript {
         return value.substring(0, end);
     }
 
-    void functions(int limit, int timeout, String entry) {
+    void functions(int limit, int timeout, String entry, boolean fromImport) {
         JsonArray out = root.getAsJsonArray("functions");
         DecompInterface decomp = new DecompInterface();
         String err = null; boolean trunc = false; int visited = 0;
@@ -843,10 +844,16 @@ public class MacscopeBridge extends HeadlessScript {
             } else {
                 Function f = functionAt(entry);
                 monitor.checkCancelled();
-                JsonObject item = new JsonObject(), facets = new JsonObject();
-                item.add("coverage", facets);
-                put(item, "entry_va", address(f.getEntryPoint()));
-                decompile(f, opened ? decomp : null, timeout, item, facets);
+                JsonObject item;
+                if (fromImport) {
+                    item = function(f, new BasicBlockModel(currentProgram), opened ? decomp : null, timeout);
+                } else {
+                    item = new JsonObject();
+                    JsonObject facets = new JsonObject();
+                    item.add("coverage", facets);
+                    put(item, "entry_va", address(f.getEntryPoint()));
+                    decompile(f, opened ? decomp : null, timeout, item, facets);
+                }
                 visited = 1;
                 trunc = !append(out, item, false);
             }
@@ -919,7 +926,7 @@ public class MacscopeBridge extends HeadlessScript {
                 for (HintStructure structure : structures.values()) layouts.add(structure.layout());
                 root.add("aggregate_type_layouts", layouts);
             }
-            functions(1, timeout, entry);
+            functions(1, timeout, entry, false);
         } finally {
             currentProgram.endTransaction(transaction, false);
         }

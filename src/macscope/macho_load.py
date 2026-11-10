@@ -117,7 +117,7 @@ def uleb(data, position, end):
     raise ValueError("ULEB128 exceeds 64 bits")
 
 
-def function_starts(data, extent, text):
+def function_starts(data, extent, text, *, selected=None):
     if not extent:
         return None
     if len(extent) != 1 or text is None:
@@ -131,6 +131,7 @@ def function_starts(data, extent, text):
     address = int(text["va"],16)
     limit = address+int(text["file_size"],16)
     starts = []
+    found = False
     try:
         while offset < end:
             delta, offset = uleb(data,offset,end)
@@ -141,9 +142,16 @@ def function_starts(data, extent, text):
             address += delta
             if address >= limit:
                 raise ValueError("Function start outside file-backed __TEXT")
-            if len(starts) == MAX_TABLE_ROWS:
-                return {"status": "partial", "addresses": starts, "reason": "Function-start row limit"}
-            starts.append(hex(address))
+            if selected is None:
+                if len(starts) == MAX_TABLE_ROWS:
+                    return {"status": "partial", "addresses": starts, "reason": "Function-start row limit"}
+                starts.append(hex(address))
+            elif found:
+                starts.append(hex(address))
+                found = False
+            elif address == selected:
+                starts.append(hex(address))
+                found = True
         raise ValueError("Missing function-start terminator")
     except ValueError as error:
         return {"status": "malformed", "addresses": [], "reason": str(error)}
