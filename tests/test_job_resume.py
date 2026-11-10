@@ -153,6 +153,20 @@ class JobResumeTests(TemporaryCase):
         self.assertIsNone(self.workspace.select()["active_analysis"])
         runner.assert_not_called()
 
+    def test_replay_accepts_predecessor_profile_for_exact_job(self):
+        path = self.prior_path.parent
+        current = engine.profile(self.workspace, self.deps, write_root=path)
+        prior, rule = current.rsplit("(deny process-exec ", 1)
+        self.assertIn(str(self.workspace.path / "inputs"), rule)
+        self.assertIn(str(self.workspace.path / "jobs"), rule)
+        previous = hashlib.sha256(prior.encode()).hexdigest()
+        record = dict(self.record, sandbox_sha256=previous)
+        args = self.args("jobs", "resume", self.prior, "--experimental-trusted-input")
+        with patch.object(engine, "dependencies", return_value=self.deps):
+            cli.replay_worker_request(args, self.workspace, record)
+            self.error("job_resume_engine", cli.replay_worker_request, args, self.workspace,
+                       dict(record, job_id="b" * 32))
+
     def test_replay_uses_recorded_startup_limit_or_legacy_policy(self):
         resume = self.args("jobs", "resume", self.prior, "--experimental-trusted-input")
         old_limits = dict(self.record["limits"])

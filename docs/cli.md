@@ -1470,7 +1470,9 @@ The restart verifies the stored immutable artifact and selected slice. It
 preserves the recorded worker limits and, for analysis, uses the pristine
 import Program and recorded profile. Select the same Ghidra and JDK used by
 the original job, including any explicit `--ghidra` or `--java-home` paths.
-The CLI also verifies the recorded isolation policy before launching.
+The CLI also verifies the recorded isolation policy. It accepts the
+previous profile for recovery when the workspace, job and dependency
+paths still match. A new worker always launches with the current profile.
 
 For a partial import batch, use the `failed_job_id` in the error's partial
 results to restart that slice. The workspace's artifact copy is sufficient
@@ -2359,6 +2361,26 @@ and
 This is one pinned macOS host and runtime. File metadata, other IPC,
 hard process-memory and disk quotas, and hostile-input containment
 remain outside the demonstrated guarantees.
+
+### Direct execution guard for staged files
+
+The normal worker profile denies direct execution from the project's
+`inputs` and `jobs` directories. The loader can still read the immutable
+slice, and the worker can read and write files in its job according to
+the existing rules. The execution guard covers a direct launch of a
+staged input or a copy made inside a job. Readable content remains
+available to interpreters, and the overall policy remains experimental
+and limited to trusted, user-owned inputs.
+
+On the pinned macOS host, both executable canaries ran with the previous
+policy. With the new policy macOS denied both launches, and both files
+still read back byte for byte. Owned arm64 and x86_64 calculator tools
+completed import, analysis, cached and fresh queries, and focused queries.
+An upgrade in the same temporary installation finished an older prepared
+import without launching a worker and restarted an older interrupted
+analysis with the new policy. Both receipts replayed offline. The
+validation report SHA-256 is
+`99b21a119760e5efb1748e2233564d09ce2390f7b5ec191888a05f414b7de39d`.
 
 ### Owned one-shot approval prototype
 

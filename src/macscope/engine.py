@@ -225,6 +225,11 @@ def dependencies(ghidra=None, java=None, full=False):
     return result
 
 
+def workspace_exec_rule(project):
+    paths = (json.dumps(str(project.path/name), ensure_ascii=False) for name in ('inputs', 'jobs'))
+    return '(deny process-exec ' + ' '.join(f'(subpath {path})' for path in paths) + ')\n'
+
+
 def profile(project, dependencies, *, write_root):
     # Seatbelt strings are JSON quoted, never shell interpolated.
     reads = [str(project.path), str(BRIDGE.resolve()), dependencies['ghidra_path'], dependencies['java_home']]
@@ -237,15 +242,27 @@ def profile(project, dependencies, *, write_root):
     return ('(version 1)\n(allow default)\n(deny network*)\n'
             '(deny file-read-data (require-all (subpath "/Users") '+exclusions+'))\n'
             '(deny file-write* (require-all (require-not (subpath '+writable+')) '
-            '(require-not (literal "/dev/null"))))\n')
+            '(require-not (literal "/dev/null"))))\n'
+            + workspace_exec_rule(project))
 
 
 
-def job_sandbox_sha256(project, dependencies, job_id):
+def job_profile(project, dependencies, job_id):
     if not isinstance(job_id, str) or not jobs.JOB_ID.fullmatch(job_id):
         raise Error('job_manifest', 'Invalid worker job identifier')
     job = project.path/'jobs'/job_id
-    return hashlib.sha256(profile(project, dependencies, write_root=job).encode()).hexdigest()
+    return profile(project, dependencies, write_root=job)
+
+
+def job_sandbox_sha256(project, dependencies, job_id):
+    return hashlib.sha256(job_profile(project, dependencies, job_id).encode()).hexdigest()
+
+
+def job_sandbox_matches(project, dependencies, job_id, recorded):
+    current = job_profile(project, dependencies, job_id)
+    # Recognize the previous profile for recovery. New launches use the current one.
+    previous = current.removesuffix(workspace_exec_rule(project))
+    return any(hashlib.sha256(policy.encode()).hexdigest() == recorded for policy in (current, previous))
 
 
 def worker_exited(proc):

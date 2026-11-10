@@ -957,8 +957,8 @@ def replay_worker_request(args, project, record, *, query_profile=None):
         raise Error('job_resume_policy','The recorded profile or worker limits differ from the supported policy',3)
     deps = engine.dependencies(args.ghidra,args.java_home,full=True)
     if (deps != record.get('dependencies')
-            or engine.job_sandbox_sha256(project, deps, record.get('job_id')) != record.get('sandbox_sha256')):
-        raise Error('job_resume_engine','Select the exact recorded engine, JDK and isolation policy to restart',4)
+            or not engine.job_sandbox_matches(project, deps, record.get('job_id'), record.get('sandbox_sha256'))):
+        raise Error('job_resume_engine','Restart requires the recorded engine and JDK and a recognized worker policy',4)
     return replay,deps
 
 

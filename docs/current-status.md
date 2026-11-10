@@ -288,7 +288,8 @@ passed all 52 O2 routines and all 4,269 bytes in each profile and symbol state.
 Engine operations are **trusted-owned-input-only experimental**, with an
 explicit opt-in. The worker denies network access, restricts user-home
 reads, and confines write paths to its own newly created job directory
-and `/dev/null`. The shared index, saved inputs, and earlier jobs are
+and `/dev/null`. It denies direct execution from managed input and job
+directories. The shared index, saved inputs, and earlier jobs are
 outside that write scope. Non-home reads remain broadly available.
 Hard process-memory and disk quotas are unavailable. Isolation errors
 fail closed.
@@ -628,6 +629,10 @@ collections exceed documented bounds despite successful pseudocode output.
   on owned arm64 and x86_64 calculator tools. Both focused receipts
   replayed, both timeout groups cleared, and the access canaries
   verified the stricter profile.
+- [x] Deny [direct execution from managed inputs and jobs](cli.md#direct-execution-guard-for-staged-files)
+  in the normal worker profile. Both canaries remained readable and
+  failed to launch. A prepared import and interrupted analysis recovered
+  after an in-place upgrade of the test wheel.
 - [x] Verify [the one-shot focused capture binding](cli.md#owned-one-shot-approval-prototype)
   with a simulated issuer on both owned calculator architectures. Wrong
   scopes, edited grants, expiry and reuse produced no extra worker jobs.
