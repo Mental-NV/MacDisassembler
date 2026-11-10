@@ -299,6 +299,11 @@ collections exceed documented bounds despite successful pseudocode output.
   outlived its supervisor. The CLI refused replay until the group exited,
   then replayed successfully. Older disconnected jobs and unverified boot
   identities remain ineligible.
+- [x] Fence [workers from earlier retry attempts](cli.md#project-and-job-status).
+  The installed CLI blocked a second retry while a disconnected analysis
+  worker was live, including through the legacy history scan. After exit
+  the original job restarted, and import, analysis and fresh queries
+  each verified receipt reuse.
 - [x] Verify [workspace manifest error handling](cli.md#envelopes-errors-and-explicit-omissions)
   and a byte-identical export from an earlier schema 1.0 workspace.
 - [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)

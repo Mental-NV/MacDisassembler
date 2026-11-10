@@ -247,12 +247,15 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest,
     try:
         gated = manifest.get('mode') in ('import','analyze','query') and 'job_id' in manifest
         if gated:
-            manifest.update(launch_protocol=worker_lifecycle.PROTOCOL, boot_session_id=worker_lifecycle.boot_session())
+            manifest.update(launch_protocol=worker_lifecycle.PROTOCOL, boot_session_id=worker_lifecycle.boot_session(),
+                            restart_protocol=jobs.RESTART_PROTOCOL)
         if probe is not None:
             manifest['startup'] = {'status': 'waiting', 'evidence': worker_lifecycle.STARTUP_EVIDENCE}
         manifest.update(status='starting', argv=argv, timeout_seconds=timeout, started_unix=time.time(), ownership_token=uuid.uuid4().hex)
         write_json(manifest_path, manifest, force=True)
         check_worker_cancellation(manifest_path, manifest)
+        if gated:
+            jobs.record_restart_attempt(manifest_path, manifest)
         with open(log_path, 'x+b', buffering=0) as log:
             launch_started = time.monotonic()
             startup_deadline = launch_started + startup_timeout if probe is not None else None

@@ -132,3 +132,20 @@ class JobResumeTests(TemporaryCase):
                     replay, _ = cli.replay_worker_request(resume, self.workspace, record)
                     self.assertEqual(replay.startup_timeout, budget)
                     self.assertEqual(engine.worker_limits(replay, replay.max_functions), limits)
+
+    def test_failed_retry_points_to_original_instead_of_launching_a_child(self):
+        child = "b" * 32
+        attempt = self.workspace.path / "jobs" / child / "job.json"
+        attempt.parent.mkdir()
+        storage.write_json(attempt, dict(self.record, job_id=child, status="timeout", resumed_from=self.prior))
+        args = self.args("jobs", "resume", child, "--experimental-trusted-input")
+        with patch.object(engine, "dependencies", side_effect=AssertionError("unexpected engine preflight")):
+            error = self.error("job_resume_conflict", cli.execute, args)
+        self.assertEqual(error.partial, {"job_id": self.prior})
+
+        # A nested attempt from an older build may already have published.
+        receipt = {"job_id": "c" * 32, "analysis_id": self.output_id}
+        with patch.object(jobs, "publication", return_value=receipt), \
+             patch.object(cli, "resume_analysis", return_value=receipt) as replay:
+            self.assertEqual(cli.execute(args), receipt)
+        replay.assert_called_once()

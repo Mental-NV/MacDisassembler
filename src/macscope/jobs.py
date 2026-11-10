@@ -8,7 +8,7 @@ import stat
 from . import worker_lifecycle
 from .errors import Error
 from .macho import read_regular
-from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity
+from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity, write_json
 
 
 JOB_ID = re.compile(r"[0-9a-f]{32}")
@@ -25,6 +25,8 @@ QUERY_REQUEST = "macscope-query-request/1"
 SIGNATURE_RECOVERY_FIELDS = ("dispatch_return_recovery", "direct_signature_recovery", "scalar_signature_recovery",
                              "callee_parameter_recovery", "forwarded_return_recovery", "switch_table_recovery")
 QUERY_RECEIPT = "macscope-query-receipt/1"
+RESTART_PROTOCOL = "macscope-restart-attempt/1"
+RESTART_RECORD = "restart-attempt.json"
 PUBLISH = """
 CREATE TABLE IF NOT EXISTS analysis_publications (
     job_id TEXT PRIMARY KEY,
@@ -91,6 +93,10 @@ def load(path):
     if (not isinstance(record, dict) or record.get("job_id") != path.parent.name
             or not isinstance(record.get("status"), str) or record["status"] not in STATUSES):
         raise Error("job_manifest", "Job manifest identity or state is invalid")
+    if "resumed_from" in record:
+        original = record["resumed_from"]
+        if not isinstance(original, str) or not JOB_ID.fullmatch(original) or original == record["job_id"]:
+            raise Error("job_manifest", "Job manifest has an invalid restart origin")
     return record
 
 
@@ -101,14 +107,88 @@ def token_for(record):
 
 def record_for_resume(path, record):
     if leased(path):
-        raise Error("job_resume_ownership", "Cannot verify that the previous worker stopped", 8)
+        raise Error("job_resume_ownership", "Cannot verify that the previous worker stopped", 8,
+                    partial={"job_id": record["job_id"]})
     # An owner could have released the launch gate and exited after the
     # caller first read "starting". Read again once its lease is gone.
     if record["status"] in ACTIVE:
         record = load(path)
         if record["status"] in ACTIVE and not worker_lifecycle.disconnected_exit_confirmed(record):
-            raise Error("job_resume_ownership", "Cannot verify that the previous worker stopped", 8)
+            raise Error("job_resume_ownership", "Cannot verify that the previous worker stopped", 8,
+                        partial={"job_id": record["job_id"]})
     return record
+
+
+def record_restart_attempt(path, attempt):
+    original = attempt.get("resumed_from")
+    if original is None:
+        return
+    if not isinstance(original, str) or not JOB_ID.fullmatch(original) or original == attempt["job_id"]:
+        raise Error("job_restart_record", "Invalid original job for restart")
+    source = path.parent.parent / original / "job.json"
+    root = load(source)
+    if ("resumed_from" in root or root.get("mode") != attempt.get("mode")
+            or root.get("image_id") != attempt.get("image_id")):
+        raise Error("job_restart_record", "Restart attempt does not match the original job")
+    write_json(source.with_name(RESTART_RECORD), {
+        "schema": RESTART_PROTOCOL, "original": original, "attempt": attempt["job_id"],
+    }, force=True)
+
+
+def verify_restart_stopped(project, path, original):
+    root = original["job_id"]
+    restart = path.with_name(RESTART_RECORD)
+    try:
+        restart.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise Error("job_restart_record", "Cannot access the recorded restart attempt") from error
+    else:
+        try:
+            link = json.loads(read_regular(restart, 4096))
+        except (Error, OSError, ValueError, RecursionError) as error:
+            raise Error("job_restart_record", "Cannot verify the recorded restart attempt") from error
+        if (not isinstance(link, dict) or link.keys() != {"schema", "original", "attempt"}
+                or link["schema"] != RESTART_PROTOCOL or link["original"] != root
+                or not isinstance(link["attempt"], str) or not JOB_ID.fullmatch(link["attempt"])):
+            raise Error("job_restart_record", "Invalid recorded restart attempt")
+        try:
+            attempt_path, attempt = get(project, link["attempt"])
+        except (Error, OSError) as error:
+            raise Error("job_restart_record", "Recorded restart attempt is unavailable") from error
+        if (attempt.get("resumed_from") != root or attempt.get("mode") != original.get("mode")
+                or attempt.get("image_id") != original.get("image_id")):
+            raise Error("job_restart_record", "Recorded restart attempt does not match the original job")
+        record_for_resume(attempt_path, attempt)
+    if original.get("restart_protocol") == RESTART_PROTOCOL:
+        return
+
+    # Earlier launches recorded their parent only on the attempt itself.
+    descendants = {}
+    with os.scandir(project.path / "jobs") as entries:
+        for index, entry in enumerate(entries):
+            if index == SCAN_LIMIT:
+                raise Error("job_resume_ownership", "Legacy restart scan exceeded its job limit", 8)
+            if not JOB_ID.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):
+                continue
+            candidate = project.path / "jobs" / entry.name / "job.json"
+            try:
+                try:
+                    candidate.lstat()
+                except FileNotFoundError:
+                    continue
+                record = load(candidate)
+            except (Error, OSError) as error:
+                raise Error("job_resume_ownership", "Cannot verify legacy restart history", 8) from error
+            if "resumed_from" in record:
+                state = {key: record[key] for key in ("job_id", "status")}
+                descendants.setdefault(record["resumed_from"], []).append((candidate, state))
+    pending = [root]
+    while pending:
+        for candidate, record in descendants.get(pending.pop(), ()):
+            record_for_resume(candidate, record)
+            pending.append(record["job_id"])
 
 
 def view(path, record, *, detail=False):

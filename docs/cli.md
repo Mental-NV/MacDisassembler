@@ -1064,6 +1064,22 @@ The result and its publication receipt commit together. Repeating a
 successful restart returns the recorded result. Analysis restart also
 checks that its preceding active analysis is still current.
 
+Use the original job ID for further retries. Before launching a retry,
+the supervisor records its job ID in the original job directory. Another
+retry checks that attempt's ownership and process-group state. A live or
+unconfirmed attempt returns `job_resume_ownership` and identifies the
+attempt in the error. Earlier jobs use a bounded scan of up to 4,096 job
+directory entries to check their recorded retry history.
+
+An installed test disconnected the supervisor of an owned analysis retry
+while its Ghidra worker group was live. Both the recorded retry and the
+legacy scan refused an overlapping retry. The worker completed in its
+private job directory and the prior committed snapshot matched afterward.
+Once the group exited, the original job restarted successfully. Import,
+analysis and fresh decompilation each reused the committed receipt on a
+second request. The validation report SHA-256 is
+`d91ad149c2c225ef45543b5af5eb341836e99a92ce6eb61cef9e547e643ef5ba`.
+
 New Ghidra jobs record the process group before releasing the launcher.
 If the supervisor disconnects during the same macOS boot, `jobs show`
 reports `stopped_after_disconnect` when the CLI can verify that the group

@@ -683,6 +683,13 @@ def resume_job(args, project, command):
         request = record.get(key)
         if not isinstance(request,dict) or request.get('schema') != schema:
             raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
+        if 'resumed_from' in record:
+            receipt = jobs.publication(project,args.job_id,mode) if mode != 'query' else None
+            if receipt is None:
+                raise Error('job_resume_conflict','Resume the original job to retry this attempt',8,
+                            partial={'job_id':record['resumed_from']})
+        else:
+            jobs.verify_restart_stopped(project,path,record)
         if mode == 'import':
             return resume_import(args,project,command,record,request)
         if mode == 'query':
@@ -732,9 +739,6 @@ def resume_query(args, project, command, record, request):
     if (request.get('project_id') != project.project_id or record.get('image_id') != image_id
             or record.get('source_analysis_id') != aid or record.get('selected_entry') != entry):
         raise Error('job_resume_inputs','The recorded fresh query belongs to different inputs',8)
-    if 'resumed_from' in record:
-        raise Error('job_resume_conflict','Resume the original fresh query job',8,
-                    partial={'job_id':record['resumed_from']})
     image = dict(project.select(image_id),active_analysis=aid)
     snapshot,source = project.snapshot(image)
     snapshot = flow_evidence.snapshot_view(snapshot)

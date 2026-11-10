@@ -1,4 +1,5 @@
 """Verify the launch fence and the conditions for a disconnected restart."""
+import json
 import os
 import sys
 from unittest.mock import patch
@@ -34,6 +35,52 @@ class WorkerLifecycleTests(TemporaryCase):
             log_path=self.root / "launch.log", manifest_path=manifest,
             manifest={"job_id": self.root.name, "mode": "query"},
         )
+
+    def test_retry_link_is_visible_before_the_worker_launches(self):
+        project = self.project()
+        original, child = 'a' * 32, 'b' * 32
+        jobs_root = project.path / 'jobs'
+        source = jobs_root / original / 'job.json'
+        attempt = jobs_root / child / 'job.json'
+        source.parent.mkdir()
+        attempt.parent.mkdir()
+        record = {'job_id': original, 'mode': 'query', 'status': 'timeout', 'image_id': 'c' * 64,
+                  'restart_protocol': jobs.RESTART_PROTOCOL}
+        storage.write_json(source, record)
+        code = ('import json,sys; '
+                'link=json.load(open(sys.argv[1])); '
+                'assert link["original"]==sys.argv[2] and link["attempt"]==sys.argv[3]')
+        engine.run_process([sys.executable, '-c', code, str(source.with_name(jobs.RESTART_RECORD)), original, child],
+                           cwd=attempt.parent, env={}, timeout=5, log_path=attempt.with_name('launcher.log'),
+                           manifest_path=attempt, manifest=dict(record, job_id=child, resumed_from=original))
+        self.assertEqual(jobs.load(attempt)['status'], 'complete')
+        jobs.verify_restart_stopped(project, source, record)
+        source.with_name(jobs.RESTART_RECORD).write_text(json.dumps({
+            'schema': jobs.RESTART_PROTOCOL, 'original': original, 'attempt': 'd' * 32,
+        }))
+        self.error('job_restart_record', jobs.verify_restart_stopped, project, source, record)
+
+    def test_legacy_restart_fence_checks_live_grandchildren(self):
+        project = self.project()
+        original, child, grandchild = 'a' * 32, 'b' * 32, 'c' * 32
+        for job in (original, child, grandchild):
+            (project.path / 'jobs' / job).mkdir()
+        source = project.path / 'jobs' / original / 'job.json'
+        record = {'job_id': original, 'mode': 'analyze', 'status': 'timeout'}
+        storage.write_json(source, record)
+        storage.write_json(project.path / 'jobs' / child / 'job.json',
+                           dict(record, job_id=child, resumed_from=original))
+        storage.write_json(project.path / 'jobs' / grandchild / 'job.json',
+                           dict(record, job_id=grandchild, resumed_from=child, status='running', pid=1080,
+                                process_group=1080, launch_protocol=worker_lifecycle.PROTOCOL,
+                                boot_session_id='current-boot'))
+        with patch.object(worker_lifecycle, 'boot_session', return_value='current-boot'), \
+             patch.object(worker_lifecycle.os, 'killpg') as probe:
+            error = self.error('job_resume_ownership', jobs.verify_restart_stopped, project, source, record)
+            self.assertEqual(error.partial, {'job_id':grandchild})
+            probe.assert_called_once_with(1080, 0)
+            probe.side_effect = ProcessLookupError()
+            jobs.verify_restart_stopped(project, source, record)
 
     def test_disconnect_requires_current_boot_and_a_confirmed_empty_group(self):
         path = self.root / "job.json"
