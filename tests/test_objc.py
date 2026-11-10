@@ -130,6 +130,22 @@ def legacy_objc_fixture(stream,kind='rebase'):
     return bytes(data)
 
 
+def overlapping_zero_fill(binary,address,*,size=1):
+    data = bytearray(binary)
+    count,command_size = struct.unpack_from('<II',data,16)
+    extra = command(0x19,struct.pack('<16s4Q4I',b'__BSS',address,size,0,0,3,3,0,0))
+    data[32+command_size:32+command_size+len(extra)] = extra
+    struct.pack_into('<II',data,16,count+1,command_size+len(extra))
+    return bytes(data)
+
+
+def metadata_mapping_fixtures():
+    yield 'raw',fixture(),0
+    yield 'legacy',legacy_objc_fixture(bytes.fromhex('11 20 80 06 51 20 a0 08 51 20 d8 08 51 00')),0
+    binary,bias = chained_fixture()
+    yield 'chained',binary,bias
+
+
 class ObjCCoverageTests(TemporaryCase):
     def stage(self,binary,name='workspace',project=None):
         project = project or self.project(name)
@@ -225,6 +241,36 @@ class ObjCCoverageTests(TemporaryCase):
         data[0x500:0x50B] = b'OtherProbe\0'
         self.stage(bytes(data),project=project)
         self.error('image_selector',self.query,project,'--arch','x86_64')
+
+    def test_class_slot_fallback_cannot_bypass_ambiguous_required_bytes(self):
+        for kind,binary,bias in metadata_mapping_fixtures():
+            # Include a string suffix and its NUL, not just its first byte.
+            for offset in (0x300,0x420,0x440,0x448,0x500,0x505,0x50A):
+                with self.subTest(kind=kind,offset=hex(offset)):
+                    data = overlapping_zero_fill(binary,BASE+bias+offset)
+                    project,_ = self.stage(data,name=f'{kind}-{offset}')
+                    classes = self.query(project,'--name-contains','OwnedProbe')
+                    methods = cli.execute(cli.parser().parse_args([
+                        'objc','methods','--project',str(project.path),'--class-slot',hex(BASE+bias+0x300)]))
+                    for response in (classes,methods):
+                        validate_envelope(response)
+                        self.assertEqual((response['status'],response['data']),('partial',[]))
+                        self.assertIsNone(response['coverage']['known_total'])
+
+    def test_ambiguous_optional_superclass_retains_verified_name_and_partial_methods(self):
+        for kind,binary,bias in metadata_mapping_fixtures():
+            data = overlapping_zero_fill(binary,BASE+bias+0x408)
+            project,_ = self.stage(data,name=kind)
+            classes = self.query(project)
+            methods = cli.execute(cli.parser().parse_args([
+                'objc','methods','--project',str(project.path),'--class-slot',hex(BASE+bias+0x300)]))
+            self.assertEqual(classes['data'][0]['name'],'OwnedProbe')
+            self.assertEqual(classes['data'][0]['superclass'],{'origin':'unresolved'})
+            self.assertEqual(methods['data'][0]['name'],'probe')
+            for response in (classes,methods):
+                self.assertEqual(response['status'],'partial')
+                self.assertIsNone(response['coverage']['known_total'])
+                self.assertIn('unresolved_superclass',response['coverage']['truncation_reason'])
 
     def test_cli_reports_scoped_success_and_budget_failure_without_engine(self):
         project = self.project()
@@ -540,6 +586,36 @@ class ObjCMetadataTests(unittest.TestCase):
             rows,gaps = objc.inventory(bytes(data),{'offset':'0x0'},'classes')
             self.assertEqual(rows,[])
             self.assertIn('fixups_fixup_address_unmapped',gaps)
+
+    def test_selected_methods_validate_all_consumed_mapping_ranges(self):
+        for kind,binary,bias in metadata_mapping_fixtures():
+            # Method header, pointer/relative record, selector and type strings
+            # including their terminators, and the executable entrypoint.
+            for offset in (0x480,0x488,0x520,0x523,0x525,0x540,0x544,0x547,0x600):
+                with self.subTest(kind=kind,offset=hex(offset)):
+                    data = overlapping_zero_fill(binary,BASE+bias+offset)
+                    classes,gaps = objc.inventory(data,{'offset':'0x0'},'classes')
+                    self.assertEqual(([row['name'] for row in classes],gaps),(['OwnedProbe'],[]))
+                    methods,gaps = objc.selected_methods(data,{'offset':'0x0'},BASE+bias+0x300)
+                    self.assertEqual(methods,[])
+                    self.assertTrue(gaps)
+
+    def test_unrelated_or_empty_virtual_overlap_does_not_hide_metadata(self):
+        for kind,binary,bias in metadata_mapping_fixtures():
+            for offset,size in ((0x700,8),(0x440,0),(0x50B,1)):
+                with self.subTest(kind=kind,offset=hex(offset),size=size):
+                    data = overlapping_zero_fill(binary,BASE+bias+offset,size=size)
+                    classes,gaps = objc.inventory(data,{'offset':'0x0'},'classes')
+                    self.assertEqual(([row['name'] for row in classes],gaps),(['OwnedProbe'],[]))
+                    methods,gaps = objc.selected_methods(data,{'offset':'0x0'},BASE+bias+0x300)
+                    self.assertEqual(([row['name'] for row in methods],gaps),(['probe'],[]))
+
+    def test_late_ambiguous_class_slot_does_not_discard_earlier_verified_class(self):
+        binary = class_list_fixture([BASE+0x400,BASE+0x400])
+        data = overlapping_zero_fill(binary,BASE+0x1008)
+        rows,gaps = objc.inventory(data,{'offset':'0x0'},'classes')
+        self.assertEqual([row['name'] for row in rows],['OwnedProbe'])
+        self.assertIn('fixups_fixup_address_unmapped',gaps)
 
     def test_legacy_complete_and_truncated_evidence_keep_their_scope(self):
         binary = legacy_objc_fixture(bytes.fromhex('11 20 80 06 51 20 a0 08 51 20 d8 08 51 00'))

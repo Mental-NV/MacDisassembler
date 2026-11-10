@@ -51,7 +51,7 @@ def diagnostic_kind(reason):
 class ObjCImage:
     def __init__(self, data, image, parsed, *, scoped=False, pointer_limit=None, discovery=False):
         self.parsed = parsed
-        self.view = MappedImage(data,parsed["segments"])
+        self.view = MappedImage(data,parsed["segments"],reject_virtual_overlap=True)
         self.sections = parsed["sections"]
         self.scoped_lookup = (data,image,parsed) if scoped and any(
             row["kind"] == "chained_fixups" for row in parsed["loader"]["linkedit"]) else None
@@ -93,6 +93,9 @@ class ObjCImage:
                     self.pointers[site] = None
                     self.pointer_failures[site] = "fixups_"+error.code
                     raise ResolutionFailure("fixups_"+error.code,"Pointer has an ambiguous segment mapping") from error
+        # All views, including exact raw/legacy class-slot queries, must prove
+        # the source bytes. A predecoded relocation does not exempt its slot.
+        self.view.mapping(site,8)
         if self.scoped_lookup is not None:
             if site not in self.pointers:
                 self.pointers[site] = None
@@ -162,7 +165,9 @@ class ObjCImage:
                 self.gaps.add("invalid_pointer_section")
                 continue
             try:
-                offset,_,_ = self.view.mapping(va,size)
+                # The section's extent must be file-backed. Each yielded slot
+                # is checked separately so a bad later slot keeps earlier rows.
+                offset,_,_ = self.view.file_mapping(va,size)
                 if offset != int(section["file_offset"],16):
                     raise ValueError("Pointer section and segment mappings disagree")
             except ValueError:
@@ -178,12 +183,14 @@ class ObjCImage:
                 yield site
 
     def ro(self, address):
-        self.view.mapping(address,40)
+        # Validate structural extents without requiring unused/optional fields
+        # to be readable. Every consumed pointer/scalar is checked separately.
+        self.view.file_mapping(address,40)
         bits = self.target(address+32)
         if bits >> 63:
             raise ResolutionFailure("unsupported_class_data_pointer","Class data requires a runtime RW pointer")
         ro = bits & CLASS_DATA_MASK
-        self.view.mapping(ro,40)
+        self.view.file_mapping(ro,40)
         return ro
 
     def class_ref(self, site):

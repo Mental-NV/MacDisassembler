@@ -28,6 +28,11 @@ the remaining B, C and D stages.
   external class bindings. Existing cached-page per-slot validation and
   failure-retention regressions still pass. A missing optional superclass
   does not discard an independently verified class name.
+  A subsequent safety review extended the proof to every consumed scalar and
+  string byte, including NUL terminators, and to raw/legacy exact-slot queries
+  with predecoded relocations. Required-field overlaps yield partial/no rows;
+  optional-superclass overlaps retain the verified class and partial methods.
+  Unrelated, empty and boundary-touching virtual segments remain harmless.
 - **A4, passed:** Instrumented tests cover repeated class entries, shared
   slots, same-page cache hits, eviction/re-decoding, failed pages, late classes,
   and exhaustion before/after a verified class. A test reaches the actual
@@ -46,18 +51,22 @@ the remaining B, C and D stages.
   actual class-list slot, never a class-object address. A merely mapped slot
   is not asserted to identify a matching class. Manual fallback pins the same
   slice hash and architecture. Metadata commands do not invoke Apple tools.
-- **A7, source/package checks passed; installed parity deferred:** 518 primary
+- **A7, source/package checks passed; installed parity deferred:** 527 primary
   tests and 106 analysis tests passed in the cloud checkout. The final Mac
-  rerun passed both integrations and 59 focused ObjC/dyld tests. One additional
-  post-review, test-only regression for chain exhaustion after a verified
-  class passed with the final 60-test cloud focused set. All 66 runtime/source
+  rerun passed both integrations and 69 focused ObjC/dyld/mapping tests.
+  The final cloud focused set passed 69 tests. All 66 runtime/source
   wheel members matched their source bytes. Installed-wheel execution parity
   is deliberately deferred; no installed command was replaced.
 
 Independent review found and then cleared raw/legacy zero-file mapping
 ambiguity, unsupported-legacy diagnostic classification, and a filtered-empty
-candidate-slot guidance gap. No bridge, engine trust or isolation behavior
-was changed.
+candidate-slot guidance gap. A later PR safety review identified inherited
+exact-slot and non-pointer byte-range gaps; the follow-up includes owned
+raw, legacy and chained negative cases plus optional-superclass positive cases.
+Independent re-review cleared that follow-up, repeated the public CLI repros
+and all test suites, and checked 536,250 interval reads against a byte-wise
+reference implementation.
+No bridge, engine trust or isolation behavior was changed.
 
 ## Reproduce
 
@@ -66,7 +75,7 @@ From the repository root:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -v
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 -m unittest discover -s analysis/tests -v
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests python3 -m unittest test_objc test_dyld -v
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests python3 -m unittest test_objc test_dyld test_macho_view -v
 ```
 
 The Apple oracle is explicitly opt-in and requires a new output directory
@@ -92,14 +101,14 @@ The final Apple host ran macOS 27.0.1, Apple clang 21.0.0 and Python 3.14.6.
 
 The final Mac and cloud runtime source identity is:
 
-`4617ae0d8310b279440e479d21c6a6d87e4bd1e981bb64807c3e0780e4ca11b4`
+`9d544a67c828a04f1d4dd80b7d89b4ff4eac49841fa540593546393661a41071`
 
 This is SHA-256 of compact, key-sorted JSON mapping each repository-relative
 `src/` file with extension `.py`, `.java` or `.json` to its SHA-256, excluding
 `__pycache__`. It includes all 66 packaged runtime files. The built wheel
 SHA-256 was:
 
-`e7068b23cb5afd3fce630b9231218b8ed7e6524744ba1e6e391fa356d8c94910`
+`7f4c374efbcfbbc45df260fa6fa9a2aac3288db1b332fa87523d335a40774223`
 
 ## Remaining limits
 
