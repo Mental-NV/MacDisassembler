@@ -42,14 +42,27 @@ decision. Reuse recorded observations for gestures already covered.
   or ambiguous provider and preserved computed dispatch in the local trace.
 - [x] **Reuse the authorized TickTick Calendar archive.** The saved arm64
   metadata and assembly trace the Week time-scale callback to the base
-  controller's context date. The renderer derives hourly labels from that
-  date. Whether it always equals the first visible day remains open.
-- [ ] **Run a new Ghidra analysis on the exact archived TickTick images.**
-  The proposed scope is the arm64 main executable and the versioned
-  TTCalendarKit framework from the 8 November archive. This operation
-  has not been attempted. It requires authorization and a worker policy
-  that admits those third-party inputs. The authorized offline review of
-  existing metadata and assembly is separate from that engine operation.
+  controller's context date. When Week alignment is enabled, the setter
+  retains the incoming date as context and separately computes a seven-day
+  display range from the configured first weekday. The shared ruler can
+  therefore use a date later than the range start. Which gestures refresh
+  that context and when the labels redraw remain open.
+- [x] **Run focused Ghidra validation on the exact TickTick images.**
+  The user authorized static analysis of the archived arm64 main executable
+  and versioned TTCalendarKit framework. A private, digest-bound launcher
+  imported both with automatic analysis and library loading disabled.
+  The framework analysis captured 450 of 630 functions with partial
+  coverage. Whole-image analysis of the main executable reached its
+  1,000-second wall limit before publishing a snapshot. A private pass
+  recovered six exact Week functions from a read-only copy of the import.
+  A second copy reproduced all six pseudocode outputs byte for byte.
+  The installed worker keeps its owned-input policy.
+- [ ] **Repeat the selected Calendar workflow through the standard CLI.**
+  The main image reached the default relocation and function-start limits
+  before the selected Week records. A private bounded diagnostic recovered
+  the exact records. Add a bounded path for exact selections that can run
+  independently of whole-image analysis. Verify exact byte links, repeatable
+  output and explicit coverage for missing or unresolved evidence.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose
