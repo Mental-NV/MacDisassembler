@@ -88,16 +88,18 @@ import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolIterator;
 import ghidra.program.model.symbol.SymbolTable;
+import ghidra.program.model.symbol.SymbolType;
 import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.9.0";
+    static final String VERSION = "1.10.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final String DEEP_PROFILE = "macscope-binary-only-deep/1";
     static final int MAX_INSTRUCTIONS = 2000, MAX_BLOCKS = 500, MAX_EDGES = 500;
     static final int MAX_XREFS = 200, MAX_RANGES = 512, MAX_SECTIONS = 2048;
+    static final int MAX_ENTRY_SYMBOLS = 32;
     static final int MAX_SYMBOLS = 10000, MAX_STRINGS = 5000, MAX_SCAN = 100000;
     static final int MAX_IMAGE_REFS = 16000, MAX_COMPUTED_SITES = 10000;
     static final int MAX_OPTIONS = 4096, MAX_TEXT = 4096, MAX_PSEUDOCODE = 1048576;
@@ -180,6 +182,7 @@ public class MacscopeBridge extends HeadlessScript {
             limits.addProperty("computed_flow_instruction_scan", MAX_SCAN);
         }
         limits.addProperty("body_ranges_per_function", MAX_RANGES);
+        limits.addProperty("entry_symbols_scanned_per_function", MAX_ENTRY_SYMBOLS);
         limits.addProperty("sections", MAX_SECTIONS);
         limits.addProperty("symbols_per_category", MAX_SYMBOLS);
         limits.addProperty("strings", MAX_STRINGS);
@@ -830,11 +833,66 @@ public class MacscopeBridge extends HeadlessScript {
         return type;
     }
 
+    void entryLabels(Function f, JsonObject item, JsonObject cov) {
+        JsonArray labels = new JsonArray();
+        String err = null;
+        boolean truncated = false;
+        try {
+            SymbolIterator symbols = currentProgram.getSymbolTable().getSymbolsAsIterator(f.getEntryPoint());
+            int scanned = 0;
+            while (scanned < MAX_ENTRY_SYMBOLS && symbols.hasNext()) {
+                monitor.checkCancelled();
+                Symbol s = symbols.next();
+                scanned++;
+                if (s.getSymbolType() != SymbolType.LABEL) continue;
+                String name = s.getName(), namespace = s.getParentNamespace().getName(true);
+                if (name.length() > MAX_TEXT || namespace.length() > MAX_TEXT) {
+                    truncated = true;
+                    continue;
+                }
+                JsonObject row = new JsonObject();
+                put(row, "name", name); put(row, "namespace", namespace);
+                put(row, "source", s.getSource().toString());
+                labels.add(row);
+            }
+            truncated |= symbols.hasNext();
+        } catch (Exception e) { err = error(e); }
+        item.add("entry_labels", labels);
+        cov.add("entry_labels", facet(labels.size(), truncated || err != null ? -1 : labels.size(),
+                                     truncated, err, "complete"));
+    }
+
+    void thunkTarget(Function f, JsonObject item, JsonObject cov) {
+        String err = null;
+        JsonObject target = null;
+        try {
+            Function next = f.getThunkedFunction(false);
+            if (next == null) throw new IllegalStateException("Thunk target is unavailable");
+            JsonObject row = new JsonObject();
+            put(row, "engine_entry", address(next.getEntryPoint()));
+            put(row, "name", next.getName());
+            put(row, "namespace", next.getParentNamespace().getName(true));
+            row.addProperty("is_external", next.isExternal());
+            if (next.isExternal()) {
+                ExternalLocation external = next.getExternalLocation();
+                if (external != null) {
+                    put(row, "library", external.getLibraryName());
+                    put(row, "imported_name", external.getOriginalImportedName());
+                }
+            }
+            target = row;
+        } catch (Exception e) { err = error(e); }
+        item.add("thunk_target", target == null ? JsonNull.INSTANCE : target);
+        cov.add("thunk_target", facet(target == null ? 0 : 1, 1, false, err, "complete"));
+    }
+
     JsonObject function(Function f, BasicBlockModel model, DecompInterface decomp, int timeout) {
         JsonObject item = new JsonObject(), cov = new JsonObject();
         item.add("coverage", cov); put(item, "name", f.getName());
         put(item, "namespace", f.getParentNamespace().getName(true)); put(item, "entry_va", address(f.getEntryPoint()));
         item.addProperty("is_external", f.isExternal()); item.addProperty("is_thunk", f.isThunk());
+        entryLabels(f, item, cov);
+        if (f.isThunk()) thunkTarget(f, item, cov);
         try { put(item, "signature", f.getSignature(false).toString()); put(item, "calling_convention", f.getCallingConventionName()); }
         catch (Exception e) { put(item, "signature", null); put(item, "signature_error", error(e)); partial = true; }
         JsonArray ranges = new JsonArray(); String err = null; boolean trunc = false;

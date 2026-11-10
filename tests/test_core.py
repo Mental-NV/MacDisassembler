@@ -581,6 +581,26 @@ class NormalizationTests(unittest.TestCase):
             self.assertFalse(function['facets']['address_spans']['available'])
             self.assertTrue(function['facets']['address_spans']['reason'])
 
+    def test_entry_labels_and_immediate_thunk_target_keep_distinct_provenance(self):
+        external, function = self.raw['functions']
+        function['entry_labels'] = [{'name': 'other', 'namespace': 'Global', 'source': 'IMPORTED'},
+                                    {'name': 'alias', 'namespace': 'Global', 'source': 'ANALYSIS'}]
+        function['is_thunk'] = True
+        function['thunk_target'] = {'engine_entry': external['entry_va'], 'name': external['name'],
+                                    'namespace': 'External', 'is_external': True}
+        result = self.normalized()
+        selected, target = result['functions']
+        self.assertEqual([row['name'] for row in selected['names']], ['example','alias','other'])
+        self.assertEqual(selected['names'][1]['origin'], 'ghidra_entry_label')
+        args = argparse.Namespace(address=None,function_id=None,name='alias')
+        self.assertEqual(cli.select_function(result['functions'],args)['function_id'],selected['function_id'])
+        self.assertEqual(selected['thunk_target']['function_id'],target['function_id'])
+        self.assertEqual(selected['thunk_target']['address']['address_space'],'EXTERNAL')
+        self.assertIsNone(selected['thunk_target']['address']['va'])
+        self.assertNotIn('thunk_target',target)
+        self.raw['functions'] = [function]
+        self.assertIsNone(self.normalized()['functions'][0]['thunk_target']['function_id'])
+
     def test_normal_entry_address_maps_typed_va_rva_and_file_offsets(self):
         function = self.normalized()['functions'][0]
         location = function['entry_address']
@@ -877,6 +897,11 @@ class CliTests(TemporaryCase):
             names = cli.execute(self.args('search', 'no hit', '--in', 'names'))
         self.assertEqual(names['status'], 'complete')
         self.assertEqual(names['coverage']['known_total'], 0)
+        snapshot['functions'][0].setdefault('coverage', {})['entry_labels'] = {'status': 'partial'}
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            names = cli.execute(self.args('search', 'no hit', '--in', 'names'))
+        self.assertEqual(names['status'], 'partial')
+        self.assertEqual(names['coverage']['truncation_reason'], 'function_entry_label_coverage_incomplete')
 
     def test_search_rejects_empty_or_oversized_query(self):
         for value in ('', ' ', 'x' * 257, '\n'):

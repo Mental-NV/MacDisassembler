@@ -325,7 +325,10 @@ def normalize(raw, image, deps, manifest):
         va=hex(int(engine_entry,16)) if engine_entry.startswith('0x') else None
         space='ram' if va is not None else engine_entry.partition(':')[0]
         fid=identity({'analysis_id':aid,'image_id':image['image_id'],'entry_va':va,'address_space':space,'engine_entry':engine_entry})
-        f.update(function_id=fid,image_id=image['image_id'],arch=image['arch'],entry_va=va,address_space=space,engine_entry=engine_entry,analysis_id=aid,names=[{'name':f['name'],'origin':'ghidra'}],origin={'engine':'Ghidra','version':'12.2','evidence':'decoded/inferred'})
+        labels = sorted(f.pop('entry_labels',[]),key=canonical)
+        names = [{'name':f['name'],'origin':'ghidra'},
+                 *(dict(label,origin='ghidra_entry_label') for label in labels)]
+        f.update(function_id=fid,image_id=image['image_id'],arch=image['arch'],entry_va=va,address_space=space,engine_entry=engine_entry,analysis_id=aid,names=names,origin={'engine':'Ghidra','version':'12.2','evidence':'decoded/inferred'})
         f['entry_address']=location(engine_entry)
         for ins in f['instructions']:
             ins['location']=location(ins['addr'])
@@ -340,6 +343,12 @@ def normalize(raw, image, deps, manifest):
             })
         validate_function(f)
         functions.append(f)
+    entries = {f['engine_entry']:f['function_id'] for f in functions}
+    for f in functions:
+        if target := f.get('thunk_target'):
+            entry = target['engine_entry']
+            f['thunk_target'] = dict(target,address=location(entry),function_id=entries.get(entry),
+                                     origin='ghidra_immediate_thunk_target')
     functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['engine_entry'],f['function_id']))
     value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','Pseudocode spans cover available token addresses within the function body.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
     if selected_profile['name'] == 'deep':
@@ -1379,10 +1388,17 @@ def execute_command(a, address_selection=None):
         filters={'name_contains':a.name_contains}
         if revision:filters['annotation_revision']=revision
         rows,cov=page(rows,a,aid,p.project_id,filters)
+        gaps=[]
         if snapshot['engine'].get('functions_truncated'):
-            cov.update(status='partial',known_total=None,truncation_reason='discovery_limit'+(';page_limit' if cov['next_cursor'] else ''))
+            gaps.append('discovery_limit')
+        if a.name_contains and search.entry_labels_incomplete(functions):
+            gaps.append('function_entry_label_coverage_incomplete')
+        if gaps:
+            if cov['next_cursor']:
+                gaps.append('page_limit')
+            cov.update(status='partial',known_total=None,truncation_reason=';'.join(gaps))
         fields = ('function_id','image_id','arch','entry_va','address_space','engine_entry','body_ranges',
-                  'names','signature','is_thunk','is_external','decompile_status','control_flow_review',
+                  'names','signature','is_thunk','thunk_target','is_external','decompile_status','control_flow_review',
                   'control_flow_gaps','engine_decompile_status')
         return envelope(command,[{key: f[key] for key in fields if key in f} for f in rows],aid,cov=cov)
     if a.command=='decompile' and a.all:

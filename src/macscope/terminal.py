@@ -58,6 +58,8 @@ def function(report, row):
         report.field(f"  Name ({safe(name.get('origin'))})", name.get("name"))
     if row.get("signature"):
         report.field("  Signature", row["signature"])
+    if target := row.get("thunk_target"):
+        report.field("  Thunk target", f"{target['name']} ({target['engine_entry']})")
 
 
 def functions(report, data):

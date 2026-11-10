@@ -25,7 +25,7 @@ from .macho import read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
-BRIDGE_VERSION = '1.9.0'
+BRIDGE_VERSION = '1.10.0'
 STARTUP_TIMEOUT_SECONDS = 300
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),

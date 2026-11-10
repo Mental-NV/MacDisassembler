@@ -100,6 +100,10 @@ collections exceed documented bounds despite successful pseudocode output.
   slide on receipt replay, including an x86_64 publication retry.
 - [x] Link available Ghidra pseudocode tokens to machine addresses. The
   arm64/x86_64 thin and universal integration checked cached and fresh links.
+- [x] Verify [alternate function labels and immediate thunk targets](cli.md#implemented-commands).
+  Apple tools matched a shared entry, local branch and imported stub on
+  both owned architectures. Fresh aliases replayed their receipts and an
+  entry with 36 labels reported the bounded scan.
 - [x] Measure 20 rounds of CLI latency on the development Mac. See the
   [benchmark](benchmark.md) for scope and outstanding reference-host measurements.
 - [x] Search committed function names, symbols, strings and pseudocode

@@ -174,6 +174,23 @@ workspace has multiple images. A function selector accepts one of
 Duplicate names return candidates. Address-based selectors identify
 **function entries**.
 
+Bridge 1.10.0 records Ghidra labels at each function entry as alternate
+names, with their namespace and symbol source. A label can select the same
+function as its primary name. Entry-label coverage is partial when the
+32-symbol scan limit is reached. `functions show` and `functions list`
+also report Ghidra's immediate thunk target, including an external location
+when applicable and the target function ID when it was enumerated. Analyze
+an older workspace with this bridge to capture these fields.
+
+On two owned slices, Apple tools matched the shared entry, local branch
+target and imported `_puts` stub. The installed CLI resolved both names to
+one function, replayed each fresh result, and reproduced the exports on
+repeat analysis. A separate entry with 36 alternate labels retained 32
+and reported partial coverage. Reanalysis of both saved slices in a copy
+of a bridge 1.9.0 workspace captured the new fields and retained the older
+snapshots. The alias and thunk validation report SHA-256 is
+`8c06c552768a49edc708b8125b70a5854eb3fcce5d64091214fcb9c9e2b21d7d`.
+
 `--rva` is relative to the Mach-O's preferred image base. `--file-offset`
 is relative to the selected Mach-O slice, including in a universal
 binary. A function offset must map to one file-backed section and a

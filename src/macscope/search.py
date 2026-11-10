@@ -63,6 +63,11 @@ def regex_matches(expression, values):
     return result
 
 
+def entry_labels_incomplete(functions):
+    return any(function.get("coverage", {}).get("entry_labels", {}).get("status", "complete") != "complete"
+               for function in functions)
+
+
 def snapshot_matches(snapshot, term, scope, *, comments=(), regex=False):
     fields = SCOPES if scope == "all" else (scope,)
     image = snapshot["image"]
@@ -108,6 +113,8 @@ def snapshot_matches(snapshot, term, scope, *, comments=(), regex=False):
                 source="symbol", namespace=symbol.get("namespace"))
         if engine_coverage.get("symbols", {}).get("status") != "complete":
             gaps.append("symbol_coverage_incomplete")
+        if entry_labels_incomplete(functions):
+            gaps.append("function_entry_label_coverage_incomplete")
 
     if "strings" in fields:
         strings = engine.get("strings", [])
