@@ -653,6 +653,10 @@ collections exceed documented bounds despite successful pseudocode output.
   to normal headless jobs. All 32 owned matrix exports matched the prior
   wheel. Cross-workspace reads failed, and a focused retry used the new
   policy and replayed offline.
+- [x] Bind the [auxiliary JDK library fingerprint](cli.md#auxiliary-jdk-library-fingerprint)
+  to workers and saved analysis identity. Both owned architectures
+  reproduced their exports. Drift controls failed before publication,
+  and earlier prepared and interrupted jobs recovered across the upgrade.
 - [x] Verify [the one-shot focused capture binding](cli.md#owned-one-shot-approval-prototype)
   with a simulated issuer on both owned calculator architectures. Wrong
   scopes, edited grants, expiry and reuse produced no extra worker jobs.

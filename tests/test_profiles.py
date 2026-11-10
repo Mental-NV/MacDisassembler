@@ -255,6 +255,28 @@ class ProfileRunnerTests(unittest.TestCase):
         manifest = self.project.path / "jobs" / rejected.exception.partial["job_id"] / "job.json"
         self.assertEqual(json.loads(manifest.read_bytes())["status"], "failed")
 
+    def test_worker_rejects_auxiliary_jdk_drift_before_launch_or_publication(self):
+        library = self.root / "owned-library.dylib"
+        for before_launch in (True, False):
+            with self.subTest(before_launch=before_launch), mock.patch.object(
+                    engine, "jdk_libraries", return_value=[("owned", library, library)]):
+                library.write_bytes(b"selected bytes")
+                deps = dict(self.deps, jdk_auxiliary_sha256=engine.jdk_library_digest())
+                if before_launch:
+                    library.write_bytes(b"changed bytes")
+
+                def reply(*args, **kwargs):
+                    self.mock_runner("baseline")(*args, **kwargs)
+                    library.write_bytes(b"changed bytes")
+
+                with mock.patch.object(engine, "run_process", side_effect=reply) as runner, \
+                        self.assertRaises(Error) as rejected:
+                    engine.run(self.project, self.image, "analyze", self.args(), deps)
+                self.assertEqual(rejected.exception.code, "worker_jdk_auxiliary_mismatch")
+                self.assertEqual(runner.call_count, 0 if before_launch else 1)
+                job = self.project.path / "jobs" / rejected.exception.partial["job_id"]
+                self.assertEqual(json.loads((job / "job.json").read_bytes())["status"], "failed")
+
     def test_program_copy_declines_nested_links_before_launch(self):
         outside = self.project.path / "prior-canary"
         outside.write_bytes(b"owned outside marker")

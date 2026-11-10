@@ -210,7 +210,7 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None, rep
         except (Error, OSError, ValueError, RecursionError) as error:
             raise Error("import_journal", "Invalid prepared import journal") from error
         if (not isinstance(journal, dict) or journal.get("request") != request
-                or journal.get("dependencies") != deps
+                or not engine.dependencies_match(deps, journal.get("dependencies"))
                 or journal.get("limits") != engine.worker_limits(args, args.max_functions)):
             raise Error("import_baseline_conflict", "The prepared import has a different input or worker request", 8)
         job_id, digest = journal.get("job_id"), journal.get("program_sha256")

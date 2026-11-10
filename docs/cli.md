@@ -2476,6 +2476,33 @@ This is a file-content policy for the tested macOS arm64 setup. File
 metadata, other IPC, hard memory and disk quotas, and hostile-input
 containment remain separate validation gaps.
 
+### Auxiliary JDK library fingerprint
+
+The dependency probe hashes the contents of the resolved auxiliary JDK
+libraries on the worker allowlist. The aggregate `jdk_auxiliary_sha256`
+uses the formula-relative names and file hashes. New job manifests,
+worker policy digests and analysis identities bind that value. The
+supervisor checks it before launch and again before publishing the
+worker result. A fresh or focused query checks the value recorded in
+its source when that value is available.
+
+Earlier jobs retain the dependency fields recorded by their original
+wheel. Their receipts can replay offline. A new worker for a recognized
+earlier retry records the current fingerprint. New records with a
+different fingerprint require matching libraries before a retry.
+
+The temporary wheel independently hashed all 12 selected libraries and
+matched the live doctor result. Owned arm64 and x86_64 imports,
+analyses and fresh queries recorded the same fingerprint. Repeat
+analyses reproduced their IDs and cached exports. A prepared import
+and an unfinished focused query recovered from the previous wheel and
+replayed offline. A different fingerprint blocked fresh and focused
+queries before job creation. Changing a disposable control before
+launch or after a real worker completed produced
+`worker_jdk_auxiliary_mismatch` without publishing an import. The
+validation report SHA-256 is
+`b729c7ca3784bf232319080f19292cfa77f159ce9fb442db17031c85f10e7e39`.
+
 ### Owned one-shot approval prototype
 
 The [research supervisor](../analysis/verify_capture_approval.py)

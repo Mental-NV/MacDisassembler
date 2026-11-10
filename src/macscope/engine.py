@@ -46,6 +46,7 @@ JDK_BREW_LIBRARIES = (
     'jpeg-turbo/lib/libjpeg.8.dylib', 'libpng/lib/libpng16.16.dylib',
     'little-cms2/lib/liblcms2.2.dylib', 'pcre2/lib/libpcre2-8.0.dylib',
 )
+JDK_AUXILIARY_DIGEST = 'jdk_auxiliary_sha256'
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
     'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
@@ -238,9 +239,20 @@ def dependencies(ghidra=None, java=None, full=False):
     if v.returncode or not engine_checks.java_version_matches(version):
         raise Error('incompatible_jdk', 'Requires tested JDK 25.0.5.0.3', 4)
     result = {'ghidra_version':engine_checks.GHIDRA_VERSION, 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), **hashes, 'bridge_sha256':bridge_digest(), 'isolation':'experimental-trusted-owned-input-only; deny-network, restrict user-home reads and confine writes to the current job; not a hostile-input sandbox', 'hard_process_memory_limit':False}
+    result[JDK_AUXILIARY_DIGEST] = jdk_library_digest()
     if full:
         result['ghidra_tree_sha256'] = tree_digest(g)
     return result
+
+
+def dependencies_match(current, recorded):
+    if isinstance(recorded, dict) and JDK_AUXILIARY_DIGEST not in recorded:
+        current = {key: value for key, value in current.items() if key != JDK_AUXILIARY_DIGEST}
+    return current == recorded
+
+
+def matches_auxiliary_jdk(recorded, current):
+    return JDK_AUXILIARY_DIGEST not in recorded or recorded[JDK_AUXILIARY_DIGEST] == current.get(JDK_AUXILIARY_DIGEST)
 
 
 def workspace_exec_rule(project):
@@ -273,7 +285,7 @@ def workspace_read_rule(project, dependencies, write_root, staged_image_id):
     return f'(deny file-read-data (require-all (subpath {literal(project.path)}) {" ".join(excluded)}))\n'
 
 
-def jdk_library_paths():
+def jdk_libraries():
     opt, cellar = Path('/opt/homebrew/opt'), Path('/opt/homebrew/Cellar')
     for name in JDK_BREW_LIBRARIES:
         alias = opt/name
@@ -282,9 +294,34 @@ def jdk_library_paths():
         except (OSError, RuntimeError):
             continue
         if real.is_relative_to(cellar/name.split('/')[0]) and real.is_file():
-            yield alias
-            yield real
-            yield real.with_name(alias.name)
+            yield name, alias, real
+
+
+def jdk_library_paths():
+    for _, alias, real in jdk_libraries():
+        yield alias
+        yield real
+        yield real.with_name(alias.name)
+
+
+def jdk_library_digest():
+    try:
+        return identity({name: hashlib.sha256(read_regular(real, 32 * 1024 * 1024)).hexdigest()
+                         for name, _, real in jdk_libraries()})
+    except (Error, OSError) as cause:
+        raise Error('dependency_read', 'Could not fingerprint the auxiliary JDK libraries', 4) from cause
+
+
+def verify_auxiliary_jdk(dependencies):
+    if JDK_AUXILIARY_DIGEST not in dependencies:
+        return
+    error = Error('worker_jdk_auxiliary_mismatch', 'The auxiliary JDK libraries differ from the selected runtime', 4)
+    try:
+        actual = jdk_library_digest()
+    except (Error, OSError) as cause:
+        raise error from cause
+    if actual != dependencies[JDK_AUXILIARY_DIGEST]:
+        raise error
 
 
 def worker_read_rule(project, dependencies, write_root, staged_image_id):
@@ -305,6 +342,11 @@ def sandbox_rules(project, dependencies, write_root, staged_image_id, read_only_
         program = json.dumps(str(write_root/'program'), ensure_ascii=False)
         rules.append(f'(deny file-write* (require-all (subpath {program}) (regex #"[.]gbf$")))\n')
     rules.append(worker_read_rule(project, dependencies, write_root, staged_image_id))
+    if JDK_AUXILIARY_DIGEST in dependencies:
+        fingerprint = dependencies[JDK_AUXILIARY_DIGEST]
+        if not is_digest(fingerprint):
+            raise Error('worker_isolation_scope', 'Invalid auxiliary JDK fingerprint', 4)
+        rules.append(f'; Auxiliary JDK SHA-256 {fingerprint}\n')
     return rules
 
 
@@ -635,8 +677,9 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         imported_engine = image.get('import_dependencies')
         if (not image['imported'] or not deps.get('ghidra_tree_sha256') or
                 not isinstance(imported_engine, dict) or
-                imported_engine.get('ghidra_tree_sha256') != deps['ghidra_tree_sha256']):
-            raise Error('focused_import_engine', 'Focused query requires a committed import from the selected Ghidra', 4)
+                imported_engine.get('ghidra_tree_sha256') != deps['ghidra_tree_sha256'] or
+                not matches_auxiliary_jdk(imported_engine, deps)):
+            raise Error('focused_import_engine', 'Focused query requires a committed import from the selected runtime', 4)
         proof, payload = focused.select(project, image, entry)
         source = import_program_path(project,image)
         source_digest = image.get('engine_baseline_sha256')
@@ -652,9 +695,11 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         saved_snapshot, active = project.snapshot(image)
         requested_profile = profile_for_snapshot(saved_snapshot)
         if entry is not None:
-            saved_digest = saved_snapshot['identity'].get('engine', {}).get('ghidra_tree_sha256')
-            if not saved_digest or saved_digest != deps.get('ghidra_tree_sha256'):
-                raise Error('query_engine_mismatch', 'Installed Ghidra differs from the saved analysis; rerun analyze', 4)
+            saved_engine = saved_snapshot['identity'].get('engine', {})
+            saved_digest = saved_engine.get('ghidra_tree_sha256')
+            if (not saved_digest or saved_digest != deps.get('ghidra_tree_sha256')
+                    or not matches_auxiliary_jdk(saved_engine, deps)):
+                raise Error('query_engine_mismatch', 'Selected runtime differs from the saved analysis; rerun analyze', 4)
         if query_request is not None and (
                 query_request.get('source_program_sha256') != active.get('analysis_program_sha256')
                 or query_request.get('source_snapshot_sha256') != active.get('snapshot_sha256')):
@@ -764,6 +809,12 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             error.partial = {'job_id':jobid}
             raise
     try:
+        verify_auxiliary_jdk(deps)
+    except Error as error:
+        jobs.fail(job/'job.json',manifest,error)
+        error.partial = {'job_id':jobid}
+        raise
+    try:
         run_process(argv, cwd=job, env=env, timeout=args.timeout, startup_timeout=args.startup_timeout,
                     log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
     except Error as error:
@@ -792,6 +843,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         validate_bridge_shape(result,max_functions,full_functions=entry is None or from_import)
         runtime = result.pop('java_runtime', None)
         engine_checks.verify_runtime(runtime,deps['java_home'])
+        verify_auxiliary_jdk(deps)
         manifest['java_runtime'] = runtime
         verify_macho_loader(result,image)
         if result.get('status') == 'failed':
