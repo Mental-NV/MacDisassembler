@@ -238,6 +238,7 @@ def parser():
     s.add_argument('--include-annotations',action='store_true')
     s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed analyses')
     common(s,('json',));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
+    s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left committed JSON export')
     s.add_argument('right',help='Right committed JSON export')
@@ -1400,7 +1401,7 @@ def execute_command(a, address_selection=None):
         return file_fixups(a)
     p=Project(a.project)
     if a.command == 'evidence':
-        report = redact(evidence.export(p,evidence.load(a.leads)))
+        report = redact(evidence.export(p,evidence.load(a.leads),link_imports=a.link_imports))
         count = len(report['leads'])
         partial = any(row['status'] != 'resolved' for row in report['leads'])
         return envelope(command,report,status='partial' if partial else 'complete',

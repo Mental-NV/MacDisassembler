@@ -218,13 +218,18 @@ def verify_selected_handoff(project, context, control):
     with tempfile.TemporaryDirectory(dir=project.parent) as directory:
         manifest = Path(directory) / 'leads.json'
         atomic(manifest, json.dumps({'schema': 'macscope-evidence-leads/1', 'images': pins, 'leads': leads}).encode())
-        result = cli('evidence', '--project', project, '--leads', manifest, expected=(6,))
+        result = cli('evidence', '--project', project, '--leads', manifest, '--link-imports', expected=(6,))
     selector, string, duration, missing = result['data']['leads']
     assert selector['function']['function_id'] == control['functions'][METHOD]['function_id']
     assert string['function']['entry_va'] == context['entries']['_main']
     assert duration['function']['pseudocode'] == control['functions'][DURATION]['pseudocode']
     assert duration['query']['pseudocode'] == control['selected_recovery']['pseudocode']
     assert missing['reason'] == 'lead_not_found' and missing['function'] is None
+    link, = selector['declared_imports']['links']
+    expected = control['declared_linkage']
+    assert link['status'] == 'declared_match' and link['callsite'] == expected['local_call']['callsite']
+    assert link['binding'] == expected['binding'] and link['export'] == expected['framework_export']
+    assert link['target']['function_id'] == duration['function']['function_id']
 
 
 def main():

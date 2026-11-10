@@ -36,13 +36,20 @@ decision. Reuse recorded observations for gestures already covered.
   app and framework, including a missing address, an ambiguous import name
   and a mismatched receipt. Changing the active analysis preserved the
   original handoff byte for byte without another worker for the export.
-- [ ] **Repeat on a small approved TickTick lead set.** Match the exact
-  archived image and architecture before using historical addresses. Use
-  only the main image and the Calendar framework needed for the selected
-  question. Close one practical evidence question or record exactly where
-  static evidence ends and what observation would resolve it. This step
-  requires separate authorization for the exact private inputs and a
-  permitted worker policy. The current worker remains trusted-owned-only.
+- [x] **Verify declared links to pinned embedded frameworks.** The opt-in
+  handoff matched call and stub bytes, bind sites and export entries on
+  both owned Calendar architectures. It withheld a target for an absent
+  or ambiguous provider and preserved computed dispatch in the local trace.
+- [x] **Reuse the authorized TickTick Calendar archive.** The saved arm64
+  metadata and assembly trace the Week time-scale callback to the base
+  controller's context date. The renderer derives hourly labels from that
+  date. Whether it always equals the first visible day remains open.
+- [ ] **Run a new Ghidra analysis on the exact archived TickTick images.**
+  The proposed scope is the arm64 main executable and the versioned
+  TTCalendarKit framework from the 8 November archive. This operation
+  has not been attempted. It requires authorization and a worker policy
+  that admits those third-party inputs. The authorized offline review of
+  existing metadata and assembly is separate from that engine operation.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

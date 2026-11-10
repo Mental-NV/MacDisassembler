@@ -3,7 +3,7 @@ from collections import defaultdict
 import json
 import re
 
-from . import address_xrefs, body_ownership, calls, flow_evidence, jobs, metadata, objc, search
+from . import address_xrefs, body_ownership, calls, flow_evidence, import_links, jobs, metadata, objc, search
 from .errors import Error
 from .macho import read_regular
 from .storage import canonical, identity, is_digest
@@ -251,10 +251,12 @@ def unresolved(lead, reason):
             "matches": [], "match_references": [], "function": None, "query": None}
 
 
-def export(project, manifest):
+def export(project, manifest, *, link_imports=False):
     images = {image["image_id"]: image for image in project.images()}
     records, pins = {}, []
+    providers, pending = [], {}
     for pin in manifest["images"]:
+        linkage, linkage_error = None, None
         image = images.get(pin["image_id"])
         leads = [lead for lead in manifest["leads"] if lead["image_id"] == pin["image_id"]]
         try:
@@ -269,18 +271,48 @@ def export(project, manifest):
         pins.append(dict(pin, status="available", snapshot_sha256=source["snapshot_sha256"], engine=engine,
                          bundle_image=snapshot["image"].get("bundle_image"), profile=snapshot.get("analysis_profile")))
         selector_rows, selector_error = ([], []), None
-        if any(lead["kind"] == "objc_selector" for lead in leads):
+        selectors = any(lead["kind"] == "objc_selector" for lead in leads)
+        binary = None
+        if selectors or link_imports:
             try:
-                selector_rows = objc.inventory(metadata.verified_slice(project, image), image, "methods")
+                binary = metadata.verified_slice(project, image)
+            except Error as error:
+                selector_error = linkage_error = error.code
+        if binary is not None and selectors:
+            try:
+                selector_rows = objc.inventory(binary, image, "methods")
             except Error as error:
                 selector_error = error.code
+        if binary is not None and link_imports:
+            try:
+                linkage = import_links.ImageLinkage(binary, image, snapshot)
+                if provider := linkage.provider(pin):
+                    providers.append(provider)
+            except Error as error:
+                linkage_error = error.code
         for lead in leads:
             if lead["kind"] == "objc_selector" and selector_error:
                 row = unresolved(lead, selector_error)
             else:
                 row = lead_view(project, pin, source, snapshot, lead, selector_rows)
-            records[lead["id"]] = (row if len(canonical(row)) <= MAX_LEAD_BYTES
-                                   else unresolved(lead, "lead_output_limit"))
-    return {"schema": REPORT_SCHEMA, "authority": "committed_static_evidence",
-            "manifest_sha256": identity(manifest), "images": pins,
-            "leads": [records[lead["id"]] for lead in manifest["leads"]]}
+            if len(canonical(row)) > MAX_LEAD_BYTES:
+                row = unresolved(lead, "lead_output_limit")
+            records[lead["id"]] = row
+            if link_imports and row["function"] is not None:
+                links, gaps = linkage.calls(row["function"]) if linkage_error is None else ([], [linkage_error])
+                pending[lead["id"]] = (pin, links, gaps)
+    for lead_id, (pin, links, gaps) in pending.items():
+        row = records[lead_id]
+        matches = [import_links.destination(link, pin, providers) for link in links]
+        gaps = sorted(set(gaps) | {match["reason"] for match in matches if match["reason"]})
+        row["declared_imports"] = {"status": "partial" if gaps else "complete", "links": matches, "gaps": gaps}
+        if gaps:
+            row.update(status="partial", gaps=sorted(set(row["gaps"]) | set(gaps)))
+        if len(canonical(row)) > MAX_LEAD_BYTES:
+            records[lead_id] = unresolved(row["lead"], "lead_output_limit")
+    report = {"schema": REPORT_SCHEMA, "authority": "committed_static_evidence",
+              "manifest_sha256": identity(manifest), "images": pins,
+              "leads": [records[lead["id"]] for lead in manifest["leads"]]}
+    if link_imports:
+        report["import_linkage_policy"] = import_links.POLICY
+    return report

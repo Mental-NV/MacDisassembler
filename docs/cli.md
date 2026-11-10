@@ -1501,6 +1501,30 @@ address and a mismatched receipt. The pinned report matched after the
 active framework analysis changed. The report SHA-256 is
 `5b316bcebf6ead17064bd712b168ef5302f8dadeb7806268ead28ca737120b1d`.
 
+Add `--link-imports` to verify declared embedded-library calls in the
+handoff. For each selected function, the CLI checks ordinary arm64 or
+x86_64 import stubs reached by its saved direct call edges. It matches
+the call and stub bytes, the two-level bind slot, and an ordinary export
+with an exact function entry in a pinned provider of the same architecture.
+The provider's install name and recorded relative bundle path must match
+the declared library and a supported loader-relative or executable-relative
+path. This covers the app's own executable-relative rpaths. It requires
+the recorded physical path when a framework has unrecorded aliases.
+
+`declared_imports` records the call, stub, bind and export chain separately
+from the local call trace. It describes static declared linkage. A missing
+or ambiguous provider, unsupported stub or incomplete evidence returns a
+typed reason. The view is bounded to 16 import links per lead. Computed
+dispatch remains in the call trace with its original coverage.
+
+The installed CLI matched both owned Calendar slices against LLVM call
+and stub bytes, Apple dyld bind sites, and exact export addresses. The
+x86_64 controls withheld a target with zero or two matching provider pins.
+The export ran from saved analyses with the engine unavailable. The arm64
+and x86_64 report SHA-256 values are
+`09e09466b94a573d222028dda2d9c2c06b90df7630f429a125b3222ae9b32a3e` and
+`27140c924e00f78c1b8d0f9b58eac99deb0f0f9e8fd44401541b4f4e7a8cc52c`.
+
 ## Comparing committed exports
 
 ```sh
