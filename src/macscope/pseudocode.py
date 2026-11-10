@@ -5,6 +5,15 @@ import re
 VA = re.compile(r"0x[0-9a-f]{1,16}")
 
 
+def outcome(function, *, engine=False):
+    state = function.get("decompile_status")
+    if engine:
+        state = function.get("engine_decompile_status", state)
+    if state == "complete" and (function.get("pseudocode_truncated") or not function.get("pseudocode")):
+        return "partial"
+    return state if isinstance(state, str) else "unknown"
+
+
 def address_spans(function, displayed_text):
     original = function.get("pseudocode")
     spans = function.get("address_spans", [])

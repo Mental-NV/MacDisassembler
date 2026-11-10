@@ -1307,6 +1307,51 @@ class CliTests(TemporaryCase):
         self.assertEqual(result['status'], 'complete')
         self.assertNotIn('control_flow_gaps', result['data'])
 
+    def test_decompile_all_reports_failures_outside_the_page_and_keeps_page_counts(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        snapshot['functions'][-1].update(decompile_status='timeout',pseudocode=None)
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            first = cli.execute(self.args('decompile','--all','--limit','1'))
+            cursor = first['coverage']['next_cursor']
+            last = cli.execute(self.args('decompile','--all','--limit','2','--cursor',cursor))
+        self.assertEqual(first['status'],'partial')
+        self.assertEqual(first['data']['summary'],{'complete':1})
+        self.assertEqual(first['data']['batch_summary'],{'captured_functions':3,'engine_recognized_functions':3,
+                        'uncaptured_functions':0,'outcomes':{'complete':2,'timeout':1}})
+        self.assertEqual(first['coverage']['truncation_reason'],'pseudocode_incomplete;page_limit')
+        self.assertEqual(last['status'],'partial')
+        self.assertEqual(last['data']['batch_summary'],first['data']['batch_summary'])
+        self.assertEqual(last['data']['summary'],{'complete':1,'timeout':1})
+
+    def test_decompile_all_distinguishes_pagination_capture_and_analysis_limits(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            paged = cli.execute(self.args('decompile','--all','--limit','1'))
+            self.assertEqual(paged['status'],'complete')
+            self.assertEqual(paged['coverage']['truncation_reason'],'page_limit')
+            snapshot['functions'] = snapshot['functions'][:1]
+            snapshot['engine']['functions_truncated'] = True
+            limited = cli.execute(self.args('decompile','--all'))
+            self.assertEqual(limited['status'],'partial')
+            self.assertEqual(limited['coverage']['truncation_reason'],'discovery_limit')
+            self.assertEqual(limited['data']['batch_summary']['uncaptured_functions'],2)
+            snapshot['engine'].update(functions_truncated=False,analysis_timed_out=True,
+                                      function_count_total_reported_by_engine=1)
+            timed = cli.execute(self.args('decompile','--all'))
+            self.assertEqual(timed['status'],'partial')
+            self.assertEqual(timed['coverage']['truncation_reason'],'analysis_timeout')
+            raw = snapshot['engine']
+            raw['analysis_timed_out'] = False
+            raw.pop('function_count_total_reported_by_engine')
+            raw['coverage']['functions'] = {'status':'error','emitted':1,'total':2,'error':'capture interrupted'}
+            incomplete = cli.execute(self.args('decompile','--all'))
+            self.assertEqual(incomplete['coverage']['truncation_reason'],'function_capture_incomplete')
+            self.assertEqual(incomplete['data']['batch_summary']['uncaptured_functions'],1)
+            raw['function_count_total_reported_by_engine'] = 3
+            inconsistent = cli.execute(self.args('decompile','--all'))
+            self.assertIsNone(inconsistent['coverage']['known_total'])
+            self.assertIn('function_count_mismatch',inconsistent['coverage']['truncation_reason'])
+
     def test_cached_metadata_filters_keep_address_space_and_coverage(self):
         snapshot = copy.deepcopy(self.snapshot)
         snapshot['engine']['imports'] = [

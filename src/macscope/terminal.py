@@ -77,8 +77,12 @@ def functions(report, data):
 
 
 def decompile(report, data):
+    if batch := data.get("batch_summary"):
+        report.line("Captured batch outcomes")
+        report.tree(batch, 1)
+        report.line()
     if summary := data.get("summary"):
-        report.line("Decompilation outcomes")
+        report.line("Page outcomes")
         report.tree(summary, 1)
         report.line()
     rows = data.get("functions", [data])

@@ -18,7 +18,7 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, identity, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, html_export, macho_symbols, macho_unwind, string_evidence, terminal
+from . import body_ownership, engine_checks, html_export, macho_symbols, macho_unwind, pseudocode, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -1164,6 +1164,55 @@ def function_xrefs(args, project, snapshot, function):
     return body_ownership.query_view(envelope('xrefs',data,aid,'partial' if gaps else 'complete',cov),function)
 
 
+def decompile_batch(args, project, snapshot, functions):
+    aid = snapshot['analysis_id']
+    rows,cov = page(functions,args,aid,project.project_id,{'decompile':'all'})
+    cov['scope'] = 'captured pseudocode for engine-recognized functions'
+    raw = snapshot['engine']
+    facet = raw.get('coverage',{}).get('functions',{})
+    count = len(functions)
+    truncated = raw.get('functions_truncated') or facet.get('truncated')
+    incomplete = (facet.get('status','complete') != 'complete' or facet.get('error')
+                  or facet.get('emitted',count) != count)
+    facet_total = facet.get('total')
+    reported = raw.get('function_count_total_reported_by_engine')
+    reported = facet_total if reported is None else reported
+    reasons = []
+    if truncated:
+        reasons.append('discovery_limit')
+        if raw.get('output_budget_reached'):
+            reasons.append('engine_output_limit')
+    elif incomplete:
+        reasons.append('function_capture_incomplete')
+    if raw.get('analysis_timed_out'):
+        reasons.append('analysis_timeout')
+    if reported is None:
+        total = None if reasons else count
+    elif type(reported) is int and reported >= count and facet_total in (None,reported):
+        total = reported
+        if total > count and not truncated and not incomplete:
+            reasons.append('function_capture_incomplete')
+    else:
+        total = None
+        reasons.append('function_count_mismatch')
+    if any('control_flow_gaps' in f for f in functions):
+        reasons.append('unresolved_control_flow')
+    if any(pseudocode.outcome(f,engine=True) not in ('complete','not_requested')
+           or (f.get('decompile_status') == 'not_requested' and not (f.get('is_external') or f.get('is_thunk')))
+           for f in functions):
+        reasons.append('pseudocode_incomplete')
+    reasons.extend(body_ownership.reasons(snapshot.get('body_ownership',{})))
+    if reasons:
+        all_reasons = [*reasons,*(['page_limit'] if cov['next_cursor'] else [])]
+        cov.update(status='partial',truncation_reason=';'.join(all_reasons))
+    cov['known_total'] = total
+    data = {'functions':rows, 'summary':dict(Counter(map(pseudocode.outcome,rows))),
+            'batch_summary':{'captured_functions':count, 'engine_recognized_functions':total,
+                             'uncaptured_functions':None if total is None else total-count,
+                             'outcomes':dict(Counter(map(pseudocode.outcome,functions)))}}
+    return envelope('decompile',data,aid,'partial' if reasons else 'complete',cov)
+
+
 def execute_command(a, address_selection=None):
     limits(a)
     xref_address = None
@@ -1416,19 +1465,7 @@ def execute_command(a, address_selection=None):
                   'control_flow_gaps','engine_decompile_status','body_overlap')
         return envelope(command,[{key: f[key] for key in fields if key in f} for f in rows],aid,cov=cov)
     if a.command=='decompile' and a.all:
-        rows,cov=page(functions,a,aid,p.project_id,{'decompile':'all'})
-        if snapshot['engine'].get('functions_truncated'):
-            cov.update(status='partial',known_total=snapshot['engine'].get('function_count_total_reported_by_engine'),truncation_reason='discovery_limit')
-        states=Counter(f['decompile_status'] for f in rows)
-        reasons = []
-        if any(k not in ('complete','not_requested') for k in states):
-            reasons.append('unresolved_control_flow' if any('control_flow_gaps' in row for row in rows)
-                           else 'pseudocode_incomplete')
-        if any('body_overlap' in row for row in rows):
-            reasons.append('function_body_overlap')
-        if reasons:
-            cov.update(status='partial',truncation_reason=';'.join(filter(None,(cov['truncation_reason'],*reasons))))
-        return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if reasons else 'complete',cov)
+        return decompile_batch(a,p,snapshot,functions)
     f=select_function(functions,a)
     if a.command=='xrefs':
         return function_xrefs(a,p,snapshot,f)

@@ -273,6 +273,21 @@ these rejects the cursor. Pagination coverage distinguishes page truncation
 from global discovery truncation. `--all` means bounded engine-recognized
 functions, not every possible routine in the binary.
 
+`decompile --all` reports `summary` for the returned page and `batch_summary`
+for every captured function. The batch records the engine-recognized count,
+the number of uncaptured functions when known, and the captured decompilation
+outcomes. A capture limit, analysis timeout, or failed function makes every
+page partial with exit 6. Pagination alone returns exit 0 and a continuation
+cursor. Thunks and external functions that Ghidra skips appear as
+`not_requested` outcomes.
+
+Full Ghidra runs capped at one function on owned arm64 and x86_64 slices
+reported one captured and five uncaptured functions. The installed CLI
+returned exit 6 in both cases. A timeout added to a later function in a
+copy of each saved snapshot appeared in the batch summary on all six
+pages. The validation report SHA-256 is
+`4ba4a5c1863df5b543e7b824ce002dab87ae35e0d2c5dc4ee32ae157aee62380`.
+
 `search QUERY` matches a literal, case-insensitive query of up to 256 printable
 characters against the selected committed image. `--in names` covers
 function and symbol names, `--in strings` covers Ghidra-defined strings,
