@@ -2236,6 +2236,33 @@ both fresh queries reproduced their saved pseudocode. The validation
 report SHA-256 is
 `b4b50f5be8228266a20243c913700d0d45640e0456378aa99f2a6ed90a7da89b`.
 
+### Dyld export-trie preflight
+
+Before headless import or new analysis, the CLI uses the same bounded
+trie decoder as `exports --source dyld`. It checks both modern and
+legacy declarations and accepts a mirrored pair with the same extent.
+It rejects duplicate or conflicting declarations, invalid nodes and
+terminals, and cycles. Engine admission requires recognized terminal
+flags and a complete traversal within the byte, node, name and row
+limits. The data-only query still reports partial evidence for limits
+or unsupported flags. Ordinary `inspect` continues to report the
+declared extents without traversing the trie.
+
+The temporary wheel matched inspection output for 30 intact owned
+slices. It rejected 23 malformed, unsupported or oversized import
+controls before staging, including one in an unselected universal slice.
+A synthetic earlier workspace with a verified malformed slice also
+stopped before starting a new analysis. Both modern and legacy
+calculator tools completed headless import and analysis on arm64 and
+x86_64. Each returned the same 32 export records before and after
+analysis as the previous CLI. Fresh queries on the modern tools
+matched saved pseudocode. All 39 selected saved instructions matched
+the original slice bytes.
+The primary and legacy validation report SHA-256 values are
+`f443a4d65470c7a0d6ee14b194a46c0499be6f9cb0033a1ad7a8cd25cbaa4630`
+and
+`c21bc7c84e381f25f962c3bf9a1ea666a88773a3128abebd65351fd1f8a4add3`.
+
 ### Owned per-job isolation experiment
 
 The [research runner](../analysis/verify_job_isolation.py) exercises

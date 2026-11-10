@@ -1,6 +1,5 @@
 """Read declared dyld exports from the immutable Mach-O slice."""
 from .errors import Error
-from .macho import thin
 from .macho_load import MAX_TABLE_ROWS, uleb
 
 
@@ -134,8 +133,7 @@ def decode(data, offset, size, base, libraries, container_offset):
     return rows, sorted(gaps)
 
 
-def exports(data, image):
-    loader = thin(data)["loader"]
+def read_exports(data, loader, container_offset):
     modern = [row for row in loader["linkedit"] if row["kind"] == "export_trie"]
     legacy = [row for row in loader["dyld_streams"] if row["kind"] == "export_trie"]
     extents = {(int(row["slice_file_offset"], 16), int(row["size"], 16))
@@ -155,7 +153,25 @@ def exports(data, image):
     libraries = [row["path"] for row in loader["dylibs"] if row["kind"] != "id"]
     try:
         rows, gaps = decode(data, offset, size, int(base, 16) if base is not None else None,
-                            libraries, int(image["offset"], 16))
+                            libraries, container_offset)
     except ValueError as error:
         raise Error("export_trie_malformed", str(error)) from error
     return extent, rows, gaps
+
+
+def require_engine_trie(data, loader):
+    for key in ("linkedit", "dyld_streams"):
+        if sum(row["kind"] == "export_trie" for row in loader[key]) > 1:
+            raise Error("export_trie_extent", "Duplicate export trie load commands")
+    _, _, gaps = read_exports(data, loader, 0)
+    for reason in gaps:
+        if reason.endswith("_limit"):
+            raise Error("export_trie_limit", f"Export trie exceeds engine admission limits: {reason}", 7)
+    if "export_trie_unsupported_flags" in gaps:
+        raise Error("export_trie_unsupported_flags", "Unsupported export trie terminal flags for engine work", 3)
+
+
+def exports(data, image):
+    from .macho import thin
+
+    return read_exports(data, thin(data)["loader"], int(image["offset"], 16))

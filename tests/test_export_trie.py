@@ -28,12 +28,13 @@ def leaf_trie(entries):
     return bytes(root + nodes)
 
 
-def fixture(trie, *, legacy=False, modern=True, conflicting=False):
+def fixture(trie, *, legacy=False, modern=True, conflicting=False, duplicate=False):
     segment = command(0x19, struct.pack("<16s4Q4I", b"__TEXT", BASE, 4096, 0,
                                         OFFSET + len(trie), 7, 5, 0, 0))
     commands = [segment, library_command()]
     if modern:
-        commands.append(command(0x80000033, struct.pack("<2I", OFFSET, len(trie))))
+        declaration = command(0x80000033, struct.pack("<2I", OFFSET, len(trie)))
+        commands.extend([declaration] * (2 if duplicate else 1))
     if legacy:
         legacy_offset = OFFSET - int(conflicting)
         commands.append(command(0x80000022, struct.pack("<10I", *([0] * 8), legacy_offset, len(trie))))
@@ -100,6 +101,31 @@ class ExportTrieTests(unittest.TestCase):
         with self.assertRaises(Error) as error:
             self.decode(fixture(leaf_trie([(b"a", b"\0\x28")]), legacy=True, conflicting=True))
         self.assertEqual(error.exception.code, "export_trie_extent")
+
+    def test_engine_preflight_checks_export_trie_before_admission(self):
+        valid = leaf_trie([(b"a", b"\0\x28")])
+        mirrored = fixture(valid, legacy=True)
+        self.assertEqual(macho.thin(mirrored, for_engine=True), macho.thin(mirrored))
+        for case, expected, status in (
+            (fixture(b"\0\x01a\0\x05\0\x01b\0\x05"), "export_trie_malformed", 5),
+            (fixture(b"\xff", legacy=True, modern=False), "export_trie_malformed", 5),
+            (fixture(valid, legacy=True, conflicting=True), "export_trie_extent", 5),
+            (fixture(valid, duplicate=True), "export_trie_extent", 5),
+            (fixture(leaf_trie([(b"a", b"\x20\x02")])), "export_trie_unsupported_flags", 3),
+        ):
+            with self.subTest(expected=expected):
+                macho.thin(case)
+                with self.assertRaises(Error) as error:
+                    macho.thin(case, for_engine=True)
+                self.assertEqual((error.exception.code, error.exception.exit_code), (expected, status))
+
+        for limit in ("MAX_TRIE_BYTES", "MAX_NODES", "MAX_WALK_BYTES", "MAX_TABLE_ROWS"):
+            with self.subTest(limit=limit), patch.object(export_trie, limit, 0):
+                _, _, gaps = self.decode(mirrored)
+                self.assertTrue(gaps[0].endswith("_limit"))
+                with self.assertRaises(Error) as error:
+                    macho.thin(mirrored, for_engine=True)
+                self.assertEqual((error.exception.code, error.exception.exit_code), ("export_trie_limit", 7))
 
     def test_cli_reads_before_analysis_and_binds_cursor_to_filters(self):
         data = fixture(leaf_trie([(b"alpha", b"\x00\x28"), (b"beta", b"\x00\x30")]))
