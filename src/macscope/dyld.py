@@ -93,12 +93,20 @@ def ordinary_pointer(value, kind, base):
     return fields, (value >> 51 & 0xFFF) * 4
 
 
-def decode_chained(data, image, parsed, extent, *, address=None, selected=None, for_engine=False):
+def decode_chained(data, image, parsed, extent, *, address=None, selected=None, for_engine=False, whole_page=False):
     payload,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
     end = payload+size
     version,starts,table,symbols,count,format_id,symbol_format = header(data, payload, size)
     result = {"format": "chained", "version": version, "import_count": count,
               "imports_format": format_id, "symbols_format": symbol_format, "pointer_formats": []}
+    if whole_page:
+        # Internal metadata lookup only. Engine admission and exact-slot queries
+        # retain their existing scope and budgets.
+        if address is None or selected is None or for_engine:
+            raise ValueError("A chained page lookup requires one selected address")
+        segment = parsed["segments"][selected]
+        start = int(segment["va"],16)
+        result["page_range"] = [hex(start),hex(start+int(segment["size"],16))]
     records = []
     unsupported = []
     for invalid, reason in ((version!=0,"fixup_version"),(format_id not in IMPORT_WIDTHS,"imports_format"),
@@ -135,6 +143,9 @@ def decode_chained(data, image, parsed, extent, *, address=None, selected=None, 
             raise Error("fixup_segments", "Chained starts disagree with the file-backed segment mapping")
         file_offset, file_size = int(file_offset,16), int(segment["file_size"],16)
         selected_page = (address-segment_va)//page_size if address is not None else None
+        if whole_page:
+            start = segment_va+selected_page*page_size
+            result["page_range"] = [hex(start),hex(min(start+page_size,segment_va+int(segment["size"],16)))]
         page_indices = range(pages) if selected_page is None else range(selected_page,min(selected_page+1,pages))
         for page in page_indices:
             pages_seen += 1
@@ -170,7 +181,7 @@ def decode_chained(data, image, parsed, extent, *, address=None, selected=None, 
                     fields.update(symbol, resolution=(
                         "declared_symbol" if symbol["library"] else "unresolved_library_ordinal"
                     ))
-                if not for_engine and (address is None or va == address):
+                if not for_engine and (address is None or va == address or whole_page):
                     records.append({"address_space": "ram", "va": hex(va), "slice_file_offset": hex(at),
                                     "container_file_offset": hex(int(image["offset"],16)+at),
                                     "pointer_format": POINTER_FORMATS[kind], "raw": hex(value), **fields})
@@ -206,6 +217,21 @@ def slot_segment(parsed, address):
             or end > 1 << 64):
         raise Error("fixup_address_unmapped", "An exact fixup slot must fit one unambiguous Mach-O segment", 3)
     return overlaps[0][0]
+
+
+
+def chained_page(data, image, parsed, address):
+    """Validate and return a whole selected page, never an image-wide inventory.
+
+    The returned half-open page_range is safe to cache only when gaps is empty
+    and decoding completed without an exception. An absent segment-start record
+    covers that segment; no chained relocations are declared there.
+    """
+    selected = slot_segment(parsed,address)
+    extents = [row for row in parsed["loader"]["linkedit"] if row["kind"]=="chained_fixups"]
+    if len(extents) != 1:
+        raise Error("fixup_layout", "A page lookup requires one chained fixup payload")
+    return decode_chained(data,image,parsed,extents[0],address=address,selected=selected,whole_page=True)
 
 
 def fixups(data, image, *, parsed=None, weak_definitions=False, address=None):

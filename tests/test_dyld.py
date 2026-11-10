@@ -141,6 +141,28 @@ class ChainedFixupsTests(unittest.TestCase):
         self.assertEqual(len(rows),1)
         self.assertEqual(gaps,["fixup_limit"])
 
+    def test_selected_page_has_a_cacheable_range_and_ignores_inventory_cap(self):
+        binary = fixture()
+        parsed = macho.thin(binary)
+        with patch.object(dyld,"MAX_FIXUPS",1):
+            info,rows,gaps = dyld.chained_page(binary,{"offset":"0x1000"},parsed,BASE+START)
+        self.assertEqual(info["page_range"],[hex(BASE),hex(BASE+4096)])
+        self.assertEqual((len(rows),gaps),(2,[]))
+        self.assertEqual(rows[1]["container_file_offset"],"0x1108")
+        # A matching early slot cannot make a malformed later bind trustworthy.
+        malformed = fixture(bind_ordinal=1)
+        with self.assertRaises(Error) as caught:
+            dyld.chained_page(malformed,{"offset":"0x0"},macho.thin(malformed),BASE+START)
+        self.assertEqual(caught.exception.code,"fixup_ordinal")
+
+    def test_segment_without_declared_chains_has_an_empty_cacheable_range(self):
+        binary = bytearray(fixture())
+        struct.pack_into("<I",binary,PAYLOAD+36,0)
+        binary = bytes(binary)
+        info,rows,gaps = dyld.chained_page(binary,{"offset":"0x0"},macho.thin(binary),BASE+START)
+        self.assertEqual(info["page_range"],[hex(BASE),hex(BASE+4096)])
+        self.assertEqual((rows,gaps),([],[]))
+
     def test_engine_admission_validates_even_an_unreferenced_import_name(self):
         for import_format in (1, 2, 3):
             with self.subTest(import_format=import_format):

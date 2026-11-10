@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,12 +41,42 @@ class HardeningTests(unittest.TestCase):
     def test_main_missing_inputs_fails_aggregate_and_refuses_reuse(self):
         args = ['DebugAnalysis-arm64-sym', '--build-root', str(self.d / 'missing'),
                 '--runs-root', str(self.d / 'runs'), '--run-id', 'regression']
-        self.assertEqual(runner.main(args), 1)
+        with patch.object(runner, 'engine_identity', side_effect=AssertionError('unexpected engine probe')) as probe:
+            self.assertEqual(runner.main(args), 1)
+        probe.assert_not_called()
+        identity = json.loads((self.d / 'runs/regression/identity.json').read_text())
+        self.assertEqual(identity['engine_preflight'], 'not_required')
+        self.assertNotIn('jdk_version', identity)
         summary = self.d / 'runs/regression/summary.json'
         before = summary.read_bytes()
         self.assertEqual(json.loads(before)['status'], 'failed')
         with self.assertRaises(FileExistsError): runner.main(args)
         self.assertEqual(before, summary.read_bytes())
+
+    def test_missing_toolchain_fails_cases_without_launch_and_preserves_evidence(self):
+        case = 'DebugAnalysis-arm64-sym'
+        root = self.d / 'build/analyst' / case
+        app = root / 'CalculatorFixture.app/Contents/MacOS/CalculatorFixture'
+        app.parent.mkdir(parents=True)
+        app.write_bytes(b'owned input for preflight failure')
+        (root / 'CorpusFixture').write_bytes(b'owned tool for preflight failure')
+        args = [case, '--build-root', str(self.d / 'build'),
+                '--runs-root', str(self.d / 'runs'), '--run-id', 'toolchain-failure']
+        with patch.object(runner, 'engine_identity', side_effect=FileNotFoundError('missing owned toolchain')) as probe, \
+             patch.object(runner, 'bounded_command', side_effect=AssertionError('unexpected worker launch')) as launch:
+            self.assertEqual(runner.main(args), 1)
+        probe.assert_called_once()
+        launch.assert_not_called()
+        out = self.d / 'runs/toolchain-failure'
+        summary = json.loads((out / 'summary.json').read_text())
+        self.assertEqual(summary['status'], 'failed')
+        self.assertEqual(len(summary['records']), 2)
+        self.assertTrue(all(row['status'] == 'failed' and 'missing owned toolchain' in row['error']
+                            and 'input_sha256' in row and 'engine' not in row for row in summary['records']))
+        identity = json.loads((out / 'identity.json').read_text())
+        self.assertEqual(identity['engine_preflight'], 'failed')
+        self.assertIn('missing owned toolchain', identity['engine_error'])
+        self.assertEqual(json.loads((out / 'freeze.json').read_text())['artifacts'], [])
 
     def test_bounded_process_success(self):
         r = runner.bounded_command([sys.executable, '-c', 'print("hello")'], self.d / 'log', 5)

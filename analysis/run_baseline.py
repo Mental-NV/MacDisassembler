@@ -223,6 +223,18 @@ def stage_dsym(source, destination, expected_uuid, arch):
     return sha(destination)
 
 
+
+def engine_identity(ghidra, java, scripts):
+    """Fingerprint the real toolchain only after an owned input was staged."""
+    return {
+        'ghidra_properties_sha256': sha(ghidra / 'Ghidra/application.properties'),
+        'native_decompiler_sha256': sha(ghidra / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile'),
+        'scripts': {name: sha(REPO / 'analysis/scripts' / name) for name in scripts},
+        'source_revision': subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
+        'jdk_version': subprocess.check_output([str(java / 'bin/java'), '-version'], stderr=subprocess.STDOUT, text=True).strip(),
+    }
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('cases', nargs='*', choices=CASES)
@@ -269,18 +281,14 @@ def main(argv=None):
     identity = {'schema': 'macscope-baseline-run/2', 'run_id': a.run_id,
                 'limits': {'job_secs': a.job_timeout, 'case_secs': a.case_timeout, 'log_bytes': 16 << 20, 'json_bytes': 64 << 20},
                 'isolation': 'macscope-baseline-case/1',
-                'ghidra_properties_sha256': sha(GHIDRA / 'Ghidra/application.properties'),
-                'native_decompiler_sha256': sha(GHIDRA / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile'),
-                'scripts': {name: sha(REPO / 'analysis/scripts' / name) for name in scripts_used},
-                'source_revision': subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
-                'jdk_version': subprocess.check_output([str(JAVA / 'bin/java'), '-version'], stderr=subprocess.STDOUT, text=True).strip(),
                 'host_arch': __import__('platform').machine(),
                 'build_manifest_sha256': build_digest,
                 'runner_sha256': sha(__file__), 'java_home': str(java)}
     if a.assisted_from:
         identity['assisted_from'] = {'path': str(a.assisted_from),
                                      'freeze_sha256': sha(a.assisted_from / 'freeze.json')}
-    exclusive_json(out / 'identity.json', identity)
+    identity_recorded = False
+    identity_failure = None
     for case in cases:
         for kind, rel in [('app', 'CalculatorFixture.app/Contents/MacOS/CalculatorFixture'), ('tool', 'CorpusFixture')]:
             tag = case + '-' + kind
@@ -298,6 +306,16 @@ def main(argv=None):
                 artifact = expected.get((config, arch, symbols, binary_name), {})
                 if manifest is not None and artifact.get('sha256') != rec['input_sha256']:
                     raise ValueError('Owned binary differs from the recorded fixture manifest')
+                if not identity_recorded:
+                    try:
+                        identity.update(engine_identity(ghidra, java, scripts_used), engine_preflight='complete')
+                    except Exception as error:
+                        identity_failure = error
+                        identity.update(engine_preflight='failed', engine_error=f'{type(error).__name__}: {error}')
+                    exclusive_json(out / 'identity.json', identity)
+                    identity_recorded = True
+                if identity_failure is not None:
+                    raise identity_failure
                 (d / 'project').mkdir()
                 scripts = d / 'scripts'
                 scripts.mkdir()
@@ -364,6 +382,11 @@ def main(argv=None):
                 rec.update(status='failed', error=f'{type(e).__name__}: {e}')
             exclusive_json(d / 'result.json', rec); records.append(rec)
             print(tag + ': ' + rec['status'], flush=True)
+    if not identity_recorded:
+        # Every case failed input validation. This is still a failed, immutable
+        # run, but no Ghidra, Java or git installation is needed to report it.
+        identity['engine_preflight'] = 'not_required'
+        exclusive_json(out / 'identity.json', identity)
     exclusive_json(out / 'freeze.json', {'schema': 'macscope-freeze/2', 'artifacts': freeze,
         'classification': ('dSYM-assisted diagnostic' if a.assisted_from else
                            'isolated engine captures; binary-only and binary-plus-symbol-table conditions')})

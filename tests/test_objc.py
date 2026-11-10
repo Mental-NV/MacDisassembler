@@ -3,8 +3,9 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from macscope import dyld, objc
+from macscope import cli, dyld, engine, import_state, macho, objc, storage
 from macscope.errors import Error
+from test_core import TemporaryCase
 from test_macho import command, image
 
 
@@ -62,6 +63,64 @@ def property_fixture(*, image_flags=0x40, image_version=0, protocol_size=96, bad
     return bytes(data)
 
 
+def chained_fixture(*, prefix_fixups=1):
+    """Project-owned bytes with unrelated relocations before the ObjC page."""
+    source = fixture(relative=True)
+    bias = ((0x400+prefix_fixups*8+4095)//4096)*4096
+    payload_offset = bias+4096
+    pages = payload_offset//4096
+    sections = b"".join(struct.pack("<16s16s2Q8I",name,b"__TEXT",BASE+bias+offset,
+                                   8,bias+offset,3,0,0,0,0,0,0)
+                        for name,offset in ((b"__objc_classlist",0x300),(b"__objc_selrefs",0x308)))
+    page_sites = {}
+    values = {0x400+index*8:0x80 for index in range(prefix_fixups)}
+    for offset in (0x300,0x308,0x420,0x458,0x460):
+        values[bias+offset] = struct.unpack_from("<Q",source,offset)[0]-BASE+bias
+    for site in sorted(values):
+        page_sites.setdefault(site//4096,[]).append(site)
+    starts = [page_sites[page][0]%4096 if page in page_sites else 0xFFFF for page in range(pages)]
+    payload = struct.pack("<7I",0,32,0,0,0,1,0)+bytes(4)+struct.pack("<2I",1,8)
+    payload += struct.pack("<IHHQIH",22+pages*2,4096,6,0,0,pages)
+    payload += struct.pack("<"+"H"*pages,*starts)
+    length = payload_offset+len(payload)
+    segment = struct.pack("<16s4Q4I",b"__TEXT",BASE,(length+4095)//4096*4096,0,length,7,5,2,0)
+    data = bytearray(image(commands=[command(0x19,segment+sections),
+                                    command(0x80000034,struct.pack("<2I",payload_offset,len(payload)))]))
+    data.extend(bytes(length-len(data)))
+    data[bias+0x300:bias+0x800] = source[0x300:0x800]
+    data[payload_offset:] = payload
+    for sites in page_sites.values():
+        for index,site in enumerate(sites):
+            step = (sites[index+1]-site)//4 if index+1 < len(sites) else 0
+            struct.pack_into("<Q",data,site,values[site] | step<<51)
+    return bytes(data),bias
+
+
+class ObjCCoverageTests(TemporaryCase):
+    def test_cli_reports_scoped_success_and_budget_failure_without_engine(self):
+        project = self.project()
+        binary,_ = chained_fixture()
+        source = macho.inspect_bytes(binary)
+        image_data = dict(source["slices"][0],artifact_sha256=source["artifact_sha256"],input_name="owned")
+        import_state.stage_inputs(project,image_data,binary)
+        with project.db(False) as db:
+            db.execute("INSERT INTO images(id,arch,metadata,imported) VALUES(?,?,?,1)",
+                       (image_data["image_id"],image_data["arch"],storage.canonical(image_data).decode()))
+        args = cli.parser().parse_args(["objc","classes","--project",str(project.path)])
+        with patch.object(engine,"dependencies",side_effect=AssertionError("unexpected engine probe")), \
+             patch.object(dyld,"MAX_FIXUPS",1):
+            result = cli.execute(args)
+            self.assertEqual(result["status"],"complete")
+            self.assertEqual(result["data"][0]["name"],"OwnedProbe")
+            self.assertEqual(result["coverage"]["known_total"],1)
+            with patch.object(objc,"MAX_INVENTORY_POINTERS",0):
+                result = cli.execute(args)
+            self.assertEqual(result["status"],"partial")
+            self.assertEqual(result["coverage"]["status"],"partial")
+            self.assertIsNone(result["coverage"]["known_total"])
+            self.assertIn("metadata_pointer_limit",result["coverage"]["truncation_reason"])
+
+
 class ObjCMetadataTests(unittest.TestCase):
     def inventory(self, scope, **kwargs):
         return objc.inventory(fixture(**kwargs),{"offset":"0x0"},scope)
@@ -80,32 +139,119 @@ class ObjCMetadataTests(unittest.TestCase):
             self.assertEqual(methods[0]["encoding"],"relative" if relative else "absolute")
 
     def test_exact_class_slot_resolves_methods_past_the_chained_fixup_cap(self):
-        data = bytearray(fixture(relative=True))
-        sites = (0x280,0x300,0x308,0x420,0x458,0x460)
-        struct.pack_into("<Q",data,sites[0],BASE+0x500)
-        for index, site in enumerate(sites):
-            raw, = struct.unpack_from("<Q",data,site)
-            step = (sites[index+1]-site)//4 if index+1 < len(sites) else 0
-            struct.pack_into("<Q",data,site,(raw-BASE) | step<<51)
-        payload = struct.pack("<7I",0,32,0,0,0,1,0)+bytes(4)+struct.pack("<2I",1,8)
-        payload += struct.pack("<IHHQIHH",24,4096,6,0,0,1,sites[0])
-        struct.pack_into("<2I",data,16,2,248)
-        data[264:280] = command(0x80000034,struct.pack("<2I",0x700,len(payload)))
-        data[0x700:0x700+len(payload)] = payload
-        binary = bytes(data)
+        binary,bias = chained_fixture()
         image_data = {"offset":"0x0"}
         with patch.object(dyld,"MAX_FIXUPS",1):
+            self.assertIn("fixup_limit",dyld.fixups(binary,image_data)[2])
             methods,gaps = objc.inventory(binary,image_data,"methods")
-            self.assertEqual(methods,[])
-            self.assertIn("fixups_fixup_limit",gaps)
-            methods,gaps = objc.selected_methods(binary,image_data,BASE+0x300)
+            self.assertEqual(gaps,[])
+            self.assertEqual(methods[0]["name"],"probe")
+            methods,gaps = objc.selected_methods(binary,image_data,BASE+bias+0x300)
             self.assertEqual(gaps,[])
             method, = methods
             self.assertEqual((method["name"],method["class_slot"],method["implementation_va"]),
-                             ("probe",hex(BASE+0x300),hex(BASE+0x600)))
+                             ("probe",hex(BASE+bias+0x300),hex(BASE+bias+0x600)))
         with self.assertRaises(Error) as caught:
-            objc.selected_methods(binary,image_data,BASE+0x308)
+            objc.selected_methods(binary,image_data,BASE+bias+0x308)
         self.assertEqual(caught.exception.code,"objc_class_slot")
+
+    def test_class_discovery_after_ten_thousand_unrelated_fixups(self):
+        binary,bias = chained_fixture(prefix_fixups=10001)
+        _,rows,gaps = dyld.fixups(binary,{"offset":"0x0"})
+        self.assertEqual((len(rows),gaps),(10000,["fixup_limit"]))
+        for scope in ("classes","methods","selectors"):
+            with self.subTest(scope=scope), patch.object(dyld,"chained_page",wraps=dyld.chained_page) as lookup:
+                records,gaps = objc.inventory(binary,{"offset":"0x0"},scope)
+            self.assertEqual(gaps,[])
+            self.assertTrue(records)
+            self.assertEqual(lookup.call_count,1)
+            self.assertEqual(records[0]["name"],"OwnedProbe" if scope=="classes" else "probe")
+        self.assertEqual(objc.inventory(binary,{"offset":"0x0"},"classes")[0][0]["list_entry_va"],
+                         hex(BASE+bias+0x300))
+
+    def test_unrelated_malformed_page_does_not_hide_valid_metadata(self):
+        binary,_ = chained_fixture()
+        data = bytearray(binary)
+        struct.pack_into("<Q",data,0x400,0x80 | 4095<<51)
+        with self.assertRaises(Error):
+            dyld.fixups(bytes(data),{"offset":"0x0"})
+        rows,gaps = objc.inventory(bytes(data),{"offset":"0x0"},"classes")
+        self.assertEqual((rows[0]["name"],gaps),("OwnedProbe",[]))
+
+    def test_malformed_metadata_page_never_uses_partial_fixup_rows(self):
+        binary,bias = chained_fixture()
+        data = bytearray(binary)
+        # The class slot itself is valid, but a later pointer in its page is not.
+        struct.pack_into("<Q",data,bias+0x460,1<<44)
+        rows,gaps = objc.inventory(bytes(data),{"offset":"0x0"},"classes")
+        self.assertEqual(rows,[])
+        self.assertIn("fixups_fixup_pointer",gaps)
+        self.assertIn("invalid_class_record",gaps)
+
+    def test_cached_page_does_not_bypass_per_slot_segment_validation(self):
+        binary,bias = chained_fixture()
+        data = bytearray(binary)
+        count,size = struct.unpack_from("<II",data,16)
+        overlapping = command(0x19,struct.pack("<16s4Q4I",b"__BSS",BASE+bias+0x420,8,0,0,3,3,0,0))
+        data[32+size:32+size+len(overlapping)] = overlapping
+        struct.pack_into("<II",data,16,count+1,size+len(overlapping))
+        for query in (lambda: objc.inventory(bytes(data),{"offset":"0x0"},"classes"),
+                      lambda: objc.selected_methods(bytes(data),{"offset":"0x0"},BASE+bias+0x300)):
+            rows,gaps = query()
+            self.assertEqual(rows,[])
+            self.assertIn("fixups_fixup_address_unmapped",gaps)
+
+    def test_cached_page_never_overwrites_an_earlier_slot_failure(self):
+        binary,bias = chained_fixture()
+        data = bytearray(binary)
+        count,size = struct.unpack_from("<II",data,16)
+        overlapping = command(0x19,struct.pack("<16s4Q4I",b"__BSS",BASE+bias+0x420,8,0,0,3,3,0,0))
+        data[32+size:32+size+len(overlapping)] = overlapping
+        struct.pack_into("<II",data,16,count+1,size+len(overlapping))
+        data = bytes(data)
+        view = objc.ObjCImage(data,{"offset":"0x0"},objc.thin(data),scoped=True)
+        with self.assertRaises(ValueError):
+            view.target(BASE+bias+0x420)
+        self.assertEqual(view.target(BASE+bias+0x300),BASE+bias+0x400)
+        with self.assertRaises(ValueError):
+            view.target(BASE+bias+0x420)
+
+    def test_page_eviction_preserves_requested_results_and_bounds_memory(self):
+        binary,bias = chained_fixture()
+        view = objc.ObjCImage(binary,{"offset":"0x0"},objc.thin(binary),scoped=True)
+        with patch.object(objc,"MAX_SCOPED_FIXUPS",5):
+            self.assertEqual(view.target(BASE+0x400),BASE+0x80)
+            self.assertEqual(view.cached_fixups,1)
+            self.assertEqual(view.target(BASE+bias+0x300),BASE+bias+0x400)
+            self.assertEqual(view.cached_fixups,5)
+            self.assertEqual(len(view.page_cache),1)
+            self.assertEqual(view.target(BASE+0x400),BASE+0x80)
+            self.assertEqual(view.page_queries,2)
+            self.assertEqual(view.gaps,set())
+
+    def test_redecoded_page_does_not_double_count_cache_rows(self):
+        binary,bias = chained_fixture()
+        view = objc.ObjCImage(binary,{"offset":"0x0"},objc.thin(binary),scoped=True)
+        view.relocation(BASE+bias+0x300)
+        view.relocation(BASE+bias+0xffc)  # Eight-byte slot straddles the page.
+        self.assertEqual(view.page_queries,2)
+        self.assertEqual(view.cached_fixups,5)
+        self.assertEqual(view.cached_fixups,sum(len(rows) for rows in view.page_cache.values()))
+
+    def test_scoped_limits_remain_explicit_partial_diagnostics(self):
+        binary,_ = chained_fixture()
+        for limit,reason in (("MAX_INVENTORY_POINTERS","metadata_pointer_limit"),
+                             ("MAX_SCOPED_PAGES","fixup_page_limit"),
+                             ("MAX_SCOPED_FIXUPS","fixup_cache_limit")):
+            with self.subTest(limit=limit), patch.object(objc,limit,0):
+                rows,gaps = objc.inventory(binary,{"offset":"0x0"},"classes")
+                self.assertEqual(rows,[])
+                self.assertIn(reason,gaps)
+        with patch.object(objc,"MAX_SELECTED_POINTERS",0):
+            _,bias = chained_fixture()
+            rows,gaps = objc.selected_methods(binary,{"offset":"0x0"},BASE+bias+0x300)
+            self.assertEqual(rows,[])
+            self.assertIn("selected_pointer_limit",gaps)
 
     def test_selector_declaration_and_reference_are_separate(self):
         rows,gaps = self.inventory("selectors",relative=True)

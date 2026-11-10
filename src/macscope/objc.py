@@ -1,4 +1,6 @@
 """Static Objective-C declarations and selector references in owned Mach-O images."""
+from collections import OrderedDict
+
 from . import dyld
 from .errors import Error
 from .macho import thin
@@ -11,6 +13,9 @@ MAX_PROPERTIES = 10000
 MAX_IVARS = 10000
 MAX_SELECTORS = 10000
 MAX_SELECTED_POINTERS = 1024
+MAX_INVENTORY_POINTERS = 65536
+MAX_SCOPED_PAGES = 1024
+MAX_SCOPED_FIXUPS = 65536
 CLASS_LISTS = {"__objc_classlist", "__objc_nlclslist"}
 CATEGORY_LISTS = {"__objc_catlist", "__objc_nlcatlist"}
 PROTOCOL_LISTS = {"__objc_protolist"}
@@ -20,7 +25,7 @@ CLASS_DATA_MASK = 0x0F007FFFFFFFFFF8
 
 
 class ObjCImage:
-    def __init__(self, data, image, parsed, *, scoped=False):
+    def __init__(self, data, image, parsed, *, scoped=False, pointer_limit=None):
         self.view = MappedImage(data,parsed["segments"])
         self.sections = parsed["sections"]
         self.scoped_lookup = (data,image,parsed) if scoped and any(
@@ -28,25 +33,67 @@ class ObjCImage:
         _,rows,gaps = ({},[],[]) if self.scoped_lookup else dyld.fixups(data,image,parsed=parsed)
         self.gaps = {"fixups_"+reason for reason in gaps}
         self.pointer_gaps = bool(gaps)
+        self.pointer_limit = MAX_SELECTED_POINTERS if pointer_limit is None else pointer_limit
+        self.pointer_limit_reason = "selected_pointer_limit" if pointer_limit is None else "metadata_pointer_limit"
+        self.selected_sites = set()
+        self.page_cache = OrderedDict()
+        self.page_queries = 0
+        self.cached_fixups = 0
         self.pointers = {int(row["va"],16):row for row in rows if row["kind"]=="rebase"}
         # A bind remains external even when a legacy lazy slot also has a rebase.
         self.pointers.update((int(row["va"],16),row) for row in rows if row["kind"]=="bind")
 
     def relocation(self, site):
-        if self.scoped_lookup is not None and site not in self.pointers:
-            if len(self.pointers) == MAX_SELECTED_POINTERS:
-                self.gaps.add("selected_pointer_limit")
-                raise ValueError("Selected pointer limit reached")
-            data,image,parsed = self.scoped_lookup
-            self.pointers[site] = None
-            try:
-                _,rows,gaps = dyld.fixups(data,image,parsed=parsed,address=site)
-            except Error as error:
-                self.gaps.add("fixups_"+error.code)
-            else:
-                self.gaps.update("fixups_"+reason for reason in gaps)
-                if not gaps:
-                    self.pointers[site] = rows[0] if rows else {}
+        if self.scoped_lookup is not None:
+            if site not in self.selected_sites:
+                if len(self.selected_sites) >= self.pointer_limit:
+                    self.gaps.add(self.pointer_limit_reason)
+                    raise ValueError("Objective-C pointer lookup limit reached")
+                self.selected_sites.add(site)
+                # A cached page can span a second overlapping virtual segment,
+                # even when that segment has no file bytes. Validate each slot.
+                try:
+                    dyld.slot_segment(self.scoped_lookup[2],site)
+                except Error as error:
+                    self.gaps.add("fixups_"+error.code)
+                    self.pointers[site] = None
+                    raise ValueError("Pointer has an ambiguous segment mapping") from error
+            if site not in self.pointers:
+                self.pointers[site] = None
+                page = next((key for key in self.page_cache if key[0] <= site and site+8 <= key[1]),None)
+                if page is not None:
+                    self.page_cache.move_to_end(page)
+                    self.pointers[site] = self.page_cache[page].get(site,{})
+                else:
+                    if self.page_queries >= MAX_SCOPED_PAGES:
+                        self.gaps.add("fixup_page_limit")
+                        raise ValueError("Objective-C chained page lookup limit reached")
+                    self.page_queries += 1
+                    data,image,parsed = self.scoped_lookup
+                    try:
+                        info,rows,gaps = dyld.chained_page(data,image,parsed,site)
+                    except Error as error:
+                        self.gaps.add("fixups_"+error.code)
+                    else:
+                        self.gaps.update("fixups_"+reason for reason in gaps)
+                        if not gaps:
+                            if len(rows) > MAX_SCOPED_FIXUPS:
+                                self.gaps.add("fixup_cache_limit")
+                                raise ValueError("Objective-C chained page exceeds the cache limit")
+                            # Retain requested-slot results separately. Eviction
+                            # must not discard failures or make lookup order
+                            # change whether a pointer is trusted.
+                            page = tuple(int(value,16) for value in info["page_range"])
+                            previous = self.page_cache.pop(page,None)
+                            if previous is not None:
+                                self.cached_fixups -= len(previous)
+                            while self.page_cache and self.cached_fixups+len(rows) > MAX_SCOPED_FIXUPS:
+                                _,old = self.page_cache.popitem(last=False)
+                                self.cached_fixups -= len(old)
+                            pointers = {int(row["va"],16):row for row in rows}
+                            self.page_cache[page] = pointers
+                            self.cached_fixups += len(rows)
+                            self.pointers[site] = pointers.get(site,{})
         pointer = self.pointers.get(site,{})
         if pointer is None:
             raise ValueError("Pointer lacks complete relocation evidence")
@@ -433,7 +480,9 @@ def inventory(data, image, scope):
     if not names&lists:
         return [], []
     try:
-        objc = ObjCImage(data,image,parsed)
+        # Resolve only metadata-relevant pages. An unrelated image-wide fixup
+        # inventory cap must not hide classes, methods or selector references.
+        objc = ObjCImage(data,image,parsed,scoped=True,pointer_limit=MAX_INVENTORY_POINTERS)
     except ValueError:
         return [], ["invalid_macho_mapping"]
     classes = objc.classes()

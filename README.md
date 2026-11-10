@@ -23,6 +23,7 @@ The broad specification is a roadmap, not a completion claim.
 PYTHONPATH=src python3 -m macscope --help
 PYTHONPATH=src python3 -m macscope doctor --json
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 -m unittest discover -s analysis/tests -v
 ```
 
 The independent repository contains project-owned code, documentation and a
@@ -31,3 +32,17 @@ and recovered outputs are ignored. It does not modify Taskovsky or include
 third-party application binaries or proprietary recovered material. No
 project license has been selected. Remote pushes, publication, paid-engine
 work and optional REA integration remain separate decisions.
+
+## Portable static metadata and failure checks
+
+Objective-C inventories resolve the chained-fixup pages needed by their
+metadata instead of depending on the first 10,000 image-wide fixups. Page
+validation, per-slot mapping checks, a bounded cache and lookup budgets still
+apply. A malformed relevant page or exhausted budget produces partial coverage;
+legacy-fixup inventory limits are unchanged. Exact class-slot method queries
+remain bounded separately. These static queries do not start Ghidra or Java.
+
+The direct baseline runner records missing-input and missing-toolchain failures
+in its immutable run summary. It fingerprints the engine only after staging an
+input. This permits failure-path testing without a macOS Ghidra install;
+it does not make engine execution portable or relax the macOS isolation gates.
