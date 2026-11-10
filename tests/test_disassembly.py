@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from macscope import cli, engine, storage
+from macscope import body_ownership, cli, engine, storage
 from test_core import TemporaryCase, synthetic_snapshot
 
 
@@ -54,6 +54,29 @@ class RangeDisassemblyTests(TemporaryCase):
         untouched = self.query("0x100000030:0x100000034")
         self.assertEqual(untouched["status"], "partial")
         self.assertEqual(untouched["data"]["gaps"][0]["reason"], "no_saved_instruction")
+
+    def test_shared_body_keeps_agreeing_bytes_and_records_both_owners(self):
+        first, second, _ = self.snapshot["functions"]
+        second["body_ranges"].append(first["body_ranges"][0])
+        second["instructions"].append(first["instructions"][0].copy())
+        result = self.query("0x100000000:0x100000004")
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["coverage"]["truncation_reason"], "function_body_overlap")
+        self.assertEqual(result["data"]["covered_bytes"], 4)
+        self.assertEqual(result["data"]["gaps"], [])
+        self.assertEqual(result["data"]["body_ownership"]["witnesses"], [
+            {"function_id":"function-0", "other_function_id":"function-1",
+             "start_va":"0x100000000", "last_va":"0x100000003"},
+            {"function_id":"function-1", "other_function_id":"function-0",
+             "start_va":"0x100000000", "last_va":"0x100000003"},
+        ])
+        clear = self.query("0x100000010:0x100000014")
+        self.assertEqual(clear["status"], "complete")
+        self.assertNotIn("body_ownership",clear["data"])
+        with patch.object(body_ownership,"MAX_RANGES",1):
+            limited = self.query("0x100000000:0x100000004")
+        self.assertTrue(limited["data"]["body_ownership"]["scan_truncated"])
+        self.assertEqual(limited["coverage"]["truncation_reason"],"function_body_review_limit")
 
     def test_contradictory_records_do_not_hide_a_non_overlapping_instruction(self):
         first, second, _ = self.snapshot["functions"]

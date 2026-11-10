@@ -1,7 +1,7 @@
 """CLI coverage review for observable gaps in Ghidra's control-flow evidence."""
 import re
 
-from . import flow_boundaries
+from . import body_ownership, flow_boundaries
 
 
 POLICY = "macscope-computed-jump-coverage/1"
@@ -43,6 +43,7 @@ def review(function, *, blocks=None, boundary_gaps=()):
 
 
 def snapshot_view(snapshot):
+    snapshot = body_ownership.snapshot_view(snapshot)
     boundaries = flow_boundaries.gaps(snapshot)
     functions = [review(function, boundary_gaps=boundaries.get(function.get("entry_va"), ()))
                  for function in snapshot["functions"]]
@@ -59,7 +60,7 @@ def query_view(response, selected):
     boundary_gaps = [gap for gap in selected.get("control_flow_gaps", ())
                      if gap["reason"] in flow_boundaries.REASONS]
     if not boundary_gaps:
-        return response
+        return body_ownership.query_view(response, selected)
     data = response["data"]
     engine_status = data.get("engine_decompile_status", data["decompile_status"])
     displayed = dict(data, control_flow_review=flow_boundaries.POLICY,
@@ -68,4 +69,4 @@ def query_view(response, selected):
     if displayed["decompile_status"] == "complete":
         displayed["decompile_status"] = "partial"
     coverage = dict(response["coverage"], status="partial", truncation_reason="unresolved_control_flow")
-    return dict(response, data=displayed, status="partial", coverage=coverage)
+    return body_ownership.query_view(dict(response, data=displayed, status="partial", coverage=coverage), selected)

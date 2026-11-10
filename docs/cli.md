@@ -233,6 +233,25 @@ their function IDs. Identical records from overlapping functions appear
 once. Missing records, conflicting decodes, and instructions cut by a
 range boundary are separate gap reasons. Gap ends are exclusive. A range
 with gaps exits 6 and reports the number of covered and requested bytes.
+
+Function ownership is reviewed separately from decoded bytes. When two
+saved function bodies intersect, `body_overlap` gives each affected
+function a representative inclusive range and the other function ID.
+The review scans up to 100,000 saved ranges. Exports and range queries
+report an incomplete scan explicitly. A range query reports ownership
+witnesses within its selected range and preserves instructions whose bytes
+and decoding agree. A known conflict makes the result partial. Fresh
+decompilation and receipt replay carry the saved ownership warning while
+preserving Ghidra's decompilation status.
+
+The interval review matched an exhaustive byte comparison on 5,000 seeded
+controls. The installed CLI repeated full Ghidra analysis of two owned
+slices and reproduced the prior analysis IDs and exports. A derived
+snapshot on each architecture added a second claim over one instruction.
+The CLI retained agreeing bytes, separately flagged a contradictory decode,
+and reproduced the ownership warning on fresh-query replay. The validation
+report SHA-256 is
+`b334dd0c1dbc7cf8cf19f8a4cbd593bd5fd033b300d3617755390b1491d58039`.
 An unmapped range yields an empty instruction list with a gap. Use `bytes`
 for file-backed bytes whether or not Ghidra decoded them. Range queries
 read a committed snapshot and start no worker.

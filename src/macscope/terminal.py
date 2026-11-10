@@ -60,6 +60,8 @@ def function(report, row):
         report.field("  Signature", row["signature"])
     if target := row.get("thunk_target"):
         report.field("  Thunk target", f"{target['name']} ({target['engine_entry']})")
+    if overlap := row.get("body_overlap"):
+        report.field("  Body overlap", f"{overlap['start_va']}–{overlap['last_va']} with {overlap['other_function_id']}")
 
 
 def functions(report, data):
@@ -112,6 +114,9 @@ def disasm(report, data):
         if data.get(key):
             report.line("Instruction gaps" if key == "gaps" else "Control-flow gaps")
             report.tree(data[key], 1)
+    if ownership := data.get("body_ownership"):
+        report.line("Function body ownership")
+        report.tree(ownership, 1)
 
 
 def references(report, data):

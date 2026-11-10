@@ -18,7 +18,7 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, identity, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import engine_checks, html_export, macho_symbols, macho_unwind, string_evidence, terminal
+from . import body_ownership, engine_checks, html_export, macho_symbols, macho_unwind, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -294,6 +294,9 @@ def normalize(raw, image, deps, manifest):
     analysis_key={'image':image['image_id'],'slice_sha256':image['sha256'],'profile':selected_profile['identity'],'profile_configuration':selected_profile,'engine':{k:v for k,v in deps.items() if k not in ('ghidra_path','java_home','host_os')},'language_id':raw['language_id'],'compiler_spec_id':raw['compiler_spec_id'],'options':raw.get('effective_analysis_options',{}),'limits':manifest['limits'],'auxiliary_inputs':[],'import_baseline_sha256':image.get('engine_baseline_sha256')}
     if 'boundary_recovery' in manifest:
         analysis_key['boundary_recovery'] = manifest['boundary_recovery']
+    ownership = body_ownership.find(raw.get('functions',()))
+    if any(ownership):
+        analysis_key['body_ownership_policy'] = body_ownership.POLICY
     aid=identity(analysis_key)
     raw = dict(raw)
     if 'strings' in raw:
@@ -353,7 +356,7 @@ def normalize(raw, image, deps, manifest):
     value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','Pseudocode spans cover available token addresses within the function body.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
     if selected_profile['name'] == 'deep':
         value['limitations'].append('Address-table references are inferred from binary evidence and do not establish indirect control-flow targets.')
-    return redact(value)
+    return redact(body_ownership.snapshot_view(value,ownership))
 
 
 def resolve_selector(args, project, image, snapshot):
@@ -636,7 +639,7 @@ def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=Fa
             'analysis_profile': snapshot['analysis_profile'], 'limitations': snapshot['limitations']}
     if resumed_from is not None:
         data.update(resumed_from=resumed_from,reused_restart=reused)
-    reasons = ['engine_or_facet_partial'] if snapshot['status'] != 'complete' else []
+    reasons = ['engine_or_facet_partial'] if snapshot['engine'].get('status',snapshot['status']) != 'complete' else []
     recovery = snapshot['engine'].get('boundary_recovery')
     if recovery is not None:
         data['boundary_recovery'] = recovery
@@ -645,6 +648,9 @@ def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=Fa
     if 'control_flow_review' in view:
         data['control_flow_review'] = view['control_flow_review']
         reasons.append('unresolved_control_flow')
+    if 'body_ownership' in view:
+        data['body_ownership'] = view['body_ownership']
+        reasons.extend(body_ownership.reasons(view['body_ownership']))
     return envelope(command,data,snapshot['analysis_id'],view['status'],
                     coverage('selected image analysis',len(snapshot['functions']),
                              snapshot['engine'].get('function_count_total_reported_by_engine'),bool(reasons),
@@ -1155,7 +1161,7 @@ def function_xrefs(args, project, snapshot, function):
         data.update(groups)
         count = sum(map(len,groups.values()))
         cov = coverage(scope,count,count if sources and not gaps else None,bool(gaps),reason=';'.join(gaps) or None)
-    return envelope('xrefs',data,aid,'partial' if gaps else 'complete',cov)
+    return body_ownership.query_view(envelope('xrefs',data,aid,'partial' if gaps else 'complete',cov),function)
 
 
 def execute_command(a, address_selection=None):
@@ -1336,11 +1342,13 @@ def execute_command(a, address_selection=None):
         return envelope(command,data,aid,'partial' if gaps else 'complete',cov)
     if va_range is not None:
         data = disassembly.query(snapshot,image,*va_range)
-        partial = bool(data['gaps'])
+        reasons = ['range_instruction_evidence_incomplete'] if data['gaps'] else []
+        reasons.extend(body_ownership.reasons(data.get('body_ownership',{})))
+        partial = bool(reasons)
         count = len(data['instructions'])
         return envelope(command,data,aid,'partial' if partial else 'complete',
-                        coverage('saved instructions within selected VA range',count,None if partial else count,
-                                 partial,reason='range_instruction_evidence_incomplete' if partial else None))
+                        coverage('saved instructions within selected VA range',count,None if data['gaps'] else count,
+                                 partial,reason=';'.join(reasons) or None))
     if a.command == 'annotations' and a.action == 'export':
         transfer = annotation_transfer.export(p,image)
         total = len(transfer['revisions'])
@@ -1381,7 +1389,9 @@ def execute_command(a, address_selection=None):
     if a.command=='export':
         if a.include_annotations:
             snapshot=dict(snapshot,annotations=redact({'revision':revision,'records':annotations_rows}))
-        reason = 'unresolved_control_flow' if 'control_flow_review' in snapshot else None
+        reasons = ['unresolved_control_flow'] if 'control_flow_review' in snapshot else []
+        reasons.extend(body_ownership.reasons(snapshot.get('body_ownership',{})))
+        reason = ';'.join(reasons) or None
         return envelope(command,snapshot,aid,snapshot['status'],coverage('committed normalized image export',len(functions),snapshot['engine'].get('function_count_total_reported_by_engine'),snapshot['status']!='complete',reason=reason),['Private recovered code/strings may be sensitive. Absolute host paths and volatile job timings are omitted.'])
     if a.command=='functions' and a.action=='list':
         rows=[f for f in functions if not a.name_contains or any(a.name_contains in n['name'] for n in f['names'])]
@@ -1393,25 +1403,32 @@ def execute_command(a, address_selection=None):
             gaps.append('discovery_limit')
         if a.name_contains and search.entry_labels_incomplete(functions):
             gaps.append('function_entry_label_coverage_incomplete')
+        if any('body_overlap' in f for f in rows):
+            gaps.append('function_body_overlap')
+        if snapshot.get('body_ownership',{}).get('scan_truncated'):
+            gaps.append('function_body_review_limit')
         if gaps:
             if cov['next_cursor']:
                 gaps.append('page_limit')
             cov.update(status='partial',known_total=None,truncation_reason=';'.join(gaps))
         fields = ('function_id','image_id','arch','entry_va','address_space','engine_entry','body_ranges',
                   'names','signature','is_thunk','thunk_target','is_external','decompile_status','control_flow_review',
-                  'control_flow_gaps','engine_decompile_status')
+                  'control_flow_gaps','engine_decompile_status','body_overlap')
         return envelope(command,[{key: f[key] for key in fields if key in f} for f in rows],aid,cov=cov)
     if a.command=='decompile' and a.all:
         rows,cov=page(functions,a,aid,p.project_id,{'decompile':'all'})
         if snapshot['engine'].get('functions_truncated'):
             cov.update(status='partial',known_total=snapshot['engine'].get('function_count_total_reported_by_engine'),truncation_reason='discovery_limit')
         states=Counter(f['decompile_status'] for f in rows)
-        partial=any(k not in ('complete','not_requested') for k in states)
-        if partial:
-            reason = ('unresolved_control_flow' if any('control_flow_gaps' in row for row in rows)
-                      else 'pseudocode_incomplete')
-            cov.update(status='partial', truncation_reason=';'.join(filter(None, (cov['truncation_reason'], reason))))
-        return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if partial else 'complete',cov)
+        reasons = []
+        if any(k not in ('complete','not_requested') for k in states):
+            reasons.append('unresolved_control_flow' if any('control_flow_gaps' in row for row in rows)
+                           else 'pseudocode_incomplete')
+        if any('body_overlap' in row for row in rows):
+            reasons.append('function_body_overlap')
+        if reasons:
+            cov.update(status='partial',truncation_reason=';'.join(filter(None,(cov['truncation_reason'],*reasons))))
+        return envelope(command,{'functions':rows,'summary':dict(states)},aid,'partial' if reasons else 'complete',cov)
     f=select_function(functions,a)
     if a.command=='xrefs':
         return function_xrefs(a,p,snapshot,f)
@@ -1425,16 +1442,17 @@ def execute_command(a, address_selection=None):
     if a.command=='calls':
         data,gaps=calls.graph(dict(snapshot,functions=functions),f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])
-        return envelope(command,data,aid,'partial' if gaps else 'complete',
+        return body_ownership.query_view(envelope(command,data,aid,'partial' if gaps else 'complete',
                         coverage('recorded call edges within requested depth',count,None if gaps else count,
-                                 bool(gaps),reason=';'.join(gaps) or None))
+                                 bool(gaps),reason=';'.join(gaps) or None)),f)
     if a.command=='functions':
         notes=[row for row in annotations_rows if row['engine_entry']==f['engine_entry']]
         if notes:f=dict(f,annotations=notes)
         unresolved = 'control_flow_gaps' in f
         incomplete = unresolved or any(c.get('truncated') or c.get('error') for c in f.get('coverage',{}).values())
         reason = 'unresolved_control_flow' if unresolved else 'facet_incomplete' if incomplete else None
-        return envelope(command,f,aid,'partial' if incomplete else 'complete',coverage('selected function evidence',1,1,incomplete,reason=reason))
+        return body_ownership.query_view(envelope(command,f,aid,'partial' if incomplete else 'complete',
+                        coverage('selected function evidence',1,1,incomplete,reason=reason)),f)
     if a.command=='disasm':
         data={'function_id':f['function_id'],'instructions':f['instructions']}
         partial=bool(f.get('instructions_truncated') or f.get('instructions_error'))
@@ -1452,7 +1470,8 @@ def execute_command(a, address_selection=None):
         data.update(control_flow_gaps=f['control_flow_gaps'], control_flow_review=f['control_flow_review'])
     partial = partial or unresolved
     reason = 'unresolved_control_flow' if unresolved else 'facet_incomplete' if partial else None
-    return envelope(command,data,aid,'partial' if partial else 'complete',coverage('selected function '+a.command,count,None,partial,reason=reason))
+    return body_ownership.query_view(envelope(command,data,aid,'partial' if partial else 'complete',
+                        coverage('selected function '+a.command,count,None,partial,reason=reason)),f)
 
 
 def render_jsonl(result):

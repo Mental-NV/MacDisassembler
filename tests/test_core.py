@@ -612,6 +612,22 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(function['instructions'][0]['location'], location)
         self.assertEqual(function['instruction_bytes_sha256'], hashlib.sha256(bytes.fromhex('c0035fd6')).hexdigest())
 
+    def test_normalization_persists_an_overlap_under_its_own_analysis_identity(self):
+        clean = self.normalized()
+        first = self.raw['functions'][1]
+        second = dict(first,name='secondary',entry_va='0x100000012',
+                      body_ranges=[['0x100000012','0x100000020']])
+        self.raw['functions'].append(second)
+        result = self.normalized()
+        self.assertNotIn('body_ownership',clean)
+        self.assertNotEqual(result['analysis_id'],clean['analysis_id'])
+        self.assertEqual(result['status'],'partial')
+        self.assertEqual(result['body_ownership']['affected_functions'],2)
+        original, overlapping, _ = result['functions']
+        self.assertEqual(original['body_overlap'],{'other_function_id':overlapping['function_id'],
+                                                    'start_va':'0x100000012','last_va':'0x100000013'})
+        self.assertEqual(original['decompile_status'],'complete')
+
     def test_address_spans_use_utf16_and_stay_bound_to_displayed_text(self):
         function = self.raw['functions'][1]
         function['pseudocode'] = '😀return;'

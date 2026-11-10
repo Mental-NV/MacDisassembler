@@ -104,6 +104,11 @@ collections exceed documented bounds despite successful pseudocode output.
   Apple tools matched a shared entry, local branch and imported stub on
   both owned architectures. Fresh aliases replayed their receipts and an
   entry with 36 labels reported the bounded scan.
+- [x] Report [overlapping saved function bodies](cli.md#implemented-commands).
+  Derived controls on owned arm64 and x86_64 snapshots kept agreeing
+  instructions and separated contradictory bytes from ownership warnings.
+  Fresh queries replayed the warning. Normal full-Ghidra reanalysis
+  reproduced the original IDs and exports.
 - [x] Measure 20 rounds of CLI latency on the development Mac. See the
   [benchmark](benchmark.md) for scope and outstanding reference-host measurements.
 - [x] Search committed function names, symbols, strings and pseudocode

@@ -1,6 +1,7 @@
 """Bounded range queries over saved Ghidra instructions."""
 import re
 
+from . import body_ownership
 from .errors import Error
 from .metadata import VA
 from .storage import canonical
@@ -77,6 +78,9 @@ def query(snapshot, image, start, end):
     if cursor < end:
         gap(cursor, end, "no_saved_instruction")
 
-    return {"image_id": image["image_id"], "arch": image["arch"], "address_space": "ram",
+    result = {"image_id": image["image_id"], "arch": image["arch"], "address_space": "ram",
             "start_va": hex(start), "end_va": hex(end), "requested_bytes": end - start,
             "covered_bytes": covered, "instructions": instructions, "gaps": gaps}
+    if ownership := body_ownership.range_view(snapshot["functions"], start, end):
+        result["body_ownership"] = ownership
+    return result
