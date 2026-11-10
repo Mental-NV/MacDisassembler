@@ -618,24 +618,49 @@ class PathAndBundleTests(ErrorAssertions):
 
     def test_valid_bundle_resolves_without_execution(self):
         app, binary = self.make_bundle()
-        selected, warnings = macho.resolve_input(app)
-        self.assertEqual(binary, selected)
-        self.assertEqual([], warnings)
+        self.assertEqual(binary, macho.resolve_input(app))
         result, data = macho.inspect_path(app)
         self.assertEqual(image(), data)
         self.assertEqual("Fixture", result["input_name"])
+        self.assertEqual([], result["warnings"])
 
     def test_bundle_suffix_is_case_insensitive(self):
         app, binary = self.make_bundle(name="Fixture.APP")
-        self.assertEqual(binary, macho.resolve_input(app)[0])
+        self.assertEqual(binary, macho.resolve_input(app))
 
     def test_companion_debug_image_is_reported_not_imported(self):
         app, binary = self.make_bundle()
-        binary.with_name("Fixture.debug.dylib").write_bytes(image(filetype=6))
+        companion = binary.with_name("Fixture.debug.dylib")
+        companion.write_bytes(universal([image(filetype=6), image(cpu=X86_64, filetype=6)]))
         result, data = macho.inspect_path(app)
         self.assertEqual(image(), data)
         self.assertEqual(1, len(result["slices"]))
         self.assertTrue(any(".debug.dylib" in warning for warning in result["warnings"]))
+        direct, _ = macho.inspect_path(companion)
+        evidence = result["debug_companion"]
+        self.assertEqual(evidence["relative_path"], "Contents/MacOS/Fixture.debug.dylib")
+        self.assertEqual(evidence["status"], "verified")
+        self.assertEqual(evidence["artifact_sha256"], direct["artifact_sha256"])
+        self.assertEqual(evidence["slices"], [{key: row[key] for key in ("arch", "image_id", "sha256", "uuid")}
+                                               for row in direct["slices"]])
+        main_only, _ = macho.inspect_path(app, include_companion=False)
+        self.assertNotIn("debug_companion", main_only)
+
+    def test_companion_probe_reports_unavailable_without_following_a_link(self):
+        app, binary = self.make_bundle()
+        candidate = binary.with_name("Fixture.debug.dylib")
+        external = self.root / "External.dylib"
+        external.write_bytes(image(filetype=6))
+        candidate.symlink_to(external)
+        with patch.object(macho, "read_regular", wraps=macho.read_regular) as read:
+            result, data = macho.inspect_path(app)
+        self.assertEqual(data, image())
+        self.assertEqual(result["debug_companion"]["error_code"], "symlink")
+        self.assertEqual([call.args[0] for call in read.call_args_list], [app / "Contents/Info.plist", binary])
+        candidate.unlink()
+        candidate.write_bytes(image())
+        result, _ = macho.inspect_path(app)
+        self.assertEqual(result["debug_companion"]["error_code"], "debug_companion_filetype")
 
     def test_bundle_executable_traversal_and_invalid_names(self):
         app, _ = self.make_bundle()

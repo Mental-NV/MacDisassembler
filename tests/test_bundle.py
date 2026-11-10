@@ -54,6 +54,18 @@ class BundleInventoryTests(unittest.TestCase):
         self.assertEqual(resources[-1]["resource_type"], "txt")
         self.assertEqual(resources[-1]["sha256"], hashlib.sha256(b"hello").hexdigest())
 
+    def test_companion_inventory_marks_physical_macho_and_inspect_checks_filetype(self):
+        companion = self.main.with_name("Fixture.debug.dylib")
+        companion.write_bytes(image(filetype=6))
+        records = self.run_inventory("--kind", "images")["data"]["records"]
+        self.assertTrue(records[1]["debug_companion_candidate"])
+        self.assertFalse(records[1]["main_executable"])
+        companion.write_bytes(image())
+        result = cli.execute(cli.parser().parse_args(["inspect", str(self.app), "--json"]))
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["coverage"]["truncation_reason"], "debug_companion_unavailable")
+        self.assertEqual(result["data"]["debug_companion"]["error_code"], "debug_companion_filetype")
+
     def test_resource_type_filter_hashes_matching_assets_only(self):
         (self.assets / "Earlier.bin").write_bytes(b"unrelated resource")
         (self.assets / "Helper.txt").write_bytes(image())

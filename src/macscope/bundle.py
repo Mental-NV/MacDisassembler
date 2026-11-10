@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 import stat
 
 from .errors import Error
-from .macho import MAX_INPUT, open_directory, resolve_input
+from .macho import MAX_INPUT, debug_companion_path, open_directory, resolve_input
 
 
 MAX_ENTRIES = 10000
@@ -38,8 +38,10 @@ def inventory(path, kind, *, resource_type=None):
     path = Path(os.path.abspath(path))
     if path.suffix.lower() != ".app":
         raise Error("bundle_required", "Select a macOS .app bundle", 2)
-    executable, warnings = resolve_input(path)
+    executable = resolve_input(path)
     main = executable.relative_to(path).as_posix()
+    companion = debug_companion_path(executable).relative_to(path).as_posix()
+    warnings = []
     rows = []
     gaps = set()
     seen = 0
@@ -67,6 +69,9 @@ def inventory(path, kind, *, resource_type=None):
             row["type"] = "macho_candidate" if is_image else "resource"
             row["size"] = before.st_size
             row["resource_type"] = None if is_image else suffix
+            if is_image and row["relative_path"] == companion:
+                row["debug_companion_candidate"] = True
+                warnings.append("Companion .debug.dylib candidate found. Use inspect to verify it.")
             if before.st_size > MAX_INPUT or hashed + before.st_size > MAX_HASH_BYTES:
                 row["status"] = "hash_limit"
                 gaps.add("hash_limit")
@@ -210,7 +215,7 @@ def select_images(path, requested):
     root = Path(os.path.abspath(path))
     if root.suffix.lower() != ".app":
         raise Error("bundle_required", "--include-images requires a macOS .app bundle", 2)
-    main = resolve_input(root)[0].relative_to(root).as_posix()
+    main = resolve_input(root).relative_to(root).as_posix()
     if len(requested) >= MAX_SELECTED_IMAGES or ("all" in requested and requested != ["all"]):
         raise Error("bundle_image_selection", "Use all alone or select at most 63 embedded paths", 2)
     if requested == ["all"]:

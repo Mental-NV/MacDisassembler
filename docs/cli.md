@@ -450,8 +450,8 @@ an earlier image has been committed reports partial completion and the failed
 bundle path. Repeating an import reuses an already imported identity.
 
 `inspect` is a bounded stdlib preflight for thin/fat/fat64 little-endian
-64-bit arm64, arm64e and x86_64 executable/dylib/bundle images. It resolves a main
-`.app/Contents/Info.plist` executable and reports companion debug dylibs.
+64-bit arm64, arm64e and x86_64 executable/dylib/bundle images. It resolves
+the main executable named by `.app/Contents/Info.plist`.
 Ordinary input paths open each component without following symlinks.
 Encrypted images, x86_64h, other CPU subtypes, 32-bit images, relocatable
 objects and malformed ranges receive explicit failures. The arm64e path
@@ -459,6 +459,35 @@ is data-only. Engine import supports ordinary arm64 and x86_64. The
 preflight is **not** a complete Mach-O/dyld parser or a security proof.
 Select the ordinary slice explicitly when a universal input also contains
 arm64e. An all-slices import requires every slice to support engine import.
+
+### Xcode debug companions
+
+`bundle list --kind images` marks an adjacent `NAME.debug.dylib` with a
+Mach-O header as `debug_companion_candidate`. `inspect APP` verifies the
+physical file's dylib slices and records its relative path, SHA-256,
+architectures and UUIDs in `debug_companion`. The main executable keeps its
+own slice records. An invalid or unreadable companion returns partial
+coverage with the main slice records and a typed companion error. Xcode can
+put app code in this companion and use the main binary as a launcher.
+[Apple Xcode build settings](https://developer.apple.com/documentation/xcode/build-settings-reference#Enable-Debug-Dylib-Support)
+
+Select the companion explicitly when importing the app.
+
+```sh
+macscope import CalculatorFixture.app --project workspaces/calculator \
+  --arch all --include-images Contents/MacOS/CalculatorFixture.debug.dylib \
+  --experimental-trusted-input --json
+```
+
+Xcode 27.0 produced a universal launcher and companion from a temporary
+copy of the owned calculator fixture with a Swift probe. The installed CLI
+matched the companion's two architectures, UUIDs and file hash against
+Apple tools and the file bytes. Full Ghidra analyzed all four slices with
+partial reference coverage and recovered the probe's pseudocode and
+instruction bytes on both companion slices. An escaping link and a Mach-O
+executable at the companion path were reported as unavailable. The
+validation report SHA-256 is
+`19306c6ad7103290d8530839b7e3e46193efe74b524ccd7008e6b2ad4268ae9d`.
 
 ### Bundle resources
 

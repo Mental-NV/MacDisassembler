@@ -138,6 +138,11 @@ collections exceed documented bounds despite successful pseudocode output.
   after all four arm64 and x86_64 slices completed full headless analysis.
 - [x] Import explicit embedded images and resolve bounded in-bundle framework
   links. The owned arm64 main and x86_64 helper passed real Ghidra import.
+- [x] Verify [Xcode debug companions](cli.md#xcode-debug-companions).
+  The installed CLI matched the owned companion's UUIDs and hashes.
+  Full Ghidra recovered probe pseudocode and matching instruction bytes
+  on arm64 and x86_64 with partial reference coverage. An escaping link
+  and a non-dylib file kept the main inspection available.
 - [x] Query imported headers, segments, sections and file-backed bytes,
   plus saved symbol, string, import and export collections.
 - [x] Record entry offsets, dylib dependencies, rpaths and linkedit extents,

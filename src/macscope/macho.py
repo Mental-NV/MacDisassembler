@@ -3,6 +3,7 @@
 Rejecting symlinks in every path component is intentional for this narrow MVP.
 It is stricter than future in-bundle framework-link support.
 """
+import errno
 import hashlib
 import os
 import plistlib
@@ -83,7 +84,7 @@ def read_regular(path, maximum=MAX_INPUT):
 def resolve_input(path):
     p = Path(os.path.abspath(path))
     if p.suffix.lower() != '.app':
-        return checked_path(p), []
+        return checked_path(p)
     p = checked_path(p, directory=True)
     raw_info = read_regular(p / 'Contents/Info.plist', MAX_PLIST)
     try:
@@ -96,10 +97,11 @@ def resolve_input(path):
     binary = checked_path(p / 'Contents/MacOS' / name)
     if not binary.is_relative_to(p):
         raise Error('bundle_escape', 'Executable escapes bundle')
-    warnings = []
-    if (binary.parent / (name + '.debug.dylib')).exists():
-        warnings.append('Companion .debug.dylib present; main image may be a launcher. Companion import is not implemented.')
-    return binary, warnings
+    return binary
+
+
+def debug_companion_path(executable):
+    return executable.with_name(executable.name + '.debug.dylib')
 
 
 def thin(data, *, allow_arm64e=False, include_section_linkage=False):
@@ -232,10 +234,47 @@ def inspect_bytes(data, *, allow_arm64e=False):
     return {'artifact_sha256': digest, 'size': hex(len(data)), 'slices': slices, 'limitations': limitations}
 
 
-def inspect_path(path, *, allow_arm64e=False):
-    p, warnings = resolve_input(path)
+def inspect_debug_companion(root, executable, *, allow_arm64e):
+    candidate = debug_companion_path(executable)
+    relative = candidate.relative_to(root).as_posix()
+    try:
+        parent = open_directory(candidate.parent)
+        try:
+            info = os.stat(candidate.name, dir_fd=parent, follow_symlinks=False)
+        except OSError as error:
+            if error.errno in (errno.ENOENT, errno.ENAMETOOLONG):
+                return None
+            raise
+        finally:
+            os.close(parent)
+        if stat.S_ISLNK(info.st_mode):
+            raise Error('symlink', 'The companion debug image must be a physical file')
+        if not stat.S_ISREG(info.st_mode):
+            raise Error('file_type', 'The companion debug image must be a regular file')
+        evidence = inspect_bytes(read_regular(candidate), allow_arm64e=allow_arm64e)
+        if any(image['file_type'] != 6 for image in evidence['slices']):
+            raise Error('debug_companion_filetype', 'The companion must contain Mach-O dylib slices')
+    except Error as error:
+        return {'relative_path':relative, 'status':'unavailable', 'error_code':error.code}
+    except OSError:
+        return {'relative_path':relative, 'status':'unavailable', 'error_code':'path_unavailable'}
+    return {'relative_path':relative, 'status':'verified', 'artifact_sha256':evidence['artifact_sha256'],
+            'slices':[{key:image[key] for key in ('arch','image_id','sha256','uuid')}
+                      for image in evidence['slices']]}
+
+
+def inspect_path(path, *, allow_arm64e=False, include_companion=True):
+    root = Path(os.path.abspath(path))
+    p = resolve_input(root)
     data = read_regular(p)
     result = inspect_bytes(data, allow_arm64e=allow_arm64e)
-    result['warnings'] = warnings
+    result['warnings'] = []
+    if include_companion and p != root:
+        companion = inspect_debug_companion(root, p, allow_arm64e=allow_arm64e)
+        if companion is not None:
+            result['debug_companion'] = companion
+            warning = ('Companion .debug.dylib verified. Use --include-images with its relative path to import it.'
+                       if companion['status'] == 'verified' else 'Unable to verify the companion .debug.dylib.')
+            result['warnings'].append(warning)
     result['input_name'] = p.name
     return result, data

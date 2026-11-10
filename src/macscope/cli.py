@@ -884,7 +884,7 @@ def import_inputs(args, project, deps):
                 if expected_sha and meta['artifact_sha256'] != expected_sha:
                     raise Error('bundle_image_changed','Bundle image changed after inventory',5)
             else:
-                meta,original = inspect_path(path,allow_arm64e=True)
+                meta,original = inspect_path(path,allow_arm64e=True,include_companion=False)
             if len(meta['slices'])>1 and args.arch is None:
                 raise Error('arch_required','Universal input requires explicit --arch arm64|x86_64|all',2)
             selected = [s for s in meta['slices'] if args.arch in (None,'all',s['arch'])]
@@ -1005,7 +1005,7 @@ def fixup_collection(args, image, data, binding, *, parsed=None, artifact=None):
 def file_fixups(args):
     if args.image is not None:
         raise Error('usage','--image selects an imported project image; use --arch with --input',2)
-    metadata,original = inspect_path(args.input,allow_arm64e=True)
+    metadata,original = inspect_path(args.input,allow_arm64e=True,include_companion=False)
     if len(metadata['slices']) > 1 and args.arch is None:
         raise Error('arch_required','Universal input requires an explicit --arch',2)
     selected = [row for row in metadata['slices'] if args.arch in (None,row['arch'])]
@@ -1173,9 +1173,13 @@ def execute_command(a, address_selection=None):
     if a.command=='inspect':
         data,_=inspect_path(a.input,allow_arm64e=True)
         gaps=metadata.loader_gaps(data['slices'])
+        reasons=['loader_metadata_incomplete'] if gaps else []
+        if data.get('debug_companion',{}).get('status') == 'unavailable':
+            gaps.extend(data['warnings'])
+            reasons.append('debug_companion_unavailable')
         return envelope(command,data,status='partial' if gaps else 'complete',
                         cov=coverage('Mach-O preflight',len(data['slices']),len(data['slices']),bool(gaps),
-                                     reason='loader_metadata_incomplete' if gaps else None),diagnostics=gaps)
+                                     reason=';'.join(reasons) or None),diagnostics=gaps)
     if a.command in ('bundle','resources'):
         resource_list = a.command == 'resources'
         kind = 'resources' if resource_list else a.kind
