@@ -18,7 +18,7 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, identity, is_digest, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_strings, string_evidence, terminal
+from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -100,6 +100,10 @@ def parser():
     s.add_argument('path');common(s,('text','json'));pagination(s)
     s.add_argument('--file',required=True,help='Exact bundle-relative .strings file')
     s.add_argument('--key',help='Select one exact localization key')
+    s=ss.add_parser('nib',help='Read archived AppKit connections and button labels as data')
+    s.add_argument('path');common(s,('text','json'));pagination(s)
+    s.add_argument('--file',required=True,help='Exact bundle-relative .nib file')
+    s.add_argument('--kind',choices=('all','connections','labels'),default='all')
     s=sub.add_parser('project');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('create');s.add_argument('path');common(s)
     s=sub.add_parser('import');s.add_argument('input');s.add_argument('--project',required=True);s.add_argument('--arch',choices=('arm64','x86_64','all'));common(s);budgets(s)
@@ -1471,6 +1475,17 @@ def execute_command(a, address_selection=None):
                       order='resource-string-key/v1')
         cov['scope']='localization keys in selected .strings file'
         return envelope(command,dict(source,key_filter=a.key,records=rows),cov=cov)
+    if a.command=='resources' and a.action=='nib':
+        source,records,gaps=resource_nib.read(a.path,a.file,a.kind)
+        rows,cov=page(records,a,identity(source),identity(os.path.abspath(a.path)),{'kind':a.kind},
+                      order='nib-connections-then-button-labels/v1')
+        cov['scope']='archived AppKit '+{'all':'connections and button labels','connections':'connections',
+                                        'labels':'button labels'}[a.kind]
+        if gaps:
+            reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+            cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+        return envelope(command,dict(source,kind=a.kind,records=rows),status='partial' if gaps else 'complete',
+                        cov=cov,diagnostics=gaps)
     if a.command in ('bundle','resources'):
         resource_list = a.command == 'resources'
         kind = 'resources' if resource_list else a.kind

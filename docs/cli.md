@@ -659,6 +659,37 @@ characters and tables at 16,384 keys. It uses no external parser or
 archive loader. Treat a shared resource key and binary string as a lead
 for checking references and handler behavior.
 
+#### Read declarations in a selected compiled nib
+
+```sh
+macscope resources nib 'Owned Calendar.app' \
+  --file Contents/Resources/Calendar/Calendar.nib --json
+```
+
+The view reads an exact physical `.nib` file and reports its SHA-256 and
+archive table counts. `--kind connections` reads archived AppKit actions
+and outlets from `NSConnections`. `--kind labels` reads titles and alternate
+titles from archived `NSButtonCell` records linked to `NSButton` objects.
+The default includes both. Endpoint indexes and direction come from the
+archive. An action's source is the control and its destination is the
+declared receiver. A custom object's declared class is reported when the
+archive provides it as a supported string.
+
+Cursors bind to the file digest, bundle path and selected kind. Missing
+connection fields and unsupported connection classes keep coverage partial.
+The parser covers NIBArchive version 1, coder versions 9 and 10, with a
+4 MiB input limit and bounded tables. The owned Xcode fixture used coder
+version 10. Other archive formats return a typed error. The reader treats
+the archive as data and uses no interface or application loader.
+[NIBArchive format observations](https://github.com/matsmattsson/nibsqueeze/blob/master/NibArchive.md)
+
+Compile `fixture/calendar/CalendarWiring.xib` with `xcrun ibtool --compile`
+to reproduce the owned test. The compiled outlet, action and button labels
+matched `ibtool`'s source records. The action's class and selector also
+matched the owned executable's saved Objective-C declaration and Ghidra
+function. Use those records to evaluate the handler separately from the
+interface declaration.
+
 ## Persistence, identity and freshness
 
 `headers`, `segments`, and `sections` query imported Mach-O metadata and

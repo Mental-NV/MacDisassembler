@@ -121,6 +121,14 @@ decision. Reuse recorded observations for gestures already covered.
   replayed the evidence offline, preserved digest-bound pages, and rejected
   duplicates, oversized input and a symlink. Of 1,200 seeded mutations,
   468 produced a typed failure and 732 produced a flat string table.
+- [x] **Read archived Calendar connections and button labels as data.**
+  [`resources nib`](cli.md#read-declarations-in-a-selected-compiled-nib)
+  matched the owned Xcode fixture's action, outlet and two labels against
+  `ibtool`. The action resolved by class and selector to the saved method
+  and Ghidra function for the same owned executable bytes. The installed
+  query ran offline and rejected a cursor after recompilation. Of 1,200
+  seeded mutations, 386 produced typed failures and 129 produced partial
+  declaration coverage.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose
