@@ -15,7 +15,8 @@ from . import __version__, SCHEMA_VERSION
 from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
-from .storage import MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, canonical, identity, write_json
+from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
+                      canonical, canonical_chunks, identity, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from . import html_export, macho_symbols, macho_unwind, string_evidence, terminal
 from .schema import validate_envelope, validate_function
@@ -1287,6 +1288,17 @@ def execute(a):
     return envelope(command,data,aid,'partial' if partial else 'complete',coverage('selected function '+a.command,count,None,partial,reason=reason))
 
 
+def render_jsonl(result):
+    data = result['data']
+    if isinstance(data,list) and data:
+        row_coverage = dict(result['coverage'],returned_count=1)
+        for row in data:
+            yield canonical(dict(result,data=row,coverage=row_coverage))+b'\n'
+    else:
+        yield from canonical_chunks(result)
+        yield b'\n'
+
+
 def render(result,fmt):
     if fmt=='text':
         return terminal.render(result)
@@ -1299,10 +1311,7 @@ def render(result,fmt):
             for edge in b['dsts']:rows.append('  '+json.dumps(b['min'])+' -> '+json.dumps(edge['to'])+' [label='+json.dumps(edge['flow'])+'];')
         rows.append('}')
         return ('\n'.join(rows)+'\n').encode()
-    if fmt=='jsonl':
-        data=result['data']
-        if not isinstance(data,list):return canonical(result)+b'\n'
-        return b''.join(canonical(dict(result,data=row,coverage=dict(result['coverage'],returned_count=1)))+b'\n' for row in data) or canonical(result)+b'\n'
+    if fmt=='jsonl':return b''.join(render_jsonl(result))
     if fmt=='json':return canonical(result)+b'\n'
     # ASCII JSON escaping prevents terminal-control injection in binary strings.
     return (json.dumps(result,sort_keys=True,indent=2,ensure_ascii=True)+'\n').encode()
@@ -1311,20 +1320,20 @@ def render(result,fmt):
 def main(argv=None):
     os.umask(0o077)
     args=None
-    output=None
     try:
         args=parser().parse_args(argv)
         result=execute(args)
         validate_envelope(result)
         code=6 if result['status']=='partial' else 0
-        fmt=getattr(args,'format','json')
-        payload=render(result,fmt if not result.get('error') else 'json')
+        fmt='json' if result.get('error') else getattr(args,'format','json')
+        chunks=render_jsonl(result) if fmt=='jsonl' else (render(result,fmt),)
         if getattr(args,'output',None):
             destination=Path(os.path.abspath(args.output))
             protect_output(args,destination)
-            atomic(destination,payload,args.force)
-            return code
-        output=payload
+            atomic_chunks(destination,chunks,args.force)
+        else:
+            sys.stdout.buffer.writelines(chunks)
+        return code
     except Error as e:
         command=getattr(args,'command','unknown') if args else 'unknown'
         status = 'cancelled' if e.exit_code == 130 else 'failed'
@@ -1338,9 +1347,7 @@ def main(argv=None):
         result=envelope(getattr(args,'command','unknown'),None,status='failed',cov=coverage('requested command',0,None,True,reason='internal_failure'),diagnostics=[str(e)])
         result['error']={'code':'internal_failure','message':str(e),'affected_object':None,'retryable':False,'partial_results':None}
         code=10
-    if output is None:
-        validate_envelope(result)
-        output=render(result,'json')
-    sys.stdout.buffer.write(output)
+    validate_envelope(result)
+    sys.stdout.buffer.write(render(result,'json'))
     if code not in (0,6):sys.stderr.write(terminal.safe(result.get('error',{}).get('message','Command failed'))+'\n')
     return code

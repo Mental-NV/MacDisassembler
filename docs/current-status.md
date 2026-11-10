@@ -356,6 +356,11 @@ collections exceed documented bounds despite successful pseudocode output.
   opened directory. The installed CLI detected early and late directory
   swaps after full headless analysis of both owned architectures, preserved
   all 163 workspace files and reported the late publication explicitly.
+- [x] Stream [JSONL serialization](cli.md#implemented-commands) to stdout
+  and atomic output files. Ten outputs matched the previous installed CLI
+  byte for byte on owned arm64 and x86_64 slices. Synthetic 32 MiB results
+  exercised bounded serialization, and an interrupted write preserved the
+  existing destination.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

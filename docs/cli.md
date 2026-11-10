@@ -76,7 +76,11 @@ errors also have a short stderr diagnostic. `--format text|json|jsonl`,
 `--json`, `--output FILE`, and `--force` are supported as applicable.
 Omitting `--format` retains the original indented JSON output. Explicit
 `--format text` selects the [terminal view](#terminal-view).
-JSONL collection records each have the complete versioned envelope.
+JSONL emits a versioned envelope for each row of a list result. Empty
+lists and manifest-shaped results, including `export`, use one envelope.
+The writer serializes JSONL incrementally to stdout or to the staging file
+used for atomic publication. Workspace loading and query limits still
+apply before serialization.
 Successful `--output` writes only the file, not a duplicate stdout response.
 Output must be separate from selected input files and outside selected app
 bundles and managed project storage. An output conflict exits 8 even with
@@ -103,6 +107,20 @@ in the workspace. The late swap left a complete report in the original
 directory and reported that publication in the error response.
 The validation report SHA-256 is
 `78759dd7264a6e0337947a4ab970da531fa656f02980381966c313ea4e93855f`.
+
+The installed CLI matched the previous JSONL bytes for function lists,
+paginated lists, batch decompilation, normalized exports and fixups on
+owned arm64 and x86_64 inputs. Both slices completed full headless Ghidra
+analysis. Standard output, private atomic files and explicit replacements
+matched. The validation report SHA-256 is
+`500760c8500296486551c16957f326b558365f78c0d2ba88cb0b2963d7a3df12`.
+
+On prebuilt synthetic results of approximately 32 MiB, peak traced
+Python allocations after query execution dropped from about 64 MiB to
+under 0.3 MiB. The comparison covered row lists and manifests on both
+stdout and atomic file output with byte-identical results. The memory
+report SHA-256 is
+`61c3c6df4b07a076ff5ee7a19d4319c26dc169d5153d6f76304fb66bfa9ae396`.
 
 ```sh
 macscope --version

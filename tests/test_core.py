@@ -1321,6 +1321,51 @@ class CliTests(TemporaryCase):
             self.assertEqual(row['analysis_id'], self.snapshot['analysis_id'])
             self.assertEqual(row['coverage']['returned_count'], 1)
 
+    def test_jsonl_stdout_writes_each_row_before_serializing_the_next(self):
+        real_canonical = cli.canonical
+        written_before_encoding = []
+
+        def encode(row):
+            written_before_encoding.append(sys.stdout.buffer.getvalue().count(b'\n'))
+            return real_canonical(row)
+
+        words = ['functions', 'list', '--project', str(self.workspace.path), '--format', 'jsonl']
+        with mock.patch.object(cli, 'canonical', side_effect=encode):
+            code, output, stderr = self.invoke(words)
+        self.assertEqual((code, stderr), (0, ''))
+        self.assertEqual(written_before_encoding, [0, 1, 2])
+        self.assertEqual(len(output.splitlines()), 3)
+
+    def test_jsonl_streams_manifest_with_existing_bytes(self):
+        result = cli.execute(self.args('export'))
+        expected = storage.canonical(result) + b'\n'
+        chunks = cli.render_jsonl(result)
+        self.assertEqual(next(chunks), b'{')
+        self.assertEqual(b'{' + b''.join(chunks), expected)
+        words = ['export', '--project', str(self.workspace.path), '--format', 'jsonl']
+        target = self.root / 'export.jsonl'
+        self.assertEqual(self.invoke([*words, '--output', str(target)]), (0, b'', ''))
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
+    def test_interrupted_jsonl_encoding_preserves_existing_output(self):
+        target = self.root / 'export.jsonl'
+        target.write_bytes(b'previous export')
+
+        def failing_stream(result):
+            yield b'{"data":'
+            raise ValueError('synthetic serialization failure')
+
+        words = ['export', '--project', str(self.workspace.path), '--format', 'jsonl',
+                 '--output', str(target), '--force']
+        with mock.patch.object(cli, 'render_jsonl', side_effect=failing_stream):
+            code, output, stderr = self.invoke(words)
+        self.assertEqual(code, 10)
+        self.assertEqual(json.loads(output)['error']['code'], 'internal_failure')
+        self.assertIn('synthetic serialization failure', stderr)
+        self.assertEqual(target.read_bytes(), b'previous export')
+        self.assertEqual(list(self.root.glob('.macscope-*')), [])
+
     def test_terminal_controls_are_escaped(self):
         value = '\x1b[31munsafe\x07\u202e\r\n\ud800'
         result = cli.envelope('inspect', {'name': value})

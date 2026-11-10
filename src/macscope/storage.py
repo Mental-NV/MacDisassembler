@@ -16,10 +16,16 @@ MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
 WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
 WORKSPACE_RESERVED = frozenset((*WORKSPACE_DIRECTORIES, 'project.json', 'writer.lock',
                                 'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm'))
+CANONICAL_JSON = json.JSONEncoder(sort_keys=True, separators=(',', ':'), ensure_ascii=True)
 
 
 def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    return CANONICAL_JSON.encode(value).encode()
+
+
+def canonical_chunks(value):
+    for part in CANONICAL_JSON.iterencode(value):
+        yield part.encode()
 
 
 def identity(value):
@@ -49,6 +55,10 @@ def check_output_entry(directory, name, force):
 
 
 def atomic(path, data, force=False, mode=0o600):
+    atomic_chunks(path, (data,), force, mode)
+
+
+def atomic_chunks(path, chunks, force=False, mode=0o600):
     path = Path(os.path.abspath(path))
     parent = checked_path(path.parent, directory=True)
     try:
@@ -62,7 +72,7 @@ def atomic(path, data, force=False, mode=0o600):
         try:
             with os.fdopen(fd, 'wb') as stream:
                 os.fchmod(stream.fileno(), mode)
-                stream.write(data)
+                stream.writelines(chunks)
                 stream.flush()
                 os.fsync(stream.fileno())
             if not output_directory_matches(parent, directory):
