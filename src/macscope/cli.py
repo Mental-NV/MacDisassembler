@@ -18,8 +18,10 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, identity, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import html_export, macho_symbols, macho_unwind, string_evidence, terminal
+from . import engine_checks, html_export, macho_symbols, macho_unwind, string_evidence, terminal
 from .schema import validate_envelope, validate_function
+
+STATUS_SNAPSHOT_LIMIT = 8
 
 
 def coverage(scope='requested command', count=1, total=1, partial=False, cursor=None, reason=None):
@@ -535,6 +537,70 @@ def job_command(args, project, command):
         reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
         cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
     return envelope(command,redact(rows),status='partial' if gaps else 'complete',cov=cov)
+
+
+def analysis_status(project, image, pins):
+    snapshot, record = project.snapshot(image)
+    raw = snapshot['engine']
+    analysis_identity = snapshot.get('identity')
+    saved = analysis_identity.get('engine') if isinstance(analysis_identity, dict) else None
+    saved = saved if isinstance(saved, dict) else {}
+    versions = {key: value if isinstance(value, str) else None for key, value in {
+        'ghidra_version': saved.get('ghidra_version', raw.get('ghidra_version')),
+        'bridge_version': raw.get('bridge_version'),
+        'bridge_sha256': saved.get('bridge_sha256'),
+        'ghidra_tree_sha256': saved.get('ghidra_tree_sha256'),
+        'jdk_version': saved.get('jdk_version'),
+    }.items()}
+    changed = [key for key, expected in pins.items() if versions[key] is not None and versions[key] != expected]
+    missing = [key for key in pins if versions[key] is None]
+    freshness = 'stale' if changed else 'unknown' if missing else 'current'
+    facets = raw.get('coverage')
+    gaps = None
+    if isinstance(facets, dict):
+        gaps = sorted(name for name, facet in facets.items() if isinstance(facet, dict)
+                      and (facet.get('status') in ('partial','unknown','failed','timeout','unsupported')
+                           or facet.get('truncated') or facet.get('error')))
+    total = raw.get('function_count_total_reported_by_engine')
+    summary = raw.get('decompile_summary')
+    return {'status':snapshot['status'], 'analysis_id':snapshot['analysis_id'], 'job_id':record.get('job_id'),
+            'function_count':len(snapshot['functions']),
+            'function_total':total if type(total) is int and total >= 0 else None,
+            'decompile_summary':summary if isinstance(summary, dict) else None,
+            'analysis_profile':snapshot.get('analysis_profile'),
+            'coverage_gaps':gaps, 'versions':versions,
+            'freshness':{'status':freshness,'scope':'packaged_worker','changed':changed,'missing':missing}}
+
+
+def project_status(args, project):
+    images = [row for row in project.images() if (args.image is None or row['image_id'] == args.image)
+              and (args.arch is None or row['arch'] == args.arch)]
+    if not images and (args.image is not None or args.arch is not None):
+        raise Error('image_selector','No image matches the status selection',2)
+    pins = {'ghidra_version':engine_checks.GHIDRA_VERSION,'bridge_version':engine.BRIDGE_VERSION,
+            'bridge_sha256':engine.bridge_digest()}
+    gaps, checked = set(), 0
+    for row in images:
+        aid = row['active_analysis']
+        if aid is None:
+            row['analysis'] = {'status':'not_analyzed','analysis_id':None}
+        elif checked == STATUS_SNAPSHOT_LIMIT:
+            row['analysis'] = {'status':'unverified','analysis_id':aid,'reason':'snapshot_check_limit'}
+            gaps.add('snapshot_check_limit')
+        else:
+            checked += 1
+            try:
+                row['analysis'] = redact(analysis_status(project,row,pins))
+            except (Error, OSError) as error:
+                code = error.code if isinstance(error, Error) else 'snapshot_unavailable'
+                row['analysis'] = {'status':'unavailable','analysis_id':aid,'error':code}
+                gaps.add('snapshot_unavailable')
+    job_rows, job_gaps = jobs.recent(project)
+    data = {'project_id':project.project_id,'images':images,'jobs':redact(job_rows),
+            'job_history_limit':jobs.RECENT,'job_history_gaps':job_gaps}
+    return envelope('status',data,status='partial' if gaps else 'complete',diagnostics=sorted(gaps),
+                    cov=coverage('project status',len(images),len(images),bool(gaps),
+                                 reason=';'.join(sorted(gaps)) if gaps else None))
 
 
 def analysis_response(command, snapshot, job_id, *, resumed_from=None, reused=False):
@@ -1114,11 +1180,7 @@ def execute(a):
     if fresh or a.command in ('import','analyze'):
         check_engine_access(a,p)
     if a.command=='status':
-        images=p.images()
-        job_rows, gaps = jobs.recent(p)
-        return envelope(command,{'project_id':p.project_id,'images':images,'jobs':redact(job_rows),
-                                 'job_history_limit':jobs.RECENT,'job_history_gaps':gaps},
-                        cov=coverage('project status',len(images),len(images)))
+        return project_status(a,p)
     if a.command in ('import','analyze'):
         deps=engine.dependencies(a.ghidra,a.java_home,full=True)
         with p.writer():

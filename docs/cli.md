@@ -991,6 +991,30 @@ across 144 completed function records. All linked addresses matched exported
 instruction starts and the pseudocode matched the preceding bridge version.
 Fresh and cached links matched for `_calc_add` on both architectures.
 
+### Project and job status
+
+`status --project P` reports each selected image and its active analysis.
+Use `--arch` or `--image` to narrow the image selection. A verified analysis
+includes its profile, function counts, decompilation summary, coverage gaps
+and recorded versions. The freshness check compares the saved Ghidra
+version and bridge version and digest with the CLI's packaged worker.
+Missing provenance reports `unknown`. `doctor` checks the installed engine.
+
+The command verifies at most eight active snapshots per request, up to
+64 MiB each. A snapshot beyond that limit reports `unverified`. A failed
+integrity check reports `unavailable` with its error code. Both make the
+status result partial and exit 6 while preserving the other image rows.
+
+The installed CLI reported seven saved functions per slice after owned
+arm64 and x86_64 import, analysis and fresh decompilation. It reported an
+archived 44-function analysis as partial and stale, and surfaced distinct
+startup and total timeouts from archived jobs. A corrupt snapshot left the
+healthy slice visible. A nine-image control exercised the verification
+limit and verified the remaining image by explicit selection. The status
+queries ran with Ghidra and JDK paths set to missing locations. The
+validation report SHA-256 is
+`9eadb582ed7715bd93e313d8489da30851f8e90ed3ec99c57a168bd6f1473676`.
+
 `status` and `jobs list` show up to 100 recent worker records.
 `jobs show JOB_ID` reads a particular job and includes its limits and
 engine digests. Live status requires an ownership lock held by the

@@ -307,6 +307,10 @@ collections exceed documented bounds despite successful pseudocode output.
   before opening stored work. Eight corrupt-workspace queries returned
   typed errors. Five archived exports matched, and both owned architectures
   completed full headless analysis and fresh decompilation.
+- [x] Verify [project status](cli.md#project-and-job-status) for current,
+  partial, stale and unavailable analyses. Owned arm64 and x86_64 jobs
+  verified function counts and recorded versions. Archived timeouts and a
+  nine-image control verified failure reporting and the snapshot limit.
 - [x] Verify [per-job write confinement](cli.md#limits-and-safety-boundaries)
   with owned canaries and eight installed full-headless scopes. A
   worker could not modify an earlier Program or the shared index.

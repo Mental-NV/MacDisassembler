@@ -120,6 +120,10 @@ def digest(path):
     return h.hexdigest()
 
 
+def bridge_digest():
+    return identity({path.name: digest(path) for path in sorted(BRIDGE.glob('*.java'))})
+
+
 def tree_digest(root):
     h = hashlib.sha256()
     for p in sorted(root.rglob('*')):
@@ -144,7 +148,7 @@ def dependencies(ghidra=None, java=None, full=False):
     version = (v.stderr+v.stdout).decode(errors='replace').strip()
     if v.returncode or not engine_checks.java_version_matches(version):
         raise Error('incompatible_jdk', 'Requires tested JDK 25.0.5.0.3', 4)
-    result = {'ghidra_version':engine_checks.GHIDRA_VERSION, 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), **hashes, 'bridge_sha256':identity({p.name:digest(p) for p in sorted(BRIDGE.glob('*.java'))}), 'isolation':'experimental-trusted-owned-input-only; deny-network, restrict user-home reads and confine writes to the current job; not a hostile-input sandbox', 'hard_process_memory_limit':False}
+    result = {'ghidra_version':engine_checks.GHIDRA_VERSION, 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), **hashes, 'bridge_sha256':bridge_digest(), 'isolation':'experimental-trusted-owned-input-only; deny-network, restrict user-home reads and confine writes to the current job; not a hostile-input sandbox', 'hard_process_memory_limit':False}
     if full:
         result['ghidra_tree_sha256'] = tree_digest(g)
     return result

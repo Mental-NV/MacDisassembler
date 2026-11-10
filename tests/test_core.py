@@ -1210,6 +1210,62 @@ class CliTests(TemporaryCase):
         self.assertEqual(stderr, '')
         self.assert_envelope(json.loads(output))
 
+    def test_status_reports_verified_coverage_and_packaged_worker_freshness(self):
+        image = self.workspace.select()
+        aid = image['active_analysis']
+        target = self.workspace.path / 'snapshots' / (aid + '.json')
+        snapshot, record = self.workspace.snapshot(image)
+        snapshot.update(status='partial', analysis_profile={'name':'baseline'},
+                        identity={'engine':{'ghidra_version':'12.2','bridge_sha256':engine.bridge_digest()}})
+        snapshot['engine'].update(bridge_version=engine.BRIDGE_VERSION,
+                                  function_count_total_reported_by_engine=5,
+                                  decompile_summary={'completed':3},
+                                  coverage={'functions':{'status':'partial'}, 'strings':{'status':'complete'}})
+        with mock.patch.object(engine, 'dependencies', side_effect=AssertionError('status probed Ghidra')):
+            for sha, freshness in ((engine.bridge_digest(), 'current'), ('0' * 64, 'stale')):
+                with self.subTest(freshness=freshness):
+                    snapshot['identity']['engine']['bridge_sha256'] = sha
+                    payload = storage.canonical(snapshot) + b'\n'
+                    storage.atomic(target, payload, force=True)
+                    with self.workspace.db(False) as db:
+                        receipt = dict(record, snapshot_sha256=hashlib.sha256(payload).hexdigest())
+                        db.execute('UPDATE analyses SET payload=?', (json.dumps(receipt),))
+                    result = cli.execute(self.args('status', '--arch', 'arm64'))
+                    self.assertEqual(result['status'], 'complete')
+                    analysis = result['data']['images'][0]['analysis']
+                    self.assertEqual((analysis['status'], analysis['function_count'], analysis['function_total']),
+                                     ('partial', 3, 5))
+                    self.assertEqual(analysis['decompile_summary'], {'completed':3})
+                    self.assertEqual(analysis['coverage_gaps'], ['functions'])
+                    self.assertEqual(analysis['freshness']['status'], freshness)
+                    self.assertEqual(analysis['freshness']['scope'], 'packaged_worker')
+                    self.assertEqual(analysis['freshness']['changed'], ['bridge_sha256'] if freshness == 'stale' else [])
+
+    def test_status_bounds_snapshot_checks_and_keeps_healthy_image_visible(self):
+        aid = 'e' * 64
+        image = dict(self.snapshot['image'], image_id='f' * 64, arch='x86_64')
+        snapshot = dict(self.snapshot, image=image, analysis_id=aid, functions=[])
+        payload = storage.canonical(snapshot) + b'\n'
+        storage.atomic(self.workspace.path / 'snapshots' / (aid + '.json'), payload)
+        with self.workspace.db(False) as db:
+            db.execute('INSERT INTO images VALUES(?,?,?,1,?)', (image['image_id'],image['arch'],json.dumps(image),aid))
+            db.execute('INSERT INTO analyses VALUES(?,?,?)',
+                       (aid,image['image_id'],json.dumps({'snapshot_sha256':hashlib.sha256(payload).hexdigest()})))
+        with mock.patch.object(cli, 'STATUS_SNAPSHOT_LIMIT', 1):
+            result = cli.execute(self.args('status'))
+            self.assertEqual(result['status'], 'partial')
+            self.assertEqual(result['coverage']['truncation_reason'], 'snapshot_check_limit')
+            self.assertEqual(result['data']['images'][1]['analysis']['status'], 'unverified')
+            selected = cli.execute(self.args('status', '--image', image['image_id']))
+            self.assertEqual(selected['status'], 'complete')
+            self.assertEqual(selected['data']['images'][0]['analysis']['function_count'], 0)
+        storage.atomic(self.workspace.path / 'snapshots' / (self.snapshot['analysis_id'] + '.json'),
+                       b'invalid snapshot', force=True)
+        result = cli.execute(self.args('status'))
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['data']['images'][0]['analysis']['error'], 'snapshot_integrity')
+        self.assertEqual(result['data']['images'][1]['analysis']['status'], 'complete')
+
     def test_error_envelope_has_required_fields_and_candidates(self):
         code, output, _ = self.invoke(['functions', 'show', '--project', str(self.workspace.path), '--name', 'duplicate', '--json'])
         result = json.loads(output)
