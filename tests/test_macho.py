@@ -363,15 +363,47 @@ class ThinMachOTests(ErrorAssertions):
             self.assert_error("command_string",macho.thin,image(commands=[value]))
 
     def test_dyld_extent_and_indirect_symbol_ranges_are_verified(self):
-        dyld = command(0x80000022,struct.pack("<10I",160,3,0,0,0,0,0,0,0,0))
-        fields = [0]*18
-        fields[12:14] = [164,1]
-        dysymtab = command(0xB,struct.pack("<18I",*fields))
-        data = image(commands=[dyld,dysymtab],payload=b"\0"*8)
+        dyld = command(0x80000022, struct.pack("<10I", 184, 3, 0, 0, 0, 0, 0, 0, 0, 0))
+        fields = [0] * 18
+        fields[12:14] = [208, 1]
+        dysymtab = command(0xB, struct.pack("<18I", *fields))
+        symtab = command(2, struct.pack("<4I", 188, 1, 204, 4))
+        data = image(commands=[dyld, dysymtab, symtab], payload=bytes(28))
         loader = macho.thin(data)["loader"]
-        self.assertEqual(loader["dyld_streams"][0]["slice_file_offset"],"0xa0")
-        self.assertEqual(loader["indirect_symbol_table"]["count"],1)
-        self.assert_error("macho_bounds",macho.thin,data[:-1])
+        self.assertEqual(loader["dyld_streams"][0]["slice_file_offset"], "0xb8")
+        self.assertEqual(loader["indirect_symbol_table"]["count"], 1)
+        self.assert_error("macho_bounds", macho.thin, data[:-1])
+
+    def test_dynamic_symbol_table_extents_use_the_64_bit_record_widths(self):
+        symtab = command(2, struct.pack("<4I", 136, 3, 184, 8))
+        fields = [0, 1, 1, 1, 2, 1]
+        widths = (8, 56, 4, 4, 8, 8)
+        offset = 192
+        for width in widths:
+            fields.extend((offset, 1))
+            offset += width
+        data = image(commands=[symtab, command(0xB, struct.pack("<18I", *fields))],
+                     payload=bytes(offset - 136))
+        self.assertEqual(macho.thin(data)["loader"]["indirect_symbol_table"]["count"], 1)
+        for index, width in enumerate(widths):
+            field = 32 + len(symtab) + 32 + index * 8
+            with self.subTest(table=index):
+                macho.thin(change32(data, field, len(data) - width))
+                self.assert_error("macho_bounds", macho.thin, change32(data, field, len(data) - width + 1))
+                self.assert_error("macho_bounds", macho.thin, change32(data, field + 4, 0xffffffff))
+
+    def test_dynamic_symbol_groups_require_a_bounded_companion_symbol_table(self):
+        fields = [0, 1, 1, 1, 2, 1] + [0] * 12
+        dysymtab = command(0xB, struct.pack("<18I", *fields))
+        symtab = command(2, struct.pack("<4I", 136, 3, 184, 8))
+        data = image(commands=[dysymtab, symtab], payload=bytes(56))
+        self.assertEqual(macho.thin(data)["loader"]["symbol_table"]["count"], 3)
+        for group in range(3):
+            with self.subTest(group=group):
+                at = 32 + 8 + group * 8
+                self.assert_error("dysymtab_bounds", macho.thin, change32(data, at, 4))
+                self.assert_error("dysymtab_bounds", macho.thin, change32(data, at + 4, 4 - group))
+        self.assert_error("dysymtab_bounds", macho.thin, image(commands=[dysymtab]))
 
     def test_zero_fill_sections_have_no_file_offset(self):
         for flags in (1, 0xC, 0x12):

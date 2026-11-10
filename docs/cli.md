@@ -2053,6 +2053,22 @@ sample of payloads. The local report at
 `/private/tmp/macscope-baseline-callees.89xYWz/parser-audit/report.json`
 has SHA-256 `447a7877637d6ca538063aa84742774d302826137286f903de4f4f7706f0758f`.
 
+### Dynamic symbol table preflight
+
+`inspect` and `import` check all six `LC_DYSYMTAB` table extents
+against the containing Mach-O slice using 64-bit record widths. The local,
+defined external, and undefined groups must fit the companion `LC_SYMTAB`.
+A missing companion or invalid group returns `dysymtab_bounds`. A table
+extent outside the slice returns `macho_bounds`. These checks validate the
+declared extents. Table contents remain subject to the selected decoder.
+
+The installed CLI rejected 76 mutations across owned thin and universal
+calculator images. Three import controls left the image index, staged
+inputs, and worker jobs empty, including a malformed slice outside the
+requested architecture. The original universal fixture completed full
+Ghidra import, analysis, disassembly, and fresh decompilation on both
+architectures. Selected disassembly matched the original slice bytes.
+
 ## Envelopes, errors and explicit omissions
 
 Workspace opens validate the manifest structure, schema version, and

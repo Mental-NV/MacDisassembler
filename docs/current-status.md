@@ -475,6 +475,11 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Exercise [dyld and Objective-C metadata payloads](cli.md#targeted-malformed-mach-o-payloads)
   with 20,480 targeted mutations on owned calculator copies. Every
   mutation returned a complete or partial result or a typed error.
+- [x] Validate [dynamic symbol table extents and groups](cli.md#dynamic-symbol-table-preflight).
+  The installed CLI rejected 76 malformed thin and universal copies.
+  Three import controls staged no inputs and created no worker jobs.
+  Both valid owned slices passed full headless import, analysis, exact
+  instruction-byte checks and fresh decompilation.
 - [x] List and inspect worker jobs and request cancellation through their
   live owner. A second CLI process cancelled an owned calculator analysis
   while preserving its previously committed snapshot.

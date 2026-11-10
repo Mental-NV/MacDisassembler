@@ -9,6 +9,15 @@ DYLIBS = {0xC: "load", 0xD: "id", 0x80000018: "weak", 0x8000001F: "reexport",
 LINKEDIT = {0x1D: "code_signature", 0x26: "function_starts", 0x29: "data_in_code",
             0x80000033: "export_trie", 0x80000034: "chained_fixups"}
 DYLD_STREAMS = ("rebase", "bind", "weak_bind", "lazy_bind", "export_trie")
+# On-disk record widths from mach-o/loader.h and mach-o/reloc.h.
+DYSYMTAB_TABLES = (
+    ("Dynamic symbol table of contents", 8),
+    ("64-bit dynamic module table", 56),
+    ("External symbol reference table", 4),
+    ("Indirect symbol table", 4),
+    ("External relocation table", 8),
+    ("Local relocation table", 8),
+)
 MAX_TABLE_ROWS = 10000
 MAX_START_TABLE_BYTES = 1024 * 1024
 THREAD_ENTRY = {"arm64": (6, 68, 32), "x86_64": (4, 42, 16)}
@@ -245,6 +254,7 @@ def details(data, commands, segments, arch):
     metadata = {"preferred_image_base": text["va"] if text else None, "entry_point": None,
                 "dylibs": [], "rpaths": [], "linkedit": [], "dyld_streams": []}
     extents = {}
+    symbol_groups = None
     for cmd, cursor, size in commands:
         if cmd in (0x80000028, 0x5):
             if metadata["entry_point"] is not None:
@@ -293,9 +303,20 @@ def details(data, commands, segments, arch):
         elif cmd == 0xB:
             if size != 80 or "indirect_symbol_table" in metadata:
                 raise Error("dysymtab_bounds", "Invalid or duplicate LC_DYSYMTAB command")
-            offset,count = struct.unpack_from("<2I",data,cursor+56)
-            bounded(offset,count*4,len(data),"Indirect symbol table")
+            fields = struct.unpack_from("<18I", data, cursor + 8)
+            symbol_groups = fields[:6]
+            for index, (label, entry_size) in enumerate(DYSYMTAB_TABLES):
+                offset, count = fields[6 + 2 * index:8 + 2 * index]
+                bounded(offset, count * entry_size, len(data), label)
+            offset, count = fields[12:14]
             metadata["indirect_symbol_table"] = {"slice_file_offset": hex(offset), "count": count}
+    if symbol_groups is not None:
+        if "symbol_table" not in metadata:
+            raise Error("dysymtab_bounds", "LC_DYSYMTAB requires LC_SYMTAB")
+        symbol_count = metadata["symbol_table"]["count"]
+        for start, count in zip(symbol_groups[::2], symbol_groups[1::2]):
+            if start > symbol_count or count > symbol_count - start:
+                raise Error("dysymtab_bounds", "Dynamic symbol group exceeds the symbol table")
     metadata["function_starts"] = function_starts(data,extents.get("function_starts"),text)
     metadata["data_in_code"] = data_in_code(data,extents.get("data_in_code"))
     return metadata
