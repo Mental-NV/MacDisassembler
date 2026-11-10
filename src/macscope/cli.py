@@ -10,11 +10,12 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+from unicodedata import normalize as normalize_unicode
 from . import __version__, SCHEMA_VERSION
 from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
-from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
+from .storage import MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, canonical, identity, write_json
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from . import html_export, macho_symbols, macho_unwind, string_evidence, terminal
 from .schema import validate_envelope, validate_function
@@ -216,13 +217,55 @@ def parser():
     return p
 
 
+def output_relative_to(target, protected):
+    """Identify an output at or below a protected path, including filesystem aliases."""
+    protected = Path(os.path.abspath(protected))
+    if target.is_relative_to(protected):
+        return target.relative_to(protected).parts
+    try:
+        source = protected.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    for candidate in (target, *target.parents):
+        try:
+            same = os.path.samestat(source, candidate.stat())
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        if same:
+            return target.parts[len(candidate.parts):]
+    return None
+
+
+def protect_output(args, target):
+    inputs = [getattr(args, name, None) for name in ('input', 'left', 'right')]
+    if args.command == 'bundle' or (args.command == 'annotations' and args.action == 'import'):
+        inputs.append(args.path)
+    for source in inputs:
+        if source is not None and output_relative_to(target, source) is not None:
+            raise Error('output_input_conflict', 'Output must be separate from the selected input', 8)
+    workspace = args.path if args.command == 'project' else getattr(args, 'project', None)
+    if workspace is not None:
+        relative = output_relative_to(target, workspace)
+        if relative is None and args.command == 'project':
+            # The workspace may not exist yet. Check its future name against the
+            # destination under the same parent, including case and Unicode aliases.
+            folder = Path(os.path.abspath(workspace))
+            sibling = output_relative_to(target, folder.parent)
+            if sibling and (normalize_unicode('NFD', sibling[0]).casefold()
+                            == normalize_unicode('NFD', folder.name).casefold()):
+                relative = sibling[1:]
+        if relative == () or (relative and relative[0].casefold() in WORKSPACE_RESERVED):
+            raise Error('output_workspace_conflict', 'Output must be outside managed workspace storage', 8)
+
+
 def limits(args):
     for key, low, high in [('timeout',1,3600),('function_timeout',1,120),('heap_mib',256,4096),('max_functions',1,10000),('limit',1,1000),('depth',1,8),('max_edges',1,2000),('byte_length',1,4096),('min_length',0,1048576)]:
         v=getattr(args,key,None)
         if v is not None and not low<=v<=high:
             raise Error('argument_limit', key+' must be '+str(low)+'..'+str(high),2)
     if getattr(args,'output',None):
-        target=Path(args.output)
+        target=Path(os.path.abspath(args.output))
+        protect_output(args, target)
         if target.exists() and not args.force:
             raise Error('output_exists','Output exists; use --force',8)
 
@@ -1254,13 +1297,18 @@ def main(argv=None):
     os.umask(0o077)
     args=None
     output=None
+    target=None
     try:
         args=parser().parse_args(argv)
         result=execute(args)
         validate_envelope(result)
+        code=6 if result['status']=='partial' else 0
+        if getattr(args,'output',None):
+            destination=Path(os.path.abspath(args.output))
+            protect_output(args,destination)
+            target=destination
         fmt=getattr(args,'format','json')
         output=render(result,fmt if not result.get('error') else 'json')
-        code=6 if result['status']=='partial' else 0
     except Error as e:
         command=getattr(args,'command','unknown') if args else 'unknown'
         status = 'cancelled' if e.exit_code == 130 else 'failed'
@@ -1278,7 +1326,7 @@ def main(argv=None):
         validate_envelope(result)
         output=render(result,'json')
     try:
-        if getattr(args,'output',None) and code in (0,6):atomic(args.output,output,args.force)
+        if target is not None and code in (0,6):atomic(target,output,args.force)
         else:sys.stdout.buffer.write(output)
     except Error as e:
         sys.stderr.write(terminal.safe(e.code)+': '+terminal.safe(e)+'\n')

@@ -78,7 +78,18 @@ Omitting `--format` retains the original indented JSON output. Explicit
 `--format text` selects the [terminal view](#terminal-view).
 JSONL collection records each have the complete versioned envelope.
 Successful `--output` writes only the file, not a duplicate stdout response.
+Output must be separate from selected input files and outside selected app
+bundles and managed project storage. An output conflict exits 8 even with
+`--force`. Reports may be written to a separate file at the project root.
 The `export` command also supports a [standalone HTML report](#private-html-export).
+
+The installed CLI rejected 19 conflicting destinations, including hard
+links, case aliases, app contents, and saved project files. The owned app
+completed full headless analysis on arm64 and x86_64. All four source files
+and all 162 managed project files retained their hashes. Separate exports
+inside and outside the project were private and supported explicit replacement.
+The validation report SHA-256 is
+`15457e87d395ed33006f75d8c972615c96a0a5b608787cc8ab5d9f2e85c6e0e2`.
 
 ```sh
 macscope --version

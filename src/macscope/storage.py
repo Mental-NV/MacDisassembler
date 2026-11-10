@@ -13,6 +13,9 @@ from .errors import Error
 from .macho import checked_path, read_regular
 
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
+WORKSPACE_RESERVED = frozenset((*WORKSPACE_DIRECTORIES, 'project.json', 'writer.lock',
+                                'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm'))
 
 
 def canonical(value):
@@ -75,7 +78,7 @@ class Project:
         if not isinstance(project_id, str) or not re.fullmatch(r'[a-f0-9]{32}', project_id):
             raise Error('workspace_manifest', 'Invalid workspace identifier')
         self.project_id = project_id
-        for d in ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp'):
+        for d in WORKSPACE_DIRECTORIES:
             checked_path(self.path/d, directory=True)
         checked_path(self.path/'index.sqlite')
         try:
@@ -99,7 +102,7 @@ class Project:
             p.mkdir(mode=0o700)
         except FileExistsError as e:
             raise Error('workspace_exists', 'Project path already exists', 8) from e
-        for d in ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp'):
+        for d in WORKSPACE_DIRECTORIES:
             (p/d).mkdir(mode=0o700)
         write_json(p/'project.json', {'schema_version':'1.0', 'project_id':uuid.uuid4().hex})
         with contextlib.closing(sqlite3.connect(p/'index.sqlite')) as db:

@@ -1170,6 +1170,71 @@ class CliTests(TemporaryCase):
         self.assertEqual((code, output, stderr), (0, b'', ''))
         self.assert_envelope(json.loads(target.read_bytes()))
 
+    def test_output_refuses_selected_inputs_and_aliases(self):
+        binary = self.root / 'owned.macho'
+        binary.write_bytes(b'owned input')
+        alias = self.root / 'linked.macho'
+        os.link(binary, alias)
+        app = self.root / 'Owned.app'
+        resources = app / 'Contents' / 'Resources'
+        resources.mkdir(parents=True)
+        cases = [
+            (['inspect', str(binary)], binary),
+            (['fixups', '--input', str(binary)], alias),
+            (['diff', str(binary), str(alias), '--scope', 'metadata'], alias),
+            (['annotations', 'import', str(alias), '--project', str(self.workspace.path)], alias),
+            (['bundle', 'list', str(app)], resources / 'report.json'),
+        ]
+        for words, target in cases:
+            with self.subTest(command=words):
+                code, output, _ = self.invoke([*words, '--output', str(target), '--force'])
+                self.assertEqual(code, 8)
+                self.assertEqual(json.loads(output)['error']['code'], 'output_input_conflict')
+        self.assertEqual(binary.read_bytes(), b'owned input')
+        self.assertTrue(alias.samefile(binary))
+        self.assertEqual(list(resources.iterdir()), [])
+
+    def test_output_protects_managed_workspace_paths_before_changes(self):
+        workspace = self.workspace.path
+        index = workspace / 'index.sqlite'
+        original = index.read_bytes()
+        for target in (index, workspace / 'inputs' / 'new.macho', workspace / 'writer.lock'):
+            with self.subTest(target=target):
+                code, output, _ = self.invoke(['rename', 'new label', '--name', 'unique',
+                                               '--project', str(workspace), '--output', str(target), '--force'])
+                self.assertEqual(code, 8)
+                self.assertEqual(json.loads(output)['error']['code'], 'output_workspace_conflict')
+        self.assertEqual(index.read_bytes(), original)
+        self.assertFalse((workspace / 'writer.lock').exists())
+        self.assertEqual(list((workspace / 'inputs').iterdir()), [])
+        project = self.root / 'new-workspace'
+        for alias in (project, project.with_name('NEW-WORKSPACE')):
+            with self.subTest(alias=alias):
+                code, output, _ = self.invoke(['project', 'create', str(project), '--output',
+                                               str(alias / 'project.json'), '--force'])
+                self.assertEqual(code, 8)
+                self.assertEqual(json.loads(output)['error']['code'], 'output_workspace_conflict')
+                self.assertFalse(project.exists())
+        report = workspace / 'report.json'
+        code, output, stderr = self.invoke(['export', '--project', str(workspace), '--output', str(report)])
+        self.assertEqual((code, output, stderr), (0, b'', ''))
+        self.assertEqual(json.loads(report.read_bytes())['command'], 'export')
+
+    def test_output_rechecks_selected_input_alias_before_publication(self):
+        binary = self.root / 'owned.macho'
+        binary.write_bytes(b'owned input')
+        target = self.root / 'report.json'
+
+        def inspect_and_link(*args, **kwargs):
+            os.link(binary, target)
+            return {'slices': []}, b''
+
+        with mock.patch.object(cli, 'inspect_path', side_effect=inspect_and_link):
+            code, output, _ = self.invoke(['inspect', str(binary), '--output', str(target), '--force'])
+        self.assertEqual(code, 8)
+        self.assertEqual(json.loads(output)['error']['code'], 'output_input_conflict')
+        self.assertTrue(target.samefile(binary))
+
     def test_partial_facet_returns_partial_status_and_exit_six(self):
         self.snapshot['functions'][0]['instructions_truncated'] = True
         with mock.patch.object(storage.Project, 'snapshot', return_value=(self.snapshot, {})):

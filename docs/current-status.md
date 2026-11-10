@@ -343,6 +343,11 @@ collections exceed documented bounds despite successful pseudocode output.
   assembly, graph and byte views matched the saved evidence. Partial
   ranges, unresolved targets, cursors and private output kept their
   existing semantics, and default exports matched the archived JSON.
+- [x] Protect [selected inputs and managed project files](cli.md#implemented-commands)
+  from explicit report output. The installed CLI rejected 19 conflicts
+  after validating both owned architectures through full headless Ghidra.
+  Input and project hashes matched, and separate reports supported private
+  creation and explicit replacement.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.
