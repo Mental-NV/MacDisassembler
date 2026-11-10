@@ -1,15 +1,14 @@
 """Read job manifests and request cancellation from their live supervisor."""
 from contextlib import contextmanager
 import fcntl
-import json
 import os
 import re
 import stat
 
-from . import worker_lifecycle
+from . import focused, worker_lifecycle
 from .errors import Error
 from .macho import read_regular
-from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity, write_json
+from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity, strict_json, write_json
 
 
 JOB_ID = re.compile(r"[0-9a-f]{32}")
@@ -91,7 +90,7 @@ def cancel_requested(manifest, token):
 
 def load(path):
     try:
-        record = json.loads(read_regular(path, 1024 * 1024))
+        record = strict_json(read_regular(path, 1024 * 1024))
     except (ValueError, RecursionError) as error:
         raise Error("job_manifest", "Invalid job manifest JSON") from error
     if (not isinstance(record, dict) or record.get("job_id") != path.parent.name
@@ -213,7 +212,7 @@ def verify_restart_stopped(project, path, original):
         raise Error("job_restart_record", "Cannot access the recorded restart attempt") from error
     else:
         try:
-            link = json.loads(read_regular(restart, 4096))
+            link = strict_json(read_regular(restart, 4096))
         except (Error, OSError, ValueError, RecursionError) as error:
             raise Error("job_restart_record", "Cannot verify the recorded restart attempt") from error
         if (not isinstance(link, dict) or link.keys() != {"schema", "original", "attempt"}
@@ -398,14 +397,17 @@ def query_receipt(project, job_id, request):
     if not path.exists() and not path.is_symlink():
         return None
     try:
-        receipt = json.loads(read_regular(path, MAX_SNAPSHOT_BYTES))
+        receipt = strict_json(read_regular(path, MAX_SNAPSHOT_BYTES))
+        if not isinstance(receipt, dict) or receipt.keys() != {"schema", "request_sha256", "result_sha256", "result"}:
+            raise ValueError("Invalid query receipt fields")
         result = receipt["result"]
         origin = result["data"]["origin"]
         producer_id = origin["job_id"]
+        request_digest, result_digest = identity(request), identity(result)
     except (ValueError, KeyError, TypeError, RecursionError) as error:
         raise Error("query_receipt", "Invalid recorded query result") from error
-    if (receipt.get("schema") != QUERY_RECEIPT or receipt.get("request_sha256") != identity(request)
-            or receipt.get("result_sha256") != identity(result)
+    if (receipt.get("schema") != QUERY_RECEIPT or receipt.get("request_sha256") != request_digest
+            or receipt.get("result_sha256") != result_digest
             or not isinstance(producer_id, str) or not JOB_ID.fullmatch(producer_id)
             or result["data"].get("image_id") != request.get("image_id")
             or result["data"].get("function_id") != request.get("function_id")
@@ -421,13 +423,13 @@ def query_receipt(project, job_id, request):
                 or any(reported.get(key) != value for key, value in recovery.items()))):
             raise Error("query_receipt", "Recorded signature decision differs from its query request")
     _, producer = get(project, producer_id)
-    focused = request.get("schema") == FOCUSED_REQUEST
-    recorded_request = focused_record(producer) if focused else producer.get("query_request")
+    is_focused = request.get("schema") == FOCUSED_REQUEST
+    recorded_request = focused_record(producer) if is_focused else producer.get("query_request")
     if (producer.get("mode") != "query" or producer["status"] != "complete"
             or recorded_request != request
             or (producer_id != job_id and producer.get("resumed_from") != job_id)):
         raise Error("query_receipt", "Recorded query result differs from its producing job")
-    if focused:
+    if is_focused:
         dependencies = producer.get("dependencies", {})
         original = producer if producer_id == job_id else get(project, job_id)[1]
         if (focused_record(original) != request or "resumed_from" in original
@@ -441,11 +443,14 @@ def query_receipt(project, job_id, request):
                 or not isinstance(dependencies, dict) or any(origin.get(key) != dependencies.get(key)
                     for key in ("ghidra_version", "ghidra_tree_sha256", "bridge_sha256"))):
             raise Error("query_receipt", "Focused result differs from its imported Program or worker")
+        focused.validate_result(result, request["extent"])
     return result
 
 
 def publish_query(project, job_id, request, result):
     path = project.path / "jobs" / job_id / "query-result.json"
+    if request.get("schema") == FOCUSED_REQUEST:
+        focused.validate_result(result, request["extent"])
     receipt = {"schema": QUERY_RECEIPT, "request_sha256": identity(request),
                "result_sha256": identity(result), "result": result}
     payload = canonical(receipt) + b"\n"

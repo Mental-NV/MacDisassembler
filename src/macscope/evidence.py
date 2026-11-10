@@ -1,13 +1,12 @@
 """Bounded handoffs from pinned analyses or committed import query receipts."""
 from collections import defaultdict
-import json
 import re
 
 from . import address_xrefs, body_ownership, calls, flow_evidence, focused, import_links, jobs, metadata, objc, search
 from .errors import Error
 from .macho import read_regular
-from .schema import validate_envelope, validate_function
-from .storage import canonical, identity, is_digest
+from .schema import validate_envelope
+from .storage import canonical, identity, is_digest, strict_json
 
 
 LEADS_SCHEMA = "macscope-evidence-leads/1"
@@ -32,20 +31,13 @@ FUNCTION_FIELDS = (
 )
 
 
-def unique_object(pairs):
-    value = dict(pairs)
-    if len(value) != len(pairs):
-        raise ValueError("Duplicate evidence field")
-    return value
-
-
 def lead_text(value):
     return isinstance(value, str) and 0 < len(value) <= 256 and value.isprintable() and bool(value.strip())
 
 
 def load(path):
     try:
-        manifest = json.loads(read_regular(path, MAX_MANIFEST_BYTES), object_pairs_hook=unique_object)
+        manifest = strict_json(read_regular(path, MAX_MANIFEST_BYTES))
     except (ValueError, RecursionError) as error:
         raise Error("evidence_manifest", "Invalid lead manifest JSON", 2) from error
     if (not isinstance(manifest, dict) or manifest.keys() != {"schema", "images", "leads"}
@@ -234,9 +226,13 @@ def query_view(project, job_id, pin, source, function):
     result = jobs.query_receipt(project, job_id, request)
     if result is None:
         raise Error("evidence_query_unpublished", "The selected query has no published result", 3)
-    return {"status": result["status"], "coverage": result["coverage"],
-            **{key: result["data"][key] for key in ("origin", "pseudocode", "decompile_status",
-                                                    "address_spans", "address_span_coverage")}}
+    try:
+        validate_envelope(result)
+        return {"status": result["status"], "coverage": result["coverage"],
+                **{key: result["data"][key] for key in ("origin", "pseudocode", "decompile_status",
+                                                        "address_spans", "address_span_coverage")}}
+    except (KeyError, ValueError) as error:
+        raise Error("query_receipt", "Invalid saved query evidence", 3) from error
 
 
 def lead_view(project, pin, source, snapshot, lead, selector_rows):
@@ -283,11 +279,6 @@ def focused_query(project, image, binary, entry, job_id):
         raise Error("evidence_query_unpublished", "The focused job has no published result", 3)
     if original != job_id and result["data"]["origin"]["job_id"] != job_id:
         raise Error("evidence_query_mismatch", "The focused result was published by a different retry", 3)
-    try:
-        validate_envelope(result)
-        validate_function(result["data"])
-    except ValueError as error:
-        raise Error("query_receipt", "Invalid focused result schema", 3) from error
     focused.verify_instructions(proof, payload, result["data"])
     return result
 

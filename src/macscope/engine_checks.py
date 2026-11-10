@@ -22,7 +22,8 @@ JARS = {
     "Ghidra/Features/Decompiler/lib/Decompiler.jar": ("ghidra/app/decompiler/DecompInterface.class",),
     "Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar": ("ghidra/program/model/listing/Program.class",),
 }
-SCRIPTS = ("MacscopeBridge.java", "MacscopeProfile.java", "RecoverCallSignatures.java", "RecoverSwitchTable.java")
+SCRIPTS = ("MacscopeBridge.java", "MacscopeProfile.java", "MacscopeFocus.java",
+           "RecoverCallSignatures.java", "RecoverSwitchTable.java")
 
 
 def read_dependency(path, maximum):

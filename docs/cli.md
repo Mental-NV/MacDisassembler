@@ -1553,6 +1553,12 @@ pinned provider. A provider pinned to an import needs its own verified
 focused lead at the export entry. Replaying a saved import receipt does
 not require the original app bundle.
 
+Job records and receipts reject duplicate JSON fields, nonfinite numbers
+and nesting deeper than 64 containers. Focused receipts also validate
+the body, instruction, reference and coverage fields before replay.
+A damaged receipt makes its lead unavailable. The report still includes
+the other requested leads and their own coverage.
+
 The handoff records hashes, Ghidra provenance, instructions, linked
 pseudocode, incoming and outgoing references, and a one-hop call trace
 within the selected image.

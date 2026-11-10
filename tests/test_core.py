@@ -100,6 +100,16 @@ def synthetic_snapshot(project, aid=SYNTHETIC_ANALYSIS_ID, *, slice_bytes=None):
 
 
 class AtomicStorageTests(TemporaryCase):
+    def test_strict_json_bounds_nesting_without_counting_string_delimiters(self):
+        value = {'escaped':'"\\[{' * (storage.MAX_JSON_DEPTH+1)}
+        self.assertEqual(storage.strict_json(storage.canonical(value)),value)
+        depth = storage.MAX_JSON_DEPTH
+        storage.strict_json(b'['*depth+b'0'+b']'*depth)
+        for payload in (b'['*(depth+1)+b'0'+b']'*(depth+1), b'{"x":1,"x":2}',
+                        b'{"x":NaN}',b'{"x":1e999}',b'{}\0'):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                storage.strict_json(payload)
+
     def test_canonical_and_identity_are_key_order_independent(self):
         self.assertEqual(storage.canonical({'b': 2, 'a': 1}), b'{"a":1,"b":2}')
         self.assertEqual(storage.identity({'b': 2, 'a': 1}), storage.identity({'a': 1, 'b': 2}))
@@ -731,6 +741,13 @@ class DependencyTests(TemporaryCase):
             self.error('missing_dependency', self.check)
         run.assert_not_called()
 
+    def test_missing_focused_bridge_fails_before_java(self):
+        (self.bridge/'MacscopeFocus.java').unlink()
+        with mock.patch.object(engine.subprocess,'run') as run:
+            error = self.error('missing_dependency',self.check)
+        self.assertIn('MacscopeFocus.java',str(error))
+        run.assert_not_called()
+
     def test_nonexecutable_dependency_fails_before_java_probe(self):
         for target in (self.g / 'support/analyzeHeadless',
                        self.g / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile',
@@ -856,7 +873,8 @@ class CliTests(TemporaryCase):
 
     def test_focused_receipt_binds_result_digest_to_its_producing_job(self):
         image = self.snapshot['image']
-        proof = {'entry_va':'0x100000020','program_sha256':'c'*64,'extent_sha256':'d'*64}
+        proof = {'entry_va':'0x100000020','end_va_exclusive':'0x100000024',
+                 'program_sha256':'c'*64,'extent_sha256':'d'*64}
         request = jobs.focused_request(self.workspace,image,proof)
         job_id = '1'*32
         job = self.workspace.path/'jobs'/job_id
@@ -867,16 +885,39 @@ class CliTests(TemporaryCase):
             'focused_import':proof,'focused_request':request,'dependencies':deps})
         result = cli.envelope('decompile', {'image_id':image['image_id'],'arch':image['arch'],
             'slice_sha256':image['sha256'],'entry_va':proof['entry_va'],'function_id':request['function_id'],
+            'address_space':'ram','engine_entry':proof['entry_va'],'is_external':False,'is_thunk':False,
+            'decompile_status':'complete','signature':None,'address_spans':[],'names':[],'facets':{},
+            'body_ranges':[[proof['entry_va'],'0x100000023']],
+            'instructions':[{'addr':proof['entry_va'],'bytes':'c0035fd6','flow':'TERMINATOR'}],
+            'coverage':{key:{'status':'complete'} for key in ('pseudocode','instructions','body_ranges',
+                                                           'xrefs_from','xrefs_to_entry')},
+            'xrefs_to_entry':[],'xrefs_from_sample':[],
             'pseudocode':'return 1;', 'origin':{'job_id':job_id,'mode':'focused_readonly_import','extent':proof,**deps}})
         self.assertIsNone(jobs.query_receipt(self.workspace,job_id,request))
         self.assertEqual(jobs.publish_query(self.workspace,job_id,request,result),result)
         self.assertEqual(jobs.query_receipt(self.workspace,job_id,request),result)
         path = job/'query-result.json'
-        receipt = json.loads(path.read_bytes())
+        original = path.read_bytes()
+        storage.atomic(path,b'{"result_sha256":"duplicate",'+original[1:],force=True)
+        self.error('query_receipt',jobs.query_receipt,self.workspace,job_id,request)
+        receipt = json.loads(original)
         receipt['result']['data']['pseudocode'] = 'return 2;'
         receipt['result_sha256'] = storage.identity(receipt['result'])
         storage.write_json(path,receipt,force=True)
         self.error('query_receipt',jobs.query_receipt,self.workspace,job_id,request)
+
+        record = jobs.load(job/'job.json')
+        for change in ({'engine_entry':None}, {'coverage':dict(result['data']['coverage'],xrefs_from=[])},
+                       {'xrefs_from_sample':[{'from':proof['entry_va'],'to':None,'type':None}]},
+                       {'xrefs_from_sample':[{'from':proof['entry_va'],'to':None,'type':'DATA',
+                                              'operand_index':float('nan')}] }):
+            with self.subTest(change=change):
+                changed = dict(result,data=dict(result['data'],**change))
+                self.error('query_receipt',jobs.publish_query,self.workspace,job_id,request,changed)
+                forged = dict(json.loads(original), result=changed, result_sha256=storage.identity(changed))
+                storage.write_json(path,forged,force=True)
+                storage.write_json(job/'job.json',dict(record,focused_result_sha256=forged['result_sha256']),force=True)
+                self.error('query_receipt',jobs.query_receipt,self.workspace,job_id,request)
 
     def test_evidence_import_pin_requires_focused_job_and_no_analysis_id(self):
         image = self.snapshot['image']

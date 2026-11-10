@@ -5,11 +5,14 @@ from hashlib import sha256
 from . import macho_load, metadata
 from .errors import Error
 from .macho import thin
+from .pseudocode import VA, address_spans
+from .schema import validate_envelope, validate_function
 
 
 POLICY = "macscope-focused-import/1"
 MAX_BYTES = 8192
 PROJECT_BACKUPS = frozenset(("image.rep/idata/~index.bak", "image.rep/idata/~journal.bak"))
+RECEIPT_FACETS = {"pseudocode", "instructions", "body_ranges", "xrefs_from", "xrefs_to_entry"}
 
 
 def select(project, image, entry):
@@ -60,6 +63,59 @@ def extent(data, image, entry):
 def overlaps(offset, size, row, length):
     start = int(row["slice_file_offset"], 16)
     return offset < start + length and start < offset + size
+
+
+def validate_result(result, proof):
+    """Validate the focused receipt fields consumed by replay and call tracing."""
+    try:
+        validate_envelope(result)
+        function = result["data"]
+        validate_function(function)
+        entry = proof["entry_va"]
+        if (result["command"] != "decompile" or result["status"] not in ("complete", "partial")
+                or result["analysis_id"] is not None or function.get("address_space") != "ram"
+                or function["entry_va"] != entry or function.get("engine_entry") != entry
+                or function.get("is_external") is not False or function.get("is_thunk") is not False
+                or function.get("decompile_status") not in ("complete", "partial", "failed", "timeout", "cancelled")):
+            raise ValueError("Invalid focused function identity or outcome")
+        coverage = function.get("coverage")
+        if (not isinstance(coverage, dict) or not RECEIPT_FACETS <= coverage.keys()
+                or any(not isinstance(facet, dict) or not isinstance(facet.get("status"), str)
+                       for facet in coverage.values())):
+            raise ValueError("Invalid focused facet coverage")
+        start, limit = int(entry, 16), int(proof["end_va_exclusive"], 16)
+        ranges = function["body_ranges"]
+        if not ranges or ranges[0][0] != entry:
+            raise ValueError("Focused body does not start at the recorded entry")
+        previous = start - 1
+        for lo, hi in ranges:
+            if (not VA.fullmatch(lo) or not VA.fullmatch(hi)
+                    or not previous < int(lo, 16) <= int(hi, 16) < limit):
+                raise ValueError("Invalid focused body range")
+            previous = int(hi, 16)
+        instructions = function.get("instructions")
+        if (not isinstance(instructions, list) or not 1 <= len(instructions) <= MAX_BYTES
+                or any(not isinstance(row, dict) or not isinstance(row.get("addr"), str)
+                       or not VA.fullmatch(row["addr"]) or not isinstance(row.get("flow"), str)
+                       or not isinstance(row.get("bytes"), str) for row in instructions)):
+            raise ValueError("Invalid focused instruction records")
+        for key in ("xrefs_to_entry", "xrefs_from_sample"):
+            rows = function.get(key)
+            if not isinstance(rows, list):
+                raise ValueError("Invalid focused reference collection")
+            for row in rows:
+                if (not isinstance(row, dict) or not isinstance(row.get("from"), str)
+                        or not isinstance(row.get("type"), str) or "to" not in row
+                        or (row["to"] is not None and not isinstance(row["to"], str))
+                        or (row.get("operand_index") is not None and type(row["operand_index"]) is not int)
+                        or (row.get("source") is not None and not isinstance(row["source"], str))):
+                    raise ValueError("Invalid focused reference record")
+                if key == "xrefs_from_sample" and (not VA.fullmatch(row["from"])
+                        or not start <= int(row["from"], 16) < limit):
+                    raise ValueError("Focused outgoing reference starts outside the extent")
+        address_spans(function, function["pseudocode"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise Error("query_receipt", str(error), 3) from error
 
 
 def verify(proof, payload, report, function):

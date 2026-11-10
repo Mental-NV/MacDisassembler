@@ -239,8 +239,11 @@ class FocusedResumeTests(TemporaryCase):
         self.write_job(self.attempt,job)
         function = {'entry_va':self.entry,'name':'owned','signature':None,'pseudocode':'return;',
                     'decompile_status':'complete','body_ranges':[[self.entry,hex(int(self.entry,16)+3)]],
-                    'instructions':[{'addr':self.entry,'bytes':self.code.hex()}], 'blocks':[],
-                    'xrefs_to_entry':[],'xrefs_from_sample':[], 'coverage':{'pseudocode':{'status':'complete'}}}
+                    'is_external':False,'is_thunk':False,
+                    'instructions':[{'addr':self.entry,'bytes':self.code.hex(),'flow':'TERMINATOR'}], 'blocks':[],
+                    'xrefs_to_entry':[],'xrefs_from_sample':[],
+                    'coverage':{key:{'status':'complete'} for key in ('pseudocode','instructions','body_ranges',
+                                                                    'xrefs_from','xrefs_to_entry')}}
         return {'functions':[function],'bridge_version':'test'},job
 
     def test_retry_publishes_under_original_id_and_handoff_accepts_the_producer(self):

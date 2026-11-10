@@ -534,8 +534,6 @@ def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_fr
     response = envelope('decompile',redact(data),status='partial' if reasons else 'complete',
                         cov=coverage('one selected linker extent from the saved import',1,1,bool(reasons),
                                      reason=';'.join(reasons) or None),diagnostics=redact(diagnostics))
-    validate_function(response['data'])
-    validate_envelope(response)
     with jobs.result_publication('query',job['job_id'],resumed_from):
         return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
 

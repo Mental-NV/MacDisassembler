@@ -87,6 +87,11 @@ decision. Reuse recorded observations for gestures already covered.
   bundle unavailable, and the handoff resolved both the original job ID
   and the producing retry ID. With both the Program and receipt set aside,
   retry returned `baseline_integrity` before creating a new job.
+- [x] **Isolate damage to a saved focused receipt.** Thirteen targeted
+  corruptions of the owned Calendar receipt or job record were withheld.
+  Of 512 seeded mutations, 451 produced a typed lead failure and 61
+  preserved the original result. Both sibling leads stayed byte-identical,
+  no worker started, and restoring the receipt reproduced the clean report.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

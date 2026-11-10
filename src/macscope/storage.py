@@ -3,6 +3,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -18,6 +19,8 @@ WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
 WORKSPACE_RESERVED = frozenset((*WORKSPACE_DIRECTORIES, 'project.json', 'writer.lock',
                                 'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm'))
 CANONICAL_JSON = json.JSONEncoder(sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+JSON_STRUCTURE = re.compile(rb'["\\{}\[\]]')
+MAX_JSON_DEPTH = 64
 
 
 def canonical(value):
@@ -35,6 +38,50 @@ def identity(value):
 
 def is_digest(value):
     return isinstance(value, str) and SHA256.fullmatch(value) is not None
+
+
+def strict_json(payload):
+    # Scan ASCII delimiters before the decoder allocates deeply nested containers.
+    # UTF-8 continuation bytes cannot be mistaken for these delimiters.
+    if b'\0' in payload:
+        raise ValueError('Expected UTF-8 JSON without NUL bytes')
+    depth, escaped = 0, -1
+    in_string = False
+    for match in JSON_STRUCTURE.finditer(payload):
+        position = match.start()
+        token = payload[position]
+        if in_string:
+            if position == escaped:
+                continue
+            if token == ord('\\'):
+                escaped = position + 1
+            elif token == ord('"'):
+                in_string = False
+        elif token == ord('"'):
+            in_string = True
+        elif token in b'[{':
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError('JSON nesting exceeds its limit')
+        elif token in b']}':
+            depth -= 1
+            if depth < 0:
+                raise ValueError('Unbalanced JSON delimiters')
+
+    def unique_fields(pairs):
+        value = dict(pairs)
+        if len(value) != len(pairs):
+            raise ValueError('Duplicate JSON field')
+        return value
+
+    def finite_float(text):
+        value = float(text)
+        if not math.isfinite(value):
+            raise ValueError('Nonfinite JSON number')
+        return value
+
+    return json.loads(payload, object_pairs_hook=unique_fields, parse_float=finite_float,
+                      parse_constant=finite_float)
 
 
 def json_object(payload, code, message):
