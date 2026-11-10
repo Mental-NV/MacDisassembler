@@ -24,7 +24,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -60,10 +62,13 @@ import ghidra.program.model.block.CodeBlockReference;
 import ghidra.program.model.block.CodeBlockReferenceIterator;
 import ghidra.program.model.listing.CodeUnit;
 import ghidra.program.model.data.AbstractIntegerDataType;
+import ghidra.program.model.data.AbstractFloatDataType;
 import ghidra.program.model.data.BooleanDataType;
+import ghidra.program.model.data.CategoryPath;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.EndianSettingsDefinition;
 import ghidra.program.model.data.PointerDataType;
+import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.data.StringDataInstance;
 import ghidra.program.model.data.TerminatedStringDataType;
 import ghidra.program.model.data.VoidDataType;
@@ -93,7 +98,10 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.10.0";
+    static final String VERSION = "1.11.0";
+    static final String HINT_IDENTIFIER = "[A-Za-z_][A-Za-z0-9_]{0,47}";
+    static final Pattern HINT_STRUCT = Pattern.compile("(struct (" + HINT_IDENTIFIER + ")\\{([^{}]+)\\})(\\*{0,2})");
+    static final Pattern HINT_FIELD = Pattern.compile("(" + HINT_IDENTIFIER + "):(.+)");
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final String DEEP_PROFILE = "macscope-binary-only-deep/1";
@@ -736,6 +744,7 @@ public class MacscopeBridge extends HeadlessScript {
         int transaction = currentProgram.startTransaction("Macscope temporary type hints");
         try {
             JsonArray applied = new JsonArray();
+            Map<String, HintStructure> structures = new TreeMap<>();
             for (JsonElement element : hints) {
                 monitor.checkCancelled();
                 JsonObject hint = element.getAsJsonObject();
@@ -743,7 +752,10 @@ public class MacscopeBridge extends HeadlessScript {
                 if (function.isExternal() || function.isThunk()) throw new IllegalArgumentException("Invalid type hint function");
                 JsonObject row = hint.deepCopy();
                 if (hint.keySet().equals(Set.of("entry_va", "revision", "return_type"))) {
-                    DataType type = hintType(hint.get("return_type").getAsString());
+                    DataType type = hintType(hint.get("return_type").getAsString(), structures);
+                    if (type instanceof StructureDataType && function.hasCustomVariableStorage()) {
+                        throw new IllegalArgumentException("Aggregate returns require dynamic storage");
+                    }
                     put(row, "previous_type", function.getReturnType().getDisplayName());
                     function.setReturnType(type, SourceType.USER_DEFINED);
                     if (!function.getReturn().getFormalDataType().isEquivalent(type)) {
@@ -751,20 +763,26 @@ public class MacscopeBridge extends HeadlessScript {
                     }
                     put(row, "resolved_type", function.getReturnType().getDisplayName());
                 } else if (hint.keySet().equals(Set.of("entry_va", "revision", "parameter_types"))) {
-                    applyParameterHint(function, hint.getAsJsonArray("parameter_types"), row);
+                    applyParameterHint(function, hint.getAsJsonArray("parameter_types"), row, structures);
                 } else {
                     throw new IllegalArgumentException("Invalid type hint fields");
                 }
                 applied.add(row);
             }
             root.add("applied_type_hints", applied);
+            if (!structures.isEmpty()) {
+                JsonArray layouts = new JsonArray();
+                for (HintStructure structure : structures.values()) layouts.add(structure.layout());
+                root.add("aggregate_type_layouts", layouts);
+            }
             functions(1, timeout, entry);
         } finally {
             currentProgram.endTransaction(transaction, false);
         }
     }
 
-    void applyParameterHint(Function function, JsonArray names, JsonObject row) throws Exception {
+    void applyParameterHint(Function function, JsonArray names, JsonObject row,
+            Map<String, HintStructure> structures) throws Exception {
         if (names.size() > 16 || function.hasCustomVariableStorage()) {
             throw new IllegalArgumentException("Parameter hints require at most 16 types and dynamic storage");
         }
@@ -772,7 +790,7 @@ public class MacscopeBridge extends HeadlessScript {
         for (JsonElement name : names) {
             String requested = name.getAsString();
             if ("void".equals(requested)) throw new IllegalArgumentException("A formal parameter cannot have type void");
-            parameters.add(new ParameterImpl(null, hintType(requested), currentProgram, SourceType.USER_DEFINED));
+            parameters.add(new ParameterImpl(null, hintType(requested, structures), currentProgram, SourceType.USER_DEFINED));
         }
         String convention = function.getCallingConventionName();
         boolean variadic = function.hasVarArgs();
@@ -809,8 +827,57 @@ public class MacscopeBridge extends HeadlessScript {
         return names;
     }
 
-    DataType hintType(String name) {
-        if (!name.matches("(void|bool|u?int(8|16|32|64)_t)\\*{0,2}")) {
+    record HintStructure(String definition, StructureDataType type) {
+        JsonObject layout() {
+            JsonObject layout = new JsonObject();
+            layout.addProperty("definition", definition);
+            layout.addProperty("name", type.getName());
+            layout.addProperty("size_bytes", type.getLength());
+            layout.addProperty("alignment_bytes", type.getAlignment());
+            JsonArray fields = new JsonArray();
+            for (var component : type.getDefinedComponents()) {
+                JsonObject field = new JsonObject();
+                field.addProperty("name", component.getFieldName());
+                field.addProperty("type", component.getDataType().getDisplayName());
+                field.addProperty("offset_bytes", component.getOffset());
+                field.addProperty("size_bytes", component.getLength());
+                fields.add(field);
+            }
+            layout.add("fields", fields);
+            return layout;
+        }
+    }
+
+    DataType hintType(String name, Map<String, HintStructure> structures) {
+        if (name.length() > 512) throw new IllegalArgumentException("Hint type exceeds its bound");
+        var matcher = HINT_STRUCT.matcher(name);
+        if (!matcher.matches()) return scalarHintType(name);
+        String definition = matcher.group(1), typeName = matcher.group(2);
+        HintStructure structure = structures.get(typeName);
+        if (structure == null) {
+            var manager = currentProgram.getDataTypeManager();
+            var type = new StructureDataType(new CategoryPath("/macscope/type-hints"), typeName, 0, manager);
+            type.setPackingEnabled(true);
+            String[] fields = matcher.group(3).split(";", -1);
+            if (fields.length > 16) throw new IllegalArgumentException("Too many structure fields");
+            Set<String> seen = new TreeSet<>();
+            for (String field : fields) {
+                var member = HINT_FIELD.matcher(field);
+                if (!member.matches() || !seen.add(member.group(1)) || "void".equals(member.group(2))) {
+                    throw new IllegalArgumentException("Invalid named structure field");
+                }
+                type.add(scalarHintType(member.group(2)), member.group(1), null);
+            }
+            structure = new HintStructure(definition, type);
+            structures.put(typeName, structure);
+        } else if (!structure.definition().equals(definition)) {
+            throw new IllegalArgumentException("Conflicting structure definitions");
+        }
+        return hintPointers(structure.type(), matcher.group(4).length());
+    }
+
+    DataType scalarHintType(String name) {
+        if (!name.matches("(void|bool|float|double|u?int(8|16|32|64)_t)\\*{0,2}")) {
             throw new IllegalArgumentException("Unsupported hint type");
         }
         int pointer = name.indexOf('*');
@@ -821,14 +888,20 @@ public class MacscopeBridge extends HeadlessScript {
             type = VoidDataType.dataType;
         } else if (base.equals("bool")) {
             type = BooleanDataType.dataType;
+        } else if (base.equals("float") || base.equals("double")) {
+            type = AbstractFloatDataType.getFloatDataType(base.equals("float") ? 4 : 8, manager);
         } else {
             boolean unsigned = base.startsWith("u");
             int bytes = Integer.parseInt(base.substring(unsigned ? 4 : 3, base.length()-2))/8;
             type = unsigned ? AbstractIntegerDataType.getUnsignedDataType(bytes, manager)
                 : AbstractIntegerDataType.getSignedDataType(bytes, manager);
         }
-        for (int i = base.length(); i < name.length(); i++) {
-            type = new PointerDataType(type, manager);
+        return hintPointers(type, name.length() - base.length());
+    }
+
+    DataType hintPointers(DataType type, int count) {
+        for (int i = 0; i < count; i++) {
+            type = new PointerDataType(type, currentProgram.getDataTypeManager());
         }
         return type;
     }

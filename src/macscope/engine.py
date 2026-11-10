@@ -17,7 +17,7 @@ import time
 import uuid
 from copy import deepcopy
 from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, scalar_signatures, switch_tables, worker_lifecycle
-from .annotations import MAX_TYPE_HINTS
+from .annotations import MAX_TYPE_HINTS, structure_definitions
 from .errors import Error
 from .storage import canonical, identity, write_json
 from .macho import read_regular
@@ -25,7 +25,7 @@ from .macho import read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
-BRIDGE_VERSION = '1.10.0'
+BRIDGE_VERSION = '1.11.0'
 STARTUP_TIMEOUT_SECONDS = 300
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
@@ -375,6 +375,11 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         raise Error('query_entry', 'Selected query requires an exact saved RAM function entry', 2)
     if hints is not None and (entry is None or not 1<=len(hints)<=MAX_TYPE_HINTS):
         raise Error('type_hint_scope', 'Accepted hints require a bounded selected-function query', 2)
+    hint_request = None
+    if hints is not None:
+        hint_request = {'schema':'macscope-type-hints/2','hints':hints}
+        if len(canonical(hint_request)) + 1 > 65536:
+            raise Error('type_hint_request_limit','Accepted hints exceed the worker request size limit',7)
     if boundary_request is not None and mode != 'analyze':
         raise Error('boundary_recovery_scope', 'Boundary recovery requires analysis of an imported image', 2)
     recovery = None
@@ -458,7 +463,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         argv.append(entry)
     if hints is not None:
         request = job/'type-hints.json'
-        write_json(request, {'schema':'macscope-type-hints/2','hints':hints}, mode=0o400)
+        write_json(request,hint_request,mode=0o400)
         argv.append(str(request))
     argv += ['-max-cpu', '1', '-analysisTimeoutPerFile', str(args.timeout), '-log',
              str(job/'engine.log'), '-scriptlog', str(job/'script.log')]
@@ -542,6 +547,14 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                 raise Error('type_hint_result_mismatch','Worker did not apply the exact accepted hints',10)
         elif applied:
             raise Error('type_hint_result_mismatch','Worker applied unrequested type hints',10)
+        types = (value for hint in hints or ()
+                 for value in ([hint['return_type']] if 'return_type' in hint else hint['parameter_types']))
+        definitions = {f'struct {name}{{{fields}}}' for name,fields in structure_definitions(types).items()}
+        layouts = result.get('aggregate_type_layouts',[])
+        if (not isinstance(layouts,list) or len(layouts) != len(definitions)
+                or any(not isinstance(row,dict) or not isinstance(row.get('definition'),str) for row in layouts)
+                or {row['definition'] for row in layouts} != definitions):
+            raise Error('type_hint_result_mismatch','Worker returned different aggregate type definitions',10)
         if hints is not None or signature_plan is not None:
             if any(tree_digest(path) != active['analysis_program_sha256'] for path in (source, engine_dir)):
                 raise Error('analysis_program_integrity', 'Fresh query changed a Program on disk', 10)

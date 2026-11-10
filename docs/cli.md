@@ -446,18 +446,32 @@ revision is written. Importing type-hint revisions requires the explicit
 `type set --return-type TYPE --accept` records a user-supplied return type.
 `type set --parameters TYPES --accept` records a complete list of up to 16
 fixed parameter types. Give a comma-separated list or `void` for zero
-fixed parameters. A function can have both hints. Supported types include
-`bool`, signed and unsigned fixed-width integers from 8 to 64 bits, and up
-to two pointer levels over those types or `void`. Bare `void` is also a
-return type. Invalid input preserves the existing revisions. Use
+fixed parameters. A function can have both hints. Scalar types include
+`bool`, `float`, `double`, and signed and unsigned fixed-width integers
+from 8 to 64 bits. Pointers to those types or `void` can have up to two
+levels. Bare `void` is also a return type. Invalid input preserves the
+existing revisions. Use
 `type list` to inspect active hints, `type clear --accept` to clear a
 return hint, or `type clear --parameters --accept` to clear a parameter list.
+
+Use `struct Pair{left:uint64_t;right:uint64_t}` for a named structure by
+value. Append `*` or `**` to pass it by pointer. Use semicolons between
+fields and shell quotes around the declaration. A structure can contain
+up to 16 distinct named scalar or pointer fields. Names use ASCII C
+identifier spelling and can contain up to 48 characters. Each declaration
+is limited to 512 characters. Repeat the same definition everywhere an
+active hint uses that structure name in the selected image. Conflicting
+definitions are rejected before writing a revision. The worker request
+for all active hints is limited to 64 KiB.
 
 ```sh
 macscope type set --name _calc_add --return-type uint64_t --accept \
   --project workspaces/calculator --json
 macscope type set --name _owned_advance --parameters 'uint32_t*,uint32_t' --accept \
   --project workspaces/parameter-fixture --json
+macscope type set --name _owned_pair \
+  --return-type 'struct OwnedPair{left:uint64_t;right:uint64_t}' --accept \
+  --project workspaces/aggregate-fixture --json
 macscope decompile --name _calc_add --fresh --with-type-hints \
   --project workspaces/calculator --experimental-trusted-input --json
 ```
@@ -468,7 +482,11 @@ reports applied revisions and resolved types. The hint view always starts a
 fresh worker and leaves the unassisted cached analysis available separately.
 Parameter hints require dynamic Ghidra storage and preserve the saved
 calling convention and variadic flag. An unknown calling convention stays
-explicit in the fresh output.
+explicit in the fresh output. By-value structure returns also require
+dynamic storage. Ghidra lays out fields with natural alignment for the
+selected image. `data.origin.aggregate_type_layouts` reports the resolved
+size, alignment and field offsets in bytes. Structure definitions and
+calling signatures are user-supplied hypotheses.
 
 The installed CLI verified a pointer return and two parameters, a
 nine-parameter function with a stack argument, and an empty parameter list
@@ -478,6 +496,18 @@ Program digests and unassisted exports matched after the queries. A
 cancelled arm64 query restarted with its original accepted list after a
 later clear and replayed the saved receipt. The validation report SHA-256 is
 `7d02cc3692d50511d128122efc0fe19c6dba1870969efdccff4a209634a2fa61`.
+
+The [owned aggregate fixture](../analysis/heldout_aggregate_hints.c)
+verified structure sizes, alignments and field offsets against Clang on
+arm64 and x86_64. Ghidra recovered field accesses for an integer pair, a
+padded structure passed by pointer, and a large return through hidden
+storage. It recovered named field assignments for the arm64 float pair.
+On x86_64 the float pair's body still contains `insertps` and vector lane
+operations despite the applied structure signature.
+The installed CLI also verified opt-in annotation transfer, unchanged
+saved Program digests and cached export, and receipt replay after clearing
+the original parameter hint. The validation report SHA-256 is
+`7533b71c9d96f8edda2380a40e98ef3fb9f4715cd51c49da8a00316fff81a2b9`.
 
 ## Terminal view
 
@@ -1689,9 +1719,9 @@ Exit codes: 0 complete, 2 usage/ambiguity/cursor, 3 unsupported capability,
 internal failure, 130 interrupt. A bounded collection page can have partial
 coverage while the page request itself exits0; use `next_cursor`.
 
-Remaining capabilities include richer Objective-C and Swift views,
-aggregate type hints and manual function boundary corrections. Additional release
-requirements include stronger isolation,
+Remaining capabilities include richer Objective-C and Swift views, packed
+and nested aggregate hints, and manual function boundary corrections.
+Additional release requirements include stronger isolation,
 hard RSS/disk quotas, schema migrations, signed packaging, x86_64 host
 workers and expanded fuzzing. The [progress checklist](current-status.md)
 tracks behavior validation and the separately gated work.

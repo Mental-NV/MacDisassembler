@@ -151,6 +151,12 @@ collections exceed documented bounds despite successful pseudocode output.
   zero and nine parameters, pointer return and parameter types, annotation
   transfer, and restart from the original hint revisions after a later
   clear. The saved Programs and unassisted exports matched afterward.
+- [x] Apply [named structure hints](cli.md#accepted-type-hints) to returns
+  and parameters in fresh full-Ghidra queries. Eight owned arm64 and x86_64
+  queries matched Clang's natural layouts, including a padded structure
+  and a large hidden-storage return. The x86_64 float pair retained vector
+  lane operations. Verify opt-in annotation transfer, unchanged Programs
+  and cached export, and receipt replay after a later clear.
 - [x] Inventory physical bundle images and resources with hashes and
   resumable pages.
 - [x] Verify [`resources list`](cli.md#bundle-resources) on an owned app

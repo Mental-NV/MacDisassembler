@@ -453,6 +453,8 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
     if hints is not None:
         data['origin'].update(type_hint_view_id=job['type_hint_view_id'],
                               applied_type_hints=result['applied_type_hints'])
+        if 'aggregate_type_layouts' in result:
+            data['origin']['aggregate_type_layouts'] = result['aggregate_type_layouts']
     if 'boundary_recovery' in job:
         data['origin']['boundary_recovery'] = job['boundary_recovery']
     if recovery is not None:
@@ -516,6 +518,8 @@ def revise_annotation(args, project, command, address_selection):
             scopes = {(row['engine_entry'],row['kind']) for row in rows if row['kind'] in annotations.TYPE_HINT_KINDS}
             if len(scopes)>=annotations.MAX_TYPE_HINTS and (entry,kind) not in scopes:
                 raise Error('type_hint_limit','Image type hint limit reached',7)
+            remaining = [row for row in rows if (row['engine_entry'],row['kind']) != (entry,kind)]
+            annotations.check_structures([*remaining,{'kind':kind,'value':value}])
         prior = rows if getattr(args,'action',None) == 'remove' else ()
         instruction = annotations.instruction_at(function,getattr(args,'instruction',None),prior=prior)
         row,changed = annotations.revise(project,image['image_id'],snapshot['analysis_id'],

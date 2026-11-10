@@ -153,6 +153,7 @@ def apply(project, image, snapshot, bundle, accept_type_hints):
         hints = [row for row in active if row["kind"] in annotations.TYPE_HINT_KINDS]
         if len(hints) > annotations.MAX_TYPE_HINTS:
             raise Error("type_hint_limit", "Image type hint limit reached", 7)
+        annotations.check_structures(hints)
         for row in active:
             function = functions.get(row["engine_entry"])
             if function is None:

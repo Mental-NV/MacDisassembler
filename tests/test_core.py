@@ -1268,6 +1268,24 @@ class CliTests(TemporaryCase):
         self.assertEqual(zero['value'], '[]')
         self.assertEqual(self.workspace.snapshot(self.workspace.select())[0], self.snapshot)
 
+    def test_aggregate_type_hints_share_a_layout_and_reject_conflicts_before_revision(self):
+        pair = 'struct Pair{left:uint64_t;right:double}'
+        target = ('--function-id','function-0','--accept')
+        cli.execute(self.args('type','set',*target,'--return-type',pair))
+        cli.execute(self.args('type','set',*target,'--parameters',pair+'*,uint64_t'))
+        original = cli.execute(self.args('annotations','history'))['data']
+        self.error('type_hint_struct_conflict',cli.execute,
+                   self.args('type','set','--function-id','function-1','--accept','--return-type',
+                             'struct Pair{left:uint32_t}'))
+        for malformed in ('struct Pair{}','struct Pair{a:void}', 'struct Pair{a:int32_t;a:int8_t}',
+                          'struct Pair{a:struct Nested{b:bool}}'):
+            self.error('type_hint_type',cli.execute,self.args('type','set',*target,'--return-type',malformed))
+        self.assertEqual(cli.execute(self.args('annotations','history'))['data'],original)
+        _, rows = cli.annotations.read(self.workspace,self.snapshot['image']['image_id'])
+        hints = cli.annotations.type_hints(rows,self.snapshot['functions'])
+        self.assertEqual(hints[0]['return_type'],pair)
+        self.assertEqual(hints[1]['parameter_types'],[pair+'*','uint64_t'])
+
     def test_unresolved_computed_jump_surfaces_without_rewriting_saved_evidence(self):
         snapshot = copy.deepcopy(self.snapshot)
         target = snapshot['functions'][2]

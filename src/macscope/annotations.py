@@ -10,8 +10,14 @@ from .errors import Error
 MAX_REVISIONS = 10000
 MAX_TYPE_HINTS = 128
 MAX_PARAMETERS = 16
+MAX_TYPE_TEXT = 512
+MAX_PARAMETER_TEXT = MAX_PARAMETERS * (MAX_TYPE_TEXT + 3) + 1
+MAX_STRUCT_FIELDS = 16
 TYPE_HINT_KINDS = ("return_type", "parameter_types")
-TYPE_NAME = re.compile(r"(?:void|bool|u?int(?:8|16|32|64)_t)\*{0,2}")
+TYPE_NAME = re.compile(r"(?:void|bool|float|double|u?int(?:8|16|32|64)_t)\*{0,2}")
+IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]{0,47}"
+STRUCT = re.compile(rf"struct ({IDENTIFIER})\{{([^{{}}]+)\}}\*{{0,2}}")
+FIELD = re.compile(rf"({IDENTIFIER}):(.+)")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS annotation_revisions (
@@ -141,14 +147,32 @@ def instruction_at(function, requested, *, prior=()):
     raise Error("annotation_address", "Address is absent from the function's saved instructions", 2)
 
 
+def struct_definition(value):
+    match = STRUCT.fullmatch(value)
+    if match is None:
+        return None
+    name, declaration = match.groups()
+    fields = declaration.split(";")
+    if len(fields) > MAX_STRUCT_FIELDS:
+        raise Error("type_hint_type", "A structure can have at most 16 fields", 2)
+    seen = set()
+    for field in fields:
+        member = FIELD.fullmatch(field)
+        if member is None or member[1] in seen or not TYPE_NAME.fullmatch(member[2]) or member[2] == "void":
+            raise Error("type_hint_type", "Use distinct named structure fields with scalar or pointer types", 2)
+        seen.add(member[1])
+    return name, declaration
+
+
 def return_type(value):
-    if not isinstance(value, str) or not TYPE_NAME.fullmatch(value):
-        raise Error("type_hint_type", "Use void, bool, or a fixed-width integer type with up to two pointer levels", 2)
+    if (not isinstance(value, str) or len(value) > MAX_TYPE_TEXT
+            or not (TYPE_NAME.fullmatch(value) or struct_definition(value))):
+        raise Error("type_hint_type", "Use a scalar, pointer, or named structure such as struct Pair{left:uint64_t;right:uint64_t}", 2)
     return value
 
 
 def parameter_types(value):
-    if not isinstance(value, str) or len(value) > 512:
+    if not isinstance(value, str) or len(value) > MAX_PARAMETER_TEXT:
         raise Error("type_hint_parameters", "Invalid parameter-type list", 2)
     try:
         types = json.loads(value)
@@ -165,12 +189,33 @@ def parameter_types(value):
 
 
 def encode_parameters(value):
-    if len(value) > 512:
+    if len(value) > MAX_PARAMETER_TEXT:
         raise Error("type_hint_parameters", "Invalid parameter-type list", 2)
     types = [] if value.strip() in ("", "void") else [name.strip() for name in value.split(",")]
     encoded = json.dumps(types, separators=(",", ":"))
     parameter_types(encoded)
     return encoded
+
+
+def structure_definitions(types):
+    definitions = {}
+    for name in types:
+        if definition := struct_definition(name):
+            structure, fields = definition
+            if definitions.setdefault(structure, fields) != fields:
+                raise Error("type_hint_struct_conflict", f"Conflicting definitions for structure {structure}", 2)
+    return definitions
+
+
+def check_structures(rows):
+    types = []
+    for row in rows:
+        kind, value = row["kind"], row["value"]
+        if kind == "return_type":
+            types.append(return_type(value))
+        elif kind == "parameter_types":
+            types.extend(parameter_types(value))
+    structure_definitions(types)
 
 
 def type_hints(rows, functions):
@@ -190,4 +235,5 @@ def type_hints(rows, functions):
         raise Error("type_hints_missing", "No accepted type hints for the selected image", 3)
     if len(hints)>MAX_TYPE_HINTS:
         raise Error("type_hint_limit", "Image type hint limit reached", 7)
+    check_structures(rows)
     return sorted(hints,key=lambda hint:(int(hint["entry_va"],16),"parameter_types" in hint))
