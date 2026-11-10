@@ -79,6 +79,11 @@ collections exceed documented bounds despite successful pseudocode output.
   patched app and tool matrix. The [determinism run](parameter-inference.md#three-run-determinism)
   verified 96 distinct headless workers.
 - [x] Expose uncached selected-function decompilation from the saved Program.
+- [x] Validate [dependency preflight and full-headless doctor](cli.md#verify-the-local-engine).
+  The installed CLI verified stock and experimental engines on a generated
+  owned probe. Wrong-architecture, damaged launcher and JAR, and JDK
+  override controls produced typed dependency failures. Six normal
+  arm64 and x86_64 target jobs verified the selected native JVM.
 - [x] Query saved disassembly by unslid VA range with explicit byte gaps.
   The installed CLI matched all 534 returned instruction records to LLVM
   and the owned slices across 27 thin and universal queries.

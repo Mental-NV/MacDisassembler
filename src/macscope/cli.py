@@ -9,12 +9,13 @@ import re
 from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 from . import __version__, SCHEMA_VERSION
 from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
+from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from .schema import validate_envelope, validate_function
 
 
@@ -71,7 +72,12 @@ def parser():
         s.add_argument('--java-home')
     for c in ('version','doctor'):
         s=sub.add_parser(c);common(s)
-        if c=='doctor':s.add_argument('--ghidra');s.add_argument('--java-home');s.add_argument('--full-digest',action='store_true')
+        if c=='doctor':
+            s.add_argument('--ghidra')
+            s.add_argument('--java-home')
+            s.add_argument('--full-digest',action='store_true')
+            s.add_argument('--verify-worker',action='store_true',help='Run a full headless probe on a generated Mach-O')
+            s.add_argument('--experimental-trusted-input',action='store_true')
     s=sub.add_parser('inspect');s.add_argument('input');common(s)
     s=sub.add_parser('bundle');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('list');s.add_argument('path');common(s);pagination(s)
@@ -838,6 +844,52 @@ def swift_collection(args, project, image):
                     status='partial' if gaps else 'complete',cov=cov)
 
 
+def verify_doctor_worker(deps):
+    stage = 'workspace'
+    try:
+        scratch = Path(tempfile.gettempdir()).resolve()
+        with tempfile.TemporaryDirectory(prefix='macscope-doctor-',dir=scratch) as directory:
+            root = Path(directory)
+            project = Project.create(root/'project')
+            fixture = root/'probe.macho'
+            payload = doctor_probe.fixture()
+            atomic(fixture,payload,mode=0o400)
+            options = ['--project',str(project.path),'--experimental-trusted-input',
+                       '--timeout','45','--function-timeout','10','--max-functions','8']
+            command = parser()
+            with project.writer():
+                stage = 'import'
+                imported = import_inputs(command.parse_args(['import',str(fixture),*options]),project,deps)
+                if imported['status'] != 'complete' or len(imported['data']) != 1:
+                    raise Error('doctor_probe_evidence','Probe import did not complete',4)
+                stage = 'analysis'
+                image = project.select()
+                analyzed = analyze_image(project,image,command.parse_args(['analyze',*options]),deps,'analyze')
+                if analyzed['status'] != 'complete':
+                    raise Error('doctor_probe_evidence','Probe analysis did not complete',4)
+            image = project.select()
+            snapshot, source = project.snapshot(image)
+            query = command.parse_args(['decompile','--fresh','--address',doctor_probe.ENTRY,*options])
+            stage = 'saved_disassembly'
+            function = select_function(snapshot['functions'],query)
+            if tuple(row['bytes'] for row in function['instructions']) != doctor_probe.INSTRUCTIONS:
+                raise Error('doctor_probe_evidence','Probe instruction bytes did not match',4)
+            stage = 'fresh_decompile'
+            fresh = fresh_decompile(query,project,image,function,source,0,deps=deps)
+            code = fresh['data']['pseudocode'] or ''
+            if (fresh['status'] != 'complete' or code != function['pseudocode']
+                    or not re.search(r'\breturn\s+(?:0x2a|42)\s*;',code)):
+                raise Error('doctor_probe_evidence','Probe did not reproduce the expected native return',4)
+            return {'status':'passed','fixture_sha256':hashlib.sha256(payload).hexdigest(),
+                    'target_arch':'arm64','verified_instructions':len(doctor_probe.INSTRUCTIONS),
+                    'checks':['import','analysis','saved_disassembly','fresh_decompile']}
+    except Error as error:
+        if error.exit_code == 130:
+            raise
+        raise Error('doctor_worker_failed',f'Full-headless verification failed during {stage}: {error.code}',4,
+                    retryable=error.retryable,partial={'stage':stage,'cause':error.code}) from error
+
+
 def execute(a):
     limits(a)
     xref_address = None
@@ -883,7 +935,7 @@ def execute(a):
     term = search.pattern(a.query) if a.command == 'search' else None
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
-        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.5.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
+        return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':engine.BRIDGE_VERSION,'backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='diff':
         data,rows,binding = binary_diff.compare(a.left,a.right,a.scope)
         records,cov = page(rows,a,binding,binary_diff.POLICY,{},order='export-diff/v1')
@@ -893,7 +945,11 @@ def execute(a):
             cov.update(status='partial',truncation_reason=';'.join(reasons))
         return envelope(command,dict(data,records=records),status='partial' if data['gaps'] else 'complete',cov=cov)
     if a.command=='doctor':
-        deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
+        if a.verify_worker and not a.experimental_trusted_input:
+            raise Error('isolation_required','The headless doctor probe requires --experimental-trusted-input',3)
+        deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest or a.verify_worker)
+        probe = verify_doctor_worker(deps) if a.verify_worker else {'status':'not_requested'}
+        deps['verification']={'dependency_preflight':'passed','worker_probe':probe}
         deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'forwarded_return_recovery':forwarded_returns.POLICY,'switch_table_recovery':switch_tables.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
         return envelope(command,deps)
     if a.command=='inspect':

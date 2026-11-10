@@ -15,7 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
-from . import callee_parameters, direct_signatures, dispatch_returns, flow_boundaries, forwarded_returns, jobs, scalar_signatures, switch_tables, worker_lifecycle
+from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, scalar_signatures, switch_tables, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -24,6 +24,7 @@ from .macho import read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
+BRIDGE_VERSION = '1.6.0'
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
     'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
@@ -118,24 +119,15 @@ def dependencies(ghidra=None, java=None, full=False):
     host = platform.machine()
     if platform.system() != 'Darwin' or host != 'arm64':
         raise Error('unsupported_host', 'This experimental engine pin is tested only on macOS arm64', 4)
-    native = g/'Ghidra/Features/Decompiler/os/mac_arm_64/decompile'
-    required = [g/'support/analyzeHeadless', g/'Ghidra/application.properties', native, j/'bin/java', j/'lib/server/libjvm.dylib', BRIDGE/'MacscopeBridge.java', BRIDGE/'MacscopeProfile.java']
-    for p in required:
-        if not p.is_file():
-            raise Error('missing_dependency', 'Missing required dependency: '+str(p), 4)
-    for p in (g/'support/analyzeHeadless',native,j/'bin/java'):
-        if not os.access(p,os.X_OK):raise Error('dependency_permissions','Required dependency is not executable: '+str(p),4)
-    props = (g/'Ghidra/application.properties').read_text()
-    if '\napplication.version=12.2\n' not in '\n'+props:
-        raise Error('incompatible_ghidra', 'Requires exactly full Ghidra 12.2', 4)
+    hashes = engine_checks.layout(g,j,BRIDGE)
     try:
         v = subprocess.run([str(j/'bin/java'), '-version'], capture_output=True, timeout=10, env={'PATH':'/usr/bin:/bin','JAVA_HOME':str(j)}, check=False)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Error('jdk_startup', 'Cannot start pinned JDK: '+str(e), 4) from e
     version = (v.stderr+v.stdout).decode(errors='replace').strip()
-    if v.returncode or '25.0.5.0.3' not in version:
+    if v.returncode or not engine_checks.java_version_matches(version):
         raise Error('incompatible_jdk', 'Requires tested JDK 25.0.5.0.3', 4)
-    result = {'ghidra_version':'12.2', 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), 'native_decompiler_sha256':digest(native), 'java_sha256':digest(j/'bin/java'), 'jvm_sha256':digest(j/'lib/server/libjvm.dylib'), 'bridge_sha256':identity({p.name:digest(p) for p in sorted(BRIDGE.glob('*.java'))}), 'application_properties_sha256':digest(g/'Ghidra/application.properties'), 'isolation':'experimental-trusted-owned-input-only; deny-network, restrict user-home reads and confine writes to the current job; not a hostile-input sandbox', 'hard_process_memory_limit':False}
+    result = {'ghidra_version':engine_checks.GHIDRA_VERSION, 'ghidra_path':str(g), 'java_home':str(j), 'jdk_version':version, 'host_arch':host, 'host_os':platform.platform(), **hashes, 'bridge_sha256':identity({p.name:digest(p) for p in sorted(BRIDGE.glob('*.java'))}), 'isolation':'experimental-trusted-owned-input-only; deny-network, restrict user-home reads and confine writes to the current job; not a hostile-input sandbox', 'hard_process_memory_limit':False}
     if full:
         result['ghidra_tree_sha256'] = tree_digest(g)
     return result
@@ -428,8 +420,13 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         raise Error('bridge_result', 'Worker did not publish a valid bridge result; see private log', 10,
                     partial={'job_id':jobid}) from e
     try:
-        if result.get('schema') != 'macscope-bridge/1' or result.get('mode') != mode or result.get('ghidra_version') != '12.2':
-            raise Error('bridge_contract', 'Bridge result version/mode mismatch', 10)
+        if (result.get('schema') != 'macscope-bridge/1' or result.get('mode') != mode
+                or result.get('ghidra_version') != engine_checks.GHIDRA_VERSION
+                or result.get('bridge_version') != BRIDGE_VERSION):
+            raise Error('bridge_contract', 'Bridge result version or mode mismatch', 4)
+        runtime = result.pop('java_runtime', None)
+        engine_checks.verify_runtime(runtime,deps['java_home'])
+        manifest['java_runtime'] = runtime
         if result.get('executable_format') != 'Mac OS X Mach-O':
             raise Error('loader_mismatch', 'Ghidra did not use the Mach-O loader')
         lang = result.get('language_id','')
@@ -466,14 +463,14 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                 except (Error,ValueError) as error:
                     raise Error('signature_recovery_result', 'Worker did not publish a valid signature decision', 10) from error
             result[recovery_field] = dict(recovery_identity, **recovery_policy.decision(signature_plan,report))
-        if mode == 'import':
-            if result.get('validation',{}).get('headless_analysis_enabled') is not False:
-                raise Error('import_analysis','Import did not disable autoanalysis',10)
-            if import_request is None:
-                destination = project.path/'engine'/image['image_id']
-                if destination.exists():
-                    raise Error('engine_project_exists', 'An engine baseline already exists without an image record; inspect workspace before retry', 8)
-                os.rename(engine_dir,destination)
+        if mode == 'import' and result.get('validation',{}).get('headless_analysis_enabled') is not False:
+            raise Error('import_analysis','Import did not disable autoanalysis',10)
+        write_json(job/'job.json',manifest,force=True)
+        if mode == 'import' and import_request is None:
+            destination = project.path/'engine'/image['image_id']
+            if destination.exists():
+                raise Error('engine_project_exists', 'An engine baseline already exists without an image record; inspect workspace before retry', 8)
+            os.rename(engine_dir,destination)
     except (Error, OSError) as e:
         manifest.update(status='failed',error={'code':getattr(e,'code','bridge_publication'),'message':str(e)})
         write_json(job/'job.json',manifest,force=True)

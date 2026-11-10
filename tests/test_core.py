@@ -23,11 +23,12 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+import zipfile
 
 # Direct invocation and unittest discovery both work without installing a wheel.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from macscope import SCHEMA_VERSION
-from macscope import cli, engine, jobs, macho, schema, storage
+from macscope import cli, doctor_probe, engine, engine_checks, jobs, macho, schema, storage
 from macscope.errors import Error
 
 
@@ -555,22 +556,34 @@ class DependencyTests(TemporaryCase):
         self.g = self.root / 'ghidra'
         self.j = self.root / 'jdk'
         self.bridge = self.root / 'bridge'
-        for relative in ('support/analyzeHeadless', 'Ghidra/application.properties',
-                         'Ghidra/Features/Decompiler/os/mac_arm_64/decompile'):
+        for relative in ('support/analyzeHeadless', 'support/launch.sh', 'support/launch.properties',
+                         'Ghidra/application.properties', engine_checks.NATIVE):
             target = self.g / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b'fixture')
+        (self.g / 'support/analyzeHeadless').write_bytes(b'#!/bin/bash\n# ghidra.app.util.headless.AnalyzeHeadless\n')
+        (self.g / 'support/launch.sh').write_bytes(b'#!/bin/bash\n# LaunchSupport\n')
+        (self.g / 'support/launch.properties').write_bytes(b'JAVA_HOME_OVERRIDE=\n')
         (self.g / 'Ghidra/application.properties').write_text('application.version=12.2\n')
-        for relative in ('bin/java', 'lib/server/libjvm.dylib'):
+        (self.g / engine_checks.NATIVE).write_bytes(doctor_probe.fixture())
+        for name, members in engine_checks.JARS.items():
+            path = self.g / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(path, 'w') as jar:
+                for member in members:
+                    jar.writestr(member, bytes.fromhex('cafebabe00000045'))
+        for relative in ('bin/java', 'bin/javac', 'lib/server/libjvm.dylib', 'lib/modules'):
             target = self.j / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b'fixture')
-        for executable in (self.g / 'support/analyzeHeadless',
-                           self.g / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile',
-                           self.j / 'bin/java'):
+            data = bytearray(doctor_probe.fixture())
+            if relative.endswith('.dylib'):
+                struct.pack_into('<I', data, 12, 6)
+            target.write_bytes(data)
+        for executable in (self.g / 'support/analyzeHeadless', self.g / 'support/launch.sh',
+                           self.g / engine_checks.NATIVE, self.j / 'bin/java', self.j / 'bin/javac'):
             executable.chmod(0o700)
         self.bridge.mkdir()
-        for name in ('MacscopeBridge.java', 'MacscopeProfile.java'):
+        for name in engine_checks.SCRIPTS:
             (self.bridge / name).write_text('// fixture\n')
         for patcher in (mock.patch.object(engine.platform, 'system', return_value='Darwin'),
                         mock.patch.object(engine.platform, 'machine', return_value='arm64'),
@@ -626,7 +639,8 @@ class DependencyTests(TemporaryCase):
             self.error('jdk_startup', self.check)
 
     def test_valid_pins_report_full_digests(self):
-        result = subprocess.CompletedProcess([], 0, b'', b'openjdk version "25.0.5" 25.0.5.0.3')
+        result = subprocess.CompletedProcess([], 0, b'', b'openjdk version "25.0.5.0.3"\n'
+                                             b'OpenJDK Runtime Environment Homebrew (build 25.0.5.0.3)')
         with mock.patch.object(engine.subprocess, 'run', return_value=result) as run:
             dependencies = self.check(full=True)
         self.assertEqual(dependencies['ghidra_version'], '12.2')
@@ -636,9 +650,32 @@ class DependencyTests(TemporaryCase):
         self.assertEqual(run.call_args.kwargs['timeout'], 10)
         self.assertFalse(dependencies['hard_process_memory_limit'])
 
+    def test_wrong_native_architecture_is_rejected_before_java(self):
+        data = bytearray(doctor_probe.fixture())
+        struct.pack_into('<2I', data, 4, 0x01000007, 3)
+        (self.g / engine_checks.NATIVE).write_bytes(data)
+        with mock.patch.object(engine.subprocess, 'run') as run:
+            self.error('incompatible_native_decompiler', self.check)
+        run.assert_not_called()
+
+    def test_bad_jar_or_java_override_is_rejected_before_java(self):
+        with mock.patch.object(engine.subprocess, 'run') as run:
+            (self.g / 'support/launch.properties').write_text('JAVA_HOME_OVERRIDE: /different/java\n')
+            self.error('ghidra_java_override', self.check)
+            (self.g / 'support/launch.properties').write_text('JAVA_HOME_OVERRIDE=\n')
+            (self.g / 'support/LaunchSupport.jar').write_bytes(b'damaged jar')
+            self.error('incompatible_ghidra_jar', self.check)
+        run.assert_not_called()
+
     def test_unsupported_host_is_explicit(self):
         with mock.patch.object(engine.platform, 'system', return_value='Linux'):
             self.error('unsupported_host', self.check)
+
+    def test_full_doctor_probe_requires_explicit_trust_before_startup(self):
+        args = cli.parser().parse_args(['doctor', '--verify-worker'])
+        with mock.patch.object(engine, 'dependencies') as dependencies:
+            self.error('isolation_required', cli.execute, args)
+        dependencies.assert_not_called()
 
 
 class CliTests(TemporaryCase):

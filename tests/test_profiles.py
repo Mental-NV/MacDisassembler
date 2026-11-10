@@ -24,6 +24,7 @@ def raw_result(name="baseline", mode="analyze"):
                 "blocks": [], "instructions": [{"addr": "0x100000000", "bytes": "c0035fd6",
                                               "text": "ret", "flow": "TERMINATOR", "fallthrough": None}]}
     return {"schema": "macscope-bridge/1", "mode": mode, "ghidra_version": "12.2",
+            "bridge_version": engine.BRIDGE_VERSION,
             "executable_format": "Mac OS X Mach-O", "executable_sha256": "b" * 64,
             "language_id": "AARCH64:LE:64:AppleSilicon", "compiler_spec_id": "default",
             "image_base": "0x100000000", "status": "complete", "functions": [function],
@@ -176,21 +177,40 @@ class ProfileRunnerTests(unittest.TestCase):
         def run(argv, *, cwd, **kwargs):
             self.seen = argv
             (cwd / "launcher.log").write_bytes(b"")
-            (cwd / "bridge.json").write_text(json.dumps(raw_result(name, mode)))
+            raw = raw_result(name, mode)
+            raw["java_runtime"] = {"home": self.deps["java_home"], "version": "25.0.5.0.3", "arch": "aarch64"}
+            (cwd / "bridge.json").write_text(json.dumps(raw))
         return run
 
     def test_opt_in_reaches_prescript_and_job_provenance(self):
         for name in engine.ANALYSIS_PROFILES:
             with self.subTest(name=name), mock.patch.object(engine, "run_process",
                                                           side_effect=self.mock_runner(name)):
-                _, job = engine.run(self.project, self.image, "analyze", self.args(name), self.deps)
+                result, job = engine.run(self.project, self.image, "analyze", self.args(name), self.deps)
             self.assertEqual(job["analysis_profile"], engine.analysis_profile(name))
+            self.assertEqual(job["java_runtime"]["home"], self.deps["java_home"])
+            self.assertNotIn("java_runtime", result)
             directory = self.project.path / "jobs" / job["job_id"]
+            self.assertEqual(json.loads((directory / "job.json").read_bytes())["java_runtime"], job["java_runtime"])
             self.assertEqual(Path(job["environment"]["HOME"]), directory / "home")
             self.assertEqual(job["sandbox_sha256"], engine.job_sandbox_sha256(self.project, self.deps, job["job_id"]))
             self.assertNotEqual(job["sandbox_sha256"], engine.job_sandbox_sha256(self.project, self.deps, "1" * 32))
             next_arg = self.seen[self.seen.index("MacscopeProfile.java") + 1]
             self.assertEqual(next_arg, "parameter-inference" if name != "baseline" else "-scriptPath")
+
+    def test_worker_cannot_silently_substitute_a_jdk(self):
+        def reply(argv, *, cwd, **kwargs):
+            (cwd / "launcher.log").write_bytes(b"")
+            raw = raw_result()
+            raw["java_runtime"] = {"home": str(self.root / "other-java"), "version": "25.0.5.0.3", "arch": "aarch64"}
+            (cwd / "bridge.json").write_text(json.dumps(raw))
+
+        with mock.patch.object(engine, "run_process", side_effect=reply), self.assertRaises(Error) as rejected:
+            engine.run(self.project, self.image, "analyze", self.args(), self.deps)
+        self.assertEqual(rejected.exception.code, "worker_jdk_mismatch")
+        self.assertEqual(rejected.exception.exit_code, 4)
+        manifest = self.project.path / "jobs" / rejected.exception.partial["job_id"] / "job.json"
+        self.assertEqual(json.loads(manifest.read_bytes())["status"], "failed")
 
     def test_program_copy_declines_nested_links_before_launch(self):
         outside = self.project.path / "prior-canary"
@@ -245,6 +265,7 @@ class ProfileRunnerTests(unittest.TestCase):
             self.seen = argv
             (cwd / "launcher.log").write_bytes(b"")
             raw = raw_result("baseline", "query")
+            raw["java_runtime"] = {"home": self.deps["java_home"], "version": "25.0.5.0.3", "arch": "aarch64"}
             raw["selected_entry"] = entry
             (cwd / "bridge.json").write_text(json.dumps(raw))
 

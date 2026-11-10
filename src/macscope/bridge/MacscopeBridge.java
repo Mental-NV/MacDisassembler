@@ -80,7 +80,7 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.5.0";
+    static final String VERSION = "1.6.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final int MAX_INSTRUCTIONS = 2000, MAX_BLOCKS = 500, MAX_EDGES = 500;
@@ -131,6 +131,11 @@ public class MacscopeBridge extends HeadlessScript {
         root.addProperty("mode", mode);
         if (entry != null) root.addProperty("selected_entry", entry);
         root.addProperty("ghidra_version", getGhidraVersion());
+        JsonObject runtime = new JsonObject();
+        put(runtime, "home", System.getProperty("java.home"));
+        put(runtime, "version", System.getProperty("java.runtime.version"));
+        put(runtime, "arch", System.getProperty("os.arch"));
+        root.add("java_runtime", runtime);
         root.add("errors", errors);
         root.add("warnings", warnings);
         root.add("coverage", coverage);

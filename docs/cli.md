@@ -34,6 +34,41 @@ native-component checks. Defaults match the pinned development machine:
 The wheel is pure Python plus project-owned Java bridge source and JSON
 schemas, with zero third-party Python runtime/build dependencies.
 
+## Verify the local engine
+
+`doctor` checks the selected Ghidra release, launcher and key JAR class
+headers, and verifies that the native decompiler and selected Java
+components have arm64 Mach-O headers. It checks the exact JDK build by
+starting `java -version`. An incompatible component or a conflicting
+Java override produces a typed dependency error. `--full-digest` also
+hashes the complete selected Ghidra tree.
+
+```sh
+macscope doctor --verify-worker --experimental-trusted-input --json
+```
+
+The opt-in probe generates a two-instruction Mach-O in a temporary private
+workspace. It checks import, analysis, saved disassembly, and the native
+pseudocode from a reopened Program. It includes the full engine digest and
+removes the temporary workspace on exit. The report distinguishes this
+live verification from dependency preflight. For all worker jobs, the
+runner verifies the Java home, build and architecture reported by the
+bridge before publishing a result. The runtime record lives in the
+private job manifest.
+
+The installed wheel passed the live probe on stock Ghidra and the
+separately selected experimental full engine. Five dependency faults
+returned typed errors, including a wrong-architecture native decompiler
+that was rejected before job creation. A host-native replacement passed
+the Mach-O preflight and failed the live protocol check during analysis.
+The validation report SHA-256 is
+`231a06a52d6af526dc51dc2bf259d66f5034389bdab282b74618e3d474e85906`.
+Ordinary imports, analyses, and fresh queries on owned arm64 and x86_64
+targets recorded the same selected arm64 JVM in all six job manifests.
+Both fresh receipts replayed and cached results from the preceding
+bridge remained readable. The job report SHA-256 is
+`61a552dc5b9fc3ec507f1e04bed84d723f6888b4eb75613276963884d874e234`.
+
 ## Implemented commands
 
 All commands have `--help`; unknown flags are errors. Data goes to stdout,
