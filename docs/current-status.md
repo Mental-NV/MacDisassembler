@@ -210,6 +210,31 @@ REA, licensing, and publication retain their separate gates.
   and process-lifecycle tests; controlled thin/fat64 integration and a clean
   local wheel install. See [CLI validation](cli.md#reproduce-validation).
 
+## Installed local validation audit
+
+| Checkpoint | Evidence |
+| --- | --- |
+| Pinned local engine | The installed 0.2.0 wheel and bridge 1.14.0 passed the live probe on the arm64 host with full Ghidra 12.2 and JDK 25.0.5.0.3. A missing launcher returned exit 4 and `missing_dependency`. An import without the trusted-input opt-in returned exit 3. |
+| Owned headless path | Both calculator slices completed installed import, analysis, disassembly and fresh decompilation. The two import manifests recorded no autoanalysis or library loading. Both fresh jobs used the read-only/noanalysis flags. All 39 selected instruction records matched the original slice bytes. Cached and fresh pseudocode matched on each architecture. |
+| Offline commands | With dependency paths unavailable, the installed CLI checked metadata, function search and selection, bytes, xrefs, calls, JSON and DOT control flow, project and job status, and JSON, JSONL, text and HTML exports. Both saved import and analysis Programs verified. |
+| Annotation transfer | A separately initialized project accepted a label, comment and explicit type hint for the same image and matching function bytes. Repeating the import preserved its three revisions. The accepted hint changed a fresh query while cached pseudocode retained its original bytes. A cloned workspace with the source project ID correctly rejected its missing history. |
+| Owned tests and benchmark | All 407 CLI tests passed and the calculator reference harness passed 59,211 checks. The [reproducible benchmark](benchmark.md#reproduce) records separate import, analysis, cached and fresh timings on the supported host. |
+| Selected private acceptance and access | The approved TickTick Week handoff passed focused recovery and offline replay. Taskovsky's Codex shell found the installed command on its existing PATH. |
+
+The installed-command audit record SHA-256 is
+`34797db7cd3cc32bf207ee920f5ee994ba1ce522c3865d1217d5b672c216195c`.
+
+The [calculator baseline](phase1-findings.md#historical-experiment-semantics-v10)
+froze its outputs before source-aware evaluation by the same developer.
+The source-denied [diagnostic run](direct-signatures.md#installed-cli-validation)
+covers selected binary-derived queries. Evidence for the separately blinded
+analyst comparison across the three
+[specified conditions](specification.md#84-blind-analysis-and-controlled-assistance)
+is still open. The [optimized baseline measurement](wide-division.md#paired-evidence)
+also records a shortfall against the proposed 90% instruction-byte
+threshold. These are separate from the installed command and selected
+Calendar acceptance checks.
+
 ## Phase-2 boundaries still open
 
 Engine operations are **trusted-owned-input-only experimental**, with an
