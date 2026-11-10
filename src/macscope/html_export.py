@@ -170,6 +170,8 @@ def render_handoff(result):
             report.function(index, row["function"])
         if "declared_imports" in row:
             report.evidence("Declared imports", row["declared_imports"])
+        if "selected_calls" in row:
+            report.evidence("Direct calls to selected focused functions", row["selected_calls"])
         if query := row["query"]:
             if pseudocode := query.get("pseudocode"):
                 report.add(f"<details><summary>Saved query pseudocode</summary><pre>\n{text(pseudocode)}</pre></details>\n")

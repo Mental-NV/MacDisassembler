@@ -154,6 +154,12 @@ def lead_facts(row, images):
         if "declared_imports" in row:
             facets["declared_imports"], provenance["import_locations"] = declared_imports(
                 row["declared_imports"], images, entry, ranges)
+        if "selected_calls" in row:
+            selected = row["selected_calls"]
+            logical, coords = relation_facts(selected["links"], entry, ranges, fields=("target_leads",),
+                                             addresses=("callsite", "target_entry_va"))
+            facets["selected_calls"] = measured(logical, complete(selected))
+            provenance["selected_call_locations"] = identity(coords)
     if query := row["query"]:
         if "pseudocode" in query:
             facets["query_pseudocode"] = code(query)

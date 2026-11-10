@@ -2,7 +2,7 @@
 from collections import defaultdict
 import posixpath
 
-from . import dyld, export_trie, metadata
+from . import dyld, export_trie, focused, metadata
 from .direct_signatures import arm64_direct_target
 from .dispatch_returns import direct_target, signed
 from .errors import Error
@@ -172,13 +172,9 @@ class ImageLinkage:
         return dict(row, bundle_paths=paths, reason=None if paths else "import_bundle_path_unverified")
 
     def focused_edges(self, function):
-        decode = arm64_direct_target if self.image["arch"] == "arm64" else direct_target
-        for row in function["instructions"]:
-            if row.get("flow") != "UNCONDITIONAL_CALL":
-                continue
-            target = decode(int(row["addr"], 16), bytes.fromhex(row["bytes"]))
-            if target is not None and 0 <= target < 1 << 64:
-                yield {"callsite":row["addr"], "reported_target":hex(target), "resolution":"direct",
+        for row, target in focused.direct_calls(self.image["arch"], function):
+            if target is not None:
+                yield {"callsite":row["addr"], "reported_target":target, "resolution":"direct",
                        "caller_function_id":function["function_id"], "callee_function_id":None}
 
     def calls(self, function, *, from_import=False):

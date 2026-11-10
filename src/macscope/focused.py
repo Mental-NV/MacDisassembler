@@ -3,6 +3,8 @@
 from hashlib import sha256
 
 from . import macho_load, metadata
+from .direct_signatures import arm64_direct_target
+from .dispatch_returns import direct_target
 from .errors import Error
 from .macho import thin
 from .pseudocode import VA, address_spans
@@ -58,6 +60,16 @@ def extent(data, image, entry):
              "slice_file_offset": hex(offset), "container_file_offset": hex(offset + int(image["offset"], 16)),
              "extent_sha256": sha256(payload).hexdigest(), "length": size}
     return proof, payload
+
+
+def direct_calls(arch, function):
+    """Decode call targets from a focused receipt whose instruction bytes were verified."""
+    decode = arm64_direct_target if arch == "arm64" else direct_target
+    for row in function["instructions"]:
+        if row["flow"] != "UNCONDITIONAL_CALL":
+            continue
+        target = decode(int(row["addr"], 16), bytes.fromhex(row["bytes"]))
+        yield row, hex(target) if target is not None and 0 <= target < 1 << 64 else None
 
 
 def overlaps(offset, size, row, length):

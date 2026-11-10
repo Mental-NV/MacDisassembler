@@ -1699,6 +1699,23 @@ pinned provider. A provider pinned to an import needs its own verified
 focused lead at the export entry. Replaying a saved import receipt does
 not require the original app bundle.
 
+Add `--link-focused` to follow direct calls between the selected focused
+receipts in one pinned image. The CLI decodes arm64 `BL` or x86_64
+`CALL rel32` from the verified instruction bytes and matches the target
+to an exact selected entry. The optional `selected_calls` record includes
+the callsite, bytes, target function ID and matching lead IDs. Computed
+dispatch keeps its original unresolved status in the local call trace.
+The handoff retains up to 32 selected call links in total and reports
+unavailable receipts, incomplete instructions and unsupported encodings.
+The same fields appear in HTML and are included in evidence comparisons.
+
+On owned arm64 and x86_64 Calendar images, the installed CLI matched two
+calls per architecture from the duration calculation to its midnight
+helper. The arm64 handoff also retained the declared cross-image link.
+A mismatched receipt withheld the selected link. The handoff replayed
+byte for byte with the engine unavailable, and removing the target lead
+appeared as a selected-call change in `diff --scope evidence`.
+
 Job records and receipts reject duplicate JSON fields, nonfinite numbers
 and nesting deeper than 64 containers. Focused receipts also validate
 the body, instruction, reference and coverage fields before replay.
@@ -1711,10 +1728,11 @@ within the selected image.
 Computed dispatch stays unresolved where the engine has no proven target.
 Keep runtime observations and `resources list` evidence alongside the
 handoff. The command supports up to four images and 16 leads, with 64
-references per direction, 32 call edges, and 512 KiB of compact JSON per
-lead. A missing, ambiguous or partial lead yields exit 6 with a row for
-every requested lead. `--output` writes an owner-only file and protects
-the lead manifest and managed workspace files from replacement.
+references per direction, 32 call edges and 512 KiB of compact JSON for
+each lead's base evidence. A missing, ambiguous or partial lead yields
+exit 6 with a row for every requested lead. `--output` writes an
+owner-only file and protects the lead manifest and managed workspace files
+from replacement.
 
 The installed CLI verified eight leads across both images of the
 [owned Calendar fixture](#owned-calendar-evidence-rehearsal). Four function

@@ -18,6 +18,7 @@ MAX_LEAD_BYTES = 512 * 1024
 MAX_MATCHES = 16
 MAX_REFERENCES = 64
 MAX_EDGES = 32
+FOCUSED_CALL_POLICY = "macscope-selected-focused-calls/1"
 IMAGE_FIELDS = {"image_id", "arch", "artifact_sha256", "slice_sha256", "analysis_id"}
 IMPORT_PIN = "import_program_sha256"
 IMPORT_FIELDS = (IMAGE_FIELDS - {"analysis_id"}) | {IMPORT_PIN}
@@ -320,7 +321,55 @@ def focused_lead(project, snapshot, binary, lead, selector_rows):
                 candidates=[{"function_id":function["function_id"], "entry_va":entry}])
 
 
-def export(project, manifest, *, link_imports=False):
+def add_focused_calls(report):
+    grouped = defaultdict(list)
+    imported = {pin["image_id"]: pin["arch"] for pin in report["images"] if IMPORT_PIN in pin}
+    for row in report["leads"]:
+        image_id = row["lead"]["image_id"]
+        if image_id in imported:
+            grouped[image_id].append(row)
+
+    remaining = MAX_EDGES
+    for image_id, rows in grouped.items():
+        entries = defaultdict(dict)
+        available = [row for row in rows if row["function"] is not None]
+        for row in available:
+            function = row["function"]
+            entries[function["entry_va"]][row["lead"]["id"]] = function["function_id"]
+        for row in available:
+            function = row["function"]
+            gaps = set()
+            links = []
+            if len(available) != len(rows):
+                gaps.add("selected_receipts_unavailable")
+            decoded = sum(len(ins["bytes"]) // 2 for ins in function["instructions"])
+            if decoded != function["origin"]["extent"]["length"]:
+                gaps.add("selected_call_instructions_incomplete")
+            for instruction, target in focused.direct_calls(imported[image_id], function):
+                if target is None:
+                    gaps.add("selected_call_encoding_unsupported")
+                    continue
+                if target not in entries:
+                    continue
+                targets = entries[target]
+                ids = set(targets.values())
+                if len(ids) != 1:
+                    gaps.add("selected_call_target_ambiguous")
+                    continue
+                if remaining == 0:
+                    gaps.add("selected_call_limit")
+                    break
+                links.append({"callsite": instruction["addr"], "call_bytes": instruction["bytes"],
+                              "target_entry_va": target, "target_function_id": next(iter(ids)),
+                              "target_leads": sorted(targets)})
+                remaining -= 1
+            row["selected_calls"] = {"status": "partial" if gaps else "complete",
+                                     "links": links, "gaps": sorted(gaps)}
+            if gaps:
+                row.update(status="partial", gaps=sorted(set(row["gaps"]) | gaps))
+
+
+def export(project, manifest, *, link_imports=False, link_focused=False):
     images = {image["image_id"]: image for image in project.images()}
     records, pins = {}, []
     providers, pending = [], {}
@@ -408,4 +457,7 @@ def export(project, manifest, *, link_imports=False):
               "leads": [records[lead["id"]] for lead in manifest["leads"]]}
     if link_imports:
         report["import_linkage_policy"] = import_links.POLICY
+    if link_focused:
+        report["focused_call_policy"] = FOCUSED_CALL_POLICY
+        add_focused_calls(report)
     return report

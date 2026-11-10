@@ -63,6 +63,10 @@ decision. Reuse recorded observations for gestures already covered.
   results and exercise recovery on a disposable workspace. Keep gaps in
   dispatch and caller coverage explicit. This requires the separately
   scoped private-input validation.
+- [ ] **Install and verify local access after the real TickTick handoff passes.**
+  Verify the installed command with the pinned Ghidra and Java versions,
+  then check discovery and use from Taskovsky's Codex environment. Add
+  a dedicated skill only if that environment needs it.
 - [x] **Decompile one exact function without whole-image analysis.**
   [`decompile --from-import`](cli.md#decompile-one-function-from-an-import)
   verifies the linker extent and each emitted instruction against the slice.
@@ -86,6 +90,12 @@ decision. Reuse recorded observations for gestures already covered.
   mismatched job receipts. It replayed with the source bundle set aside
   and the engine unavailable. A later framework analysis preserved the
   import-only replay and supplied a provider for a mixed handoff.
+- [x] **Link direct calls between selected focused Calendar functions.**
+  [`evidence --link-focused`](cli.md#selected-evidence-handoff) matched
+  two duration-to-midnight calls on each owned architecture. The report
+  retained the declared arm64 framework link and unresolved computed
+  dispatch. A mismatched receipt withheld its links. JSON and HTML ran
+  offline, and removing the selected target appeared in the handoff diff.
 - [x] **Recover an interrupted focused Calendar job.** On both owned
   architectures, the installed CLI rejected an overlapping resume and
   cancelled the Ghidra worker. Retrying used the original extent, import

@@ -937,6 +937,41 @@ class CliTests(TemporaryCase):
         rejected = cli.execute(self.args('evidence','--leads',str(path)))['data']
         self.assertTrue(all(row['reason']=='evidence_image_mismatch' for row in rejected['leads']))
 
+    def test_selected_focused_calls_bind_verified_direct_bytes_within_one_image(self):
+        def selected(lead, image, entry, instructions):
+            function = {'function_id':storage.identity([image, entry]), 'entry_va':entry,
+                        'instructions':instructions,
+                        'origin':{'extent':{'length':sum(len(row['bytes']) // 2 for row in instructions)}}}
+            return {'lead':{'id':lead, 'image_id':image}, 'function':function, 'status':'resolved', 'gaps':[]}
+
+        def ins(address, data, flow='UNCONDITIONAL_CALL'):
+            return {'addr':address, 'bytes':data, 'flow':flow}
+
+        arm = selected('arm_caller', 'arm', '0x1000', [
+            ins('0x1000', '04000094'), ins('0x1004', '00003fd6', 'COMPUTED_CALL')])
+        first = selected('arm_target', 'arm', '0x1010', [])
+        alias = selected('arm_alias', 'arm', '0x1010', [])
+        intel = selected('intel_caller', 'intel', '0x1000', [ins('0x1000', 'e80b000000')])
+        other = selected('intel_target', 'intel', '0x1010', [])
+        missing = {'lead':{'id':'missing', 'image_id':'intel'}, 'function':None}
+        report = {'images':[{'image_id':key, 'arch':arch, evidence.IMPORT_PIN:'pin'}
+                            for key, arch in [('arm','arm64'), ('intel','x86_64')]],
+                  'leads':[arm, first, alias, intel, other, missing]}
+        evidence.add_focused_calls(report)
+        arm_link, = arm['selected_calls']['links']
+        self.assertEqual(arm_link, {'callsite':'0x1000', 'call_bytes':'04000094', 'target_entry_va':'0x1010',
+                                    'target_function_id':first['function']['function_id'],
+                                    'target_leads':['arm_alias','arm_target']})
+        self.assertEqual(arm['selected_calls']['status'], 'complete')
+        intel_link, = intel['selected_calls']['links']
+        self.assertEqual(intel_link['target_leads'], ['intel_target'])
+        self.assertEqual(intel['gaps'], ['selected_receipts_unavailable'])
+        self.assertNotIn('selected_calls', missing)
+        with mock.patch.object(evidence, 'MAX_EDGES', 1):
+            evidence.add_focused_calls(report)
+        self.assertEqual(intel['selected_calls']['links'], [])
+        self.assertIn('selected_call_limit', intel['selected_calls']['gaps'])
+
     def test_evidence_html_preserves_all_leads_and_escapes_evidence(self):
         image = self.snapshot['image']
         pin = dict(image_id=image['image_id'], arch=image['arch'], artifact_sha256=image['artifact_sha256'],

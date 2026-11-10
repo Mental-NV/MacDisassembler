@@ -260,6 +260,7 @@ def parser():
     s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed evidence')
     common(s,('json','html'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
+    s.add_argument('--link-focused',action='store_true',help='Verify direct calls between selected focused receipts')
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left JSON export or evidence handoff')
     s.add_argument('right',help='Right JSON export or evidence handoff')
@@ -1647,7 +1648,7 @@ def execute_command(a, address_selection=None):
         return file_fixups(a)
     p=Project(a.project)
     if a.command == 'evidence':
-        report = redact(evidence.export(p,evidence.load(a.leads),link_imports=a.link_imports))
+        report = redact(evidence.export(p,evidence.load(a.leads),link_imports=a.link_imports,link_focused=a.link_focused))
         count = len(report['leads'])
         partial = any(row['status'] != 'resolved' for row in report['leads'])
         return envelope(command,report,status='partial' if partial else 'complete',
