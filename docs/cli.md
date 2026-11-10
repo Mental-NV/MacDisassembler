@@ -1468,15 +1468,16 @@ The result includes the linker extent, its slice and container offsets,
 its digest, the verified instruction bytes and available pseudocode. It
 reports incomplete decompilation or undecoded bytes as partial coverage.
 References come from the local Program copy with automatic analysis
-disabled. The result has a job ID and no snapshot analysis ID. Use the
-same command to run it again. Use `--fresh` to query an existing analyzed
-Program and apply saved-analysis options.
+disabled. A successful result publishes a receipt under its job ID. Use
+the same command to run it again or include its receipt in a handoff.
+Use `--fresh` to query an existing analyzed Program and apply
+saved-analysis options.
 
 ### Selected evidence handoff
 
-`evidence` exports a reviewer-selected list from committed analyses. It
-can reopen a pinned analysis after another analysis becomes active. It
-reads saved evidence without starting Ghidra or a JDK.
+`evidence` exports a reviewer-selected list from committed analyses and
+focused receipts. It can reopen a pinned analysis after another analysis
+becomes active. It reads saved evidence without starting Ghidra or a JDK.
 
 ```sh
 macscope evidence --project workspaces/calendar --leads calendar-leads.json \
@@ -1525,6 +1526,24 @@ existing receipt for the same image, analysis and function. The receipt
 appears alongside the stock pseudocode. If it is missing or belongs to a
 different function, the report keeps the saved function and identifies
 the receipt error.
+
+To include a focused result before whole-image analysis, copy
+`data.origin.extent.program_sha256` from `decompile --from-import` into
+the image pin as `import_program_sha256` in place of `analysis_id`.
+Keep the image, architecture, artifact and slice digests. Each lead for
+that pin needs the focused `data.origin.job_id` in `query_job`, plus either
+the exact unslid `address` or an `objc_selector` whose implementation
+matches the receipt. An analyzed pin and an import pin can select
+different images in the same handoff.
+
+The handoff checks the receipt against the producing job, the pinned
+Program digest and the selected slice bytes. A focused result supplies
+the function evidence for that lead. Its references cover the local
+query and incoming coverage is partial. With `--link-imports`, the
+verified selected instruction can establish a call through a stub to a
+pinned provider. A provider pinned to an import needs its own verified
+focused lead at the export entry. Replaying a saved import receipt does
+not require the original app bundle.
 
 The handoff records hashes, Ghidra provenance, instructions, linked
 pseudocode, incoming and outgoing references, and a one-hop call trace

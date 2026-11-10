@@ -55,10 +55,10 @@ def call_bytes(binary, image, instruction, callsite, stub_va):
     if raw.hex() != instruction["bytes"] or decode(callsite, raw) != stub_va:
         return None
     data = image["loader"]["data_in_code"]
-    if data["status"] != "complete" or any(
+    if data and (data["status"] != "complete" or any(
         (start := int(row["slice_file_offset"], 16)) < offset + width and offset < start + row["length"]
         for row in data["records"]
-    ):
+    )):
         return None
     return raw.hex()
 
@@ -171,10 +171,21 @@ class ImageLinkage:
         paths = relative_paths(library, self.image["loader"]["rpaths"], self.bundle)
         return dict(row, bundle_paths=paths, reason=None if paths else "import_bundle_path_unverified")
 
-    def calls(self, function):
+    def focused_edges(self, function):
+        decode = arm64_direct_target if self.image["arch"] == "arm64" else direct_target
+        for row in function["instructions"]:
+            if row.get("flow") != "UNCONDITIONAL_CALL":
+                continue
+            target = decode(int(row["addr"], 16), bytes.fromhex(row["bytes"]))
+            if target is not None and 0 <= target < 1 << 64:
+                yield {"callsite":row["addr"], "reported_target":hex(target), "resolution":"direct",
+                       "caller_function_id":function["function_id"], "callee_function_id":None}
+
+    def calls(self, function, *, from_import=False):
         instructions = {row["addr"]: row for row in function.get("instructions", ())}
         rows, sites = [], set()
-        for edge in function["call_trace"]["edges"]:
+        edges = self.focused_edges(function) if from_import else function["call_trace"]["edges"]
+        for edge in edges:
             site, target = edge["callsite"], edge["reported_target"]
             if (edge["resolution"] != "direct" or edge["caller_function_id"] != function["function_id"]
                     or site in sites or not target or not metadata.VA.fullmatch(target)):
@@ -187,6 +198,8 @@ class ImageLinkage:
             if row is not None:
                 if len(rows) == MAX_LINKS:
                     return rows, ["import_link_limit"]
+                if from_import:
+                    row["call_source"] = "verified_focused_instruction"
                 rows.append(row)
         return rows, []
 

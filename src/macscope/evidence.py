@@ -1,11 +1,12 @@
-"""Bounded handoffs from pinned, committed analyses and optional query receipts."""
+"""Bounded handoffs from pinned analyses or committed import query receipts."""
 from collections import defaultdict
 import json
 import re
 
-from . import address_xrefs, body_ownership, calls, flow_evidence, import_links, jobs, metadata, objc, search
+from . import address_xrefs, body_ownership, calls, flow_evidence, focused, import_links, jobs, metadata, objc, search
 from .errors import Error
 from .macho import read_regular
+from .schema import validate_envelope, validate_function
 from .storage import canonical, identity, is_digest
 
 
@@ -19,6 +20,8 @@ MAX_MATCHES = 16
 MAX_REFERENCES = 64
 MAX_EDGES = 32
 IMAGE_FIELDS = {"image_id", "arch", "artifact_sha256", "slice_sha256", "analysis_id"}
+IMPORT_PIN = "import_program_sha256"
+IMPORT_FIELDS = (IMAGE_FIELDS - {"analysis_id"}) | {IMPORT_PIN}
 LEAD_FIELDS = {"id", "image_id", "kind", "value"}
 KINDS = {"address", "function_id", "name", "objc_selector", "string"}
 FUNCTION_FIELDS = (
@@ -52,14 +55,14 @@ def load(path):
     images, leads = manifest["images"], manifest["leads"]
     if not 1 <= len(images) <= MAX_IMAGES or not 1 <= len(leads) <= MAX_LEADS:
         raise Error("evidence_manifest_limit", "Select up to four images and 16 leads", 2)
-    pins, lead_ids = set(), set()
+    pins, lead_ids = {}, set()
     for image in images:
-        if (not isinstance(image, dict) or image.keys() != IMAGE_FIELDS
+        if (not isinstance(image, dict) or image.keys() not in (IMAGE_FIELDS, IMPORT_FIELDS)
                 or image["arch"] not in ("arm64", "x86_64")
-                or any(not is_digest(image[key]) for key in IMAGE_FIELDS - {"arch"})
+                or any(not is_digest(image[key]) for key in image.keys() - {"arch"})
                 or image["image_id"] in pins):
             raise Error("evidence_image_pin", "Each image needs a unique ID, architecture and exact digests", 2)
-        pins.add(image["image_id"])
+        pins[image["image_id"]] = image
     used = set()
     for lead in leads:
         if (not isinstance(lead, dict) or not LEAD_FIELDS <= lead.keys()
@@ -79,11 +82,13 @@ def load(path):
             raise Error("evidence_lead", "Invalid unslid address, function ID, class or query job", 2)
         if kind == "address":
             lead["value"] = hex(int(value, 16))
+        if IMPORT_PIN in pins[lead["image_id"]] and (kind not in ("address", "objc_selector") or "query_job" not in lead):
+            raise Error("evidence_import_lead", "Import pins require an exact address or Objective-C selector and a focused query job", 2)
         if "class_slot" in lead:
             lead["class_slot"] = hex(int(lead["class_slot"], 16))
         lead_ids.add(lead["id"])
         used.add(lead["image_id"])
-    if used != pins:
+    if used != pins.keys():
         raise Error("evidence_image_pin", "Each pinned image must have a lead", 2)
     return manifest
 
@@ -94,6 +99,10 @@ def open_image(project, image, pin):
     if (image["arch"], image["sha256"], image["artifact_sha256"]) != (
             pin["arch"], pin["slice_sha256"], pin["artifact_sha256"]):
         raise Error("evidence_image_mismatch", "Pinned architecture or input digest differs from the workspace")
+    if IMPORT_PIN in pin:
+        if image.get("engine_baseline_sha256") != pin[IMPORT_PIN]:
+            raise Error("evidence_import_mismatch", "Pinned Program digest differs from the committed import", 3)
+        return {"image":image, "functions":[], "engine":{"coverage":{"functions":{"status":"partial"}}}}, None
     snapshot, source = project.snapshot(dict(image, active_analysis=pin["analysis_id"]))
     return flow_evidence.snapshot_view(snapshot), source
 
@@ -145,6 +154,12 @@ def string_selection(snapshot, value):
     return list(candidates.values()), hits, refs, [*gaps, *selection_gaps(snapshot)]
 
 
+def selector_matches(lead, selector_rows):
+    methods, gaps = selector_rows
+    return [row for row in methods if row["name"] == lead["value"]
+            and ("class_name" not in lead or row["class_name"] == lead["class_name"])], gaps
+
+
 def resolve(snapshot, lead, selector_rows):
     functions = snapshot["functions"]
     kind, value = lead["kind"], lead["value"]
@@ -152,9 +167,7 @@ def resolve(snapshot, lead, selector_rows):
     if kind == "string":
         candidates, matches, references, gaps = string_selection(snapshot, value)
     elif kind == "objc_selector":
-        methods, gaps = selector_rows
-        matches = [row for row in methods if row["name"] == value
-                   and ("class_name" not in lead or row["class_name"] == lead["class_name"])]
+        matches, gaps = selector_matches(lead, selector_rows)
         if len(matches) > MAX_MATCHES:
             return [], matches[:MAX_MATCHES], [], [*gaps, "selector_match_limit"]
         addresses = {row["implementation_va"] for row in matches}
@@ -174,20 +187,21 @@ def resolve(snapshot, lead, selector_rows):
     return candidates, matches, references, gaps
 
 
-def function_view(snapshot, function):
+def function_view(snapshot, function, *, from_import=False):
     refs = address_xrefs.FunctionReferences(snapshot["engine"])
     view = {key: function[key] for key in FUNCTION_FIELDS if key in function}
     view["references"] = {}
     gaps = []
     for direction in ("to", "from"):
         rows, incomplete, recovered = refs.records(function, direction)
+        incomplete = incomplete or (from_import and direction == "to")
         capped = len(rows) > MAX_REFERENCES
         view["references"][direction] = {"records": rows[:MAX_REFERENCES], "limited": capped,
                                          "status": "partial" if capped or incomplete else "complete",
-                                         "source": "image_index" if recovered else "function"}
+                                         "source": "focused_program" if from_import else "image_index" if recovered else "function"}
         if capped or incomplete:
             gaps.append(f"references_{direction}_incomplete")
-    trace, trace_gaps = calls.graph(snapshot, function, "both", 1, MAX_EDGES)
+    trace, trace_gaps = calls.graph(snapshot, function, "callees" if from_import else "both", 1, MAX_EDGES)
     view["call_trace"] = dict(trace, gaps=trace_gaps)
     if function["decompile_status"] != "complete":
         gaps.append("pseudocode_" + function["decompile_status"])
@@ -255,11 +269,63 @@ def unresolved(lead, reason):
             "matches": [], "match_references": [], "function": None, "query": None}
 
 
+def focused_query(project, image, binary, entry, job_id):
+    _, record = jobs.get(project, job_id)
+    if jobs.focused_record(record) is None:
+        raise Error("evidence_query_mismatch", "The job did not decompile from a committed import", 3)
+    proof, payload = focused.extent(binary, image, entry)
+    request = jobs.focused_request(project, image, dict(proof, program_sha256=image["engine_baseline_sha256"]))
+    if jobs.focused_record(record) != request:
+        raise Error("evidence_query_mismatch", "Focused receipt does not match the selected image and entry", 3)
+    result = jobs.query_receipt(project, job_id, request)
+    if result is None:
+        raise Error("evidence_query_unpublished", "The focused job has no published result", 3)
+    try:
+        validate_envelope(result)
+        validate_function(result["data"])
+    except ValueError as error:
+        raise Error("query_receipt", "Invalid focused result schema", 3) from error
+    focused.verify_instructions(proof, payload, result["data"])
+    return result
+
+
+def focused_lead(project, snapshot, binary, lead, selector_rows):
+    row = unresolved(lead, None)
+    entry = lead["value"]
+    gaps = []
+    if lead["kind"] == "objc_selector":
+        matches, gaps = selector_matches(lead, selector_rows)
+        row["matches"] = matches[:MAX_MATCHES]
+        entries = {match["implementation_va"] for match in matches}
+        if len(matches) > MAX_MATCHES:
+            return dict(row, reason="lead_resolution_incomplete", gaps=sorted(set(gaps) | {"selector_match_limit"}))
+        if len(entries) > 1:
+            return dict(row, reason="lead_ambiguous", gaps=sorted(set(gaps)))
+        entry = next(iter(entries), None)
+        if entry is None:
+            reason = "lead_resolution_incomplete" if gaps else "lead_no_function" if matches else "lead_not_found"
+            return dict(row, reason=reason, gaps=sorted(set(gaps)))
+    try:
+        result = focused_query(project, snapshot["image"], binary, entry, lead["query_job"])
+    except Error as error:
+        return dict(row, reason=error.code, gaps=sorted(set(gaps)),
+                    query={"status":"unavailable", "reason":error.code})
+    function = result["data"]
+    view, function_gaps = function_view(dict(snapshot, functions=[function]), function, from_import=True)
+    query = {"status":result["status"], "coverage":result["coverage"], "origin":function["origin"]}
+    if result["status"] != "complete":
+        gaps = [*gaps, "query_result_partial"]
+    gaps = sorted(set(gaps) | set(function_gaps))
+    return dict(row, function=view, query=query, status="partial" if gaps else "resolved", gaps=gaps,
+                candidates=[{"function_id":function["function_id"], "entry_va":entry}])
+
+
 def export(project, manifest, *, link_imports=False):
     images = {image["image_id"]: image for image in project.images()}
     records, pins = {}, []
     providers, pending = [], {}
     for pin in manifest["images"]:
+        from_import = IMPORT_PIN in pin
         linkage, linkage_error = None, None
         image = images.get(pin["image_id"])
         leads = [lead for lead in manifest["leads"] if lead["image_id"] == pin["image_id"]]
@@ -269,16 +335,19 @@ def export(project, manifest, *, link_imports=False):
             pins.append(dict(pin, status="unavailable", reason=error.code))
             records.update((lead["id"], unresolved(lead, error.code)) for lead in leads)
             continue
-        engine_identity = snapshot.get("identity", {}).get("engine", {})
-        engine = {key: engine_identity.get(key) for key in ("bridge_sha256", "ghidra_tree_sha256")}
-        engine.update({key: snapshot["engine"].get(key) for key in ("bridge_version", "ghidra_version")})
-        pins.append(dict(pin, status="available", snapshot_sha256=source["snapshot_sha256"], engine=engine,
-                         bundle_image=snapshot["image"].get("bundle_image"), profile=snapshot.get("analysis_profile")))
+        if from_import:
+            pins.append(dict(pin, status="available", source="committed_import", bundle_image=image.get("bundle_image")))
+        else:
+            engine_identity = snapshot.get("identity", {}).get("engine", {})
+            engine = {key: engine_identity.get(key) for key in ("bridge_sha256", "ghidra_tree_sha256")}
+            engine.update({key: snapshot["engine"].get(key) for key in ("bridge_version", "ghidra_version")})
+            pins.append(dict(pin, status="available", snapshot_sha256=source["snapshot_sha256"], engine=engine,
+                             bundle_image=snapshot["image"].get("bundle_image"), profile=snapshot.get("analysis_profile")))
         selector_rows, selector_error = ([], []), None
         selectors = [lead for lead in leads if lead["kind"] == "objc_selector"]
         scoped_selectors = {}
         binary = None
-        if selectors or link_imports:
+        if selectors or link_imports or from_import:
             try:
                 binary = metadata.verified_slice(project, image)
             except Error as error:
@@ -297,22 +366,34 @@ def export(project, manifest, *, link_imports=False):
         if binary is not None and link_imports:
             try:
                 linkage = import_links.ImageLinkage(binary, image, snapshot)
-                if provider := linkage.provider(pin):
+                if not from_import and (provider := linkage.provider(pin)):
                     providers.append(provider)
             except Error as error:
                 linkage_error = error.code
+        focused_functions = {}
         for lead in leads:
             methods, error = scoped_selectors.get(lead.get("class_slot"), (selector_rows, selector_error))
             if lead["kind"] == "objc_selector" and error:
                 row = unresolved(lead, error)
+            elif from_import:
+                row = (focused_lead(project, snapshot, binary, lead, methods) if binary is not None
+                       else unresolved(lead, selector_error))
             else:
                 row = lead_view(project, pin, source, snapshot, lead, methods)
             if len(canonical(row)) > MAX_LEAD_BYTES:
                 row = unresolved(lead, "lead_output_limit")
             records[lead["id"]] = row
             if link_imports and row["function"] is not None:
-                links, gaps = linkage.calls(row["function"]) if linkage_error is None else ([], [linkage_error])
+                function = row["function"]
+                if from_import:
+                    focused_functions[function["function_id"]] = function
+                links, gaps = (linkage.calls(function, from_import=from_import) if linkage_error is None
+                               else ([], [linkage_error]))
                 pending[lead["id"]] = (pin, links, gaps)
+        if from_import and linkage is not None and linkage_error is None:
+            snapshot["functions"] = list(focused_functions.values())
+            if provider := linkage.provider(pin):
+                providers.append(provider)
     for lead_id, (pin, links, gaps) in pending.items():
         row = records[lead_id]
         matches = [import_links.destination(link, pin, providers) for link in links]

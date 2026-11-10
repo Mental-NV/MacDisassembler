@@ -508,6 +508,7 @@ def focused_decompile(args, project, image):
     result, job = engine.run(project,image,'query',args,deps,entry=entry,from_import=True)
     function = flow_evidence.review(result['functions'][0])
     proof = job['focused_import']
+    request = job['focused_request']
     decoded_bytes = sum(len(row['bytes']) // 2 for row in function['instructions'])
     reasons = []
     if not function.get('pseudocode') or function['coverage']['pseudocode']['status'] != 'complete':
@@ -516,13 +517,25 @@ def focused_decompile(args, project, image):
         reasons.append('linker_extent_bytes_undecoded')
     spans, span_coverage = address_spans(function,redact(function['pseudocode']))
     data = dict(function, image_id=image['image_id'], arch=image['arch'], slice_sha256=image['sha256'],
+                function_id=request['function_id'], address_space='ram', engine_entry=entry,
+                names=[{'name':function['name'],'origin':'ghidra'}],
+                instruction_bytes_sha256=hashlib.sha256(bytes.fromhex(''.join(
+                    row['bytes'] for row in function['instructions']))).hexdigest(),
+                facets={key:{'available':bool(function.get(key))} for key in ('pseudocode','instructions','blocks')},
                 decoded_bytes=decoded_bytes, address_spans=spans, address_span_coverage=span_coverage,
                 origin={'mode':'focused_readonly_import','job_id':job['job_id'],
-                        'bridge_version':result['bridge_version'],'extent':proof})
+                        'bridge_version':result['bridge_version'],'extent':proof,
+                        **{key:deps[key] for key in ('ghidra_version','ghidra_tree_sha256','bridge_sha256')}})
+    for key in ('xrefs_to_entry','xrefs_from_sample'):
+        data[key] = sorted(data[key],key=canonical)
     diagnostics = [function['decompile_error']] if function.get('decompile_error') else []
-    return envelope('decompile',redact(data),status='partial' if reasons else 'complete',
-                    cov=coverage('one selected linker extent from the saved import',1,1,bool(reasons),
-                                 reason=';'.join(reasons) or None),diagnostics=redact(diagnostics))
+    response = envelope('decompile',redact(data),status='partial' if reasons else 'complete',
+                        cov=coverage('one selected linker extent from the saved import',1,1,bool(reasons),
+                                     reason=';'.join(reasons) or None),diagnostics=redact(diagnostics))
+    validate_function(response['data'])
+    validate_envelope(response)
+    with jobs.result_publication('query',job['job_id']):
+        return jobs.publish_query(project,job['job_id'],request,response)
 
 
 def revise_annotation(args, project, command, address_selection):
@@ -627,7 +640,7 @@ def job_command(args, project, command):
         data = jobs.request_cancel(path,record) if args.action == 'cancel' else jobs.view(path,record,detail=True)
         if args.action == 'show':
             mode = record.get('mode')
-            request = jobs.restart_request(record)
+            request = jobs.restart_request(record) or jobs.focused_record(record)
             receipt = None
             if mode == 'query' and request is not None:
                 if 'address_selection' in request:

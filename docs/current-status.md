@@ -72,10 +72,14 @@ decision. Reuse recorded observations for gestures already covered.
   app put its class slot and framework bind beyond the first 10,000 records.
   The pinned handoff resolved both, withheld an invalid class slot and
   reproduced the report without starting another worker.
-- [ ] **Include focused results in the pinned Calendar handoff.**
-  Accept results from a verified import even when the main executable has no
-  committed whole-image snapshot. Verify exact provenance, replay and
-  explicit missing or unresolved coverage through the normal commands.
+- [x] **Include focused results in the pinned Calendar handoff.**
+  The installed CLI captured three focused results from an owned padded
+  Calendar app and its framework before either had a whole-image snapshot.
+  The pinned report verified the selector and cross-image stub call,
+  retained unresolved computed dispatch, and rejected missing and
+  mismatched job receipts. It replayed with the source bundle set aside
+  and the engine unavailable. A later framework analysis preserved the
+  import-only replay and supplied a provider for a mixed handoff.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

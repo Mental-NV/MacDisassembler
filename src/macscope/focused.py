@@ -13,8 +13,11 @@ PROJECT_BACKUPS = frozenset(("image.rep/idata/~index.bak", "image.rep/idata/~jou
 
 
 def select(project, image, entry):
+    return extent(metadata.verified_slice(project, image), image, entry)
+
+
+def extent(data, image, entry):
     address = metadata.hex_address(entry, "Unslid function entry")
-    data = metadata.verified_slice(project, image)
     parsed = thin(data, include_section_linkage=True)
     loader = parsed["loader"]
     extents = [(int(row["slice_file_offset"], 16), int(row["size"], 16))
@@ -62,6 +65,10 @@ def overlaps(offset, size, row, length):
 def verify(proof, payload, report, function):
     if report != {key: proof[key] for key in ("entry_va", "end_va_exclusive", "extent_sha256")}:
         raise Error("focused_worker_proof", "Worker did not confirm the exact selected range digest", 10)
+    verify_instructions(proof, payload, function)
+
+
+def verify_instructions(proof, payload, function):
     instructions = function.get("instructions")
     if not isinstance(instructions, list) or not instructions or function.get("entry_va") != proof["entry_va"]:
         raise Error("focused_instructions", "Worker did not publish instructions for the selected entry", 10)

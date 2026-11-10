@@ -526,6 +526,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         manifest.update(selected_entry=entry, source_analysis_id=None if from_import else image['active_analysis'])
     if from_import:
         manifest['focused_import'] = dict(proof, program_sha256=baseline_digest)
+        manifest['focused_request'] = jobs.focused_request(project,image,manifest['focused_import'])
     if hints is not None:
         manifest.update(type_hint_view_id=identity({'source_analysis_id':image['active_analysis'],'hints':hints}),
                         type_hints_sha256=digest(request),type_hints=hints)

@@ -854,6 +854,46 @@ class CliTests(TemporaryCase):
         rejected = cli.execute(self.args('evidence','--leads',str(path)))['data']
         self.assertTrue(all(row['reason']=='evidence_image_mismatch' for row in rejected['leads']))
 
+    def test_focused_receipt_binds_result_digest_to_its_producing_job(self):
+        image = self.snapshot['image']
+        proof = {'entry_va':'0x100000020','program_sha256':'c'*64,'extent_sha256':'d'*64}
+        request = jobs.focused_request(self.workspace,image,proof)
+        job_id = '1'*32
+        job = self.workspace.path/'jobs'/job_id
+        job.mkdir()
+        deps = {'ghidra_version':'12.2','ghidra_tree_sha256':'e'*64,'bridge_sha256':'f'*64}
+        storage.write_json(job/'job.json', {'job_id':job_id,'mode':'query','status':'complete',
+            'selected_entry':proof['entry_va'],'image_id':image['image_id'],
+            'focused_import':proof,'focused_request':request,'dependencies':deps})
+        result = cli.envelope('decompile', {'image_id':image['image_id'],'arch':image['arch'],
+            'slice_sha256':image['sha256'],'entry_va':proof['entry_va'],'function_id':request['function_id'],
+            'pseudocode':'return 1;', 'origin':{'job_id':job_id,'mode':'focused_readonly_import','extent':proof,**deps}})
+        self.assertIsNone(jobs.query_receipt(self.workspace,job_id,request))
+        self.assertEqual(jobs.publish_query(self.workspace,job_id,request,result),result)
+        self.assertEqual(jobs.query_receipt(self.workspace,job_id,request),result)
+        path = job/'query-result.json'
+        receipt = json.loads(path.read_bytes())
+        receipt['result']['data']['pseudocode'] = 'return 2;'
+        receipt['result_sha256'] = storage.identity(receipt['result'])
+        storage.write_json(path,receipt,force=True)
+        self.error('query_receipt',jobs.query_receipt,self.workspace,job_id,request)
+
+    def test_evidence_import_pin_requires_focused_job_and_no_analysis_id(self):
+        image = self.snapshot['image']
+        pin = {'image_id':image['image_id'],'arch':image['arch'],'artifact_sha256':image['artifact_sha256'],
+               'slice_sha256':image['sha256'],'import_program_sha256':'c'*64}
+        lead = {'id':'focused','image_id':image['image_id'],'kind':'address','value':'0x100000020'}
+        manifest = {'schema':evidence.LEADS_SCHEMA,'images':[pin],'leads':[lead]}
+        path = self.root/'focused-leads.json'
+        path.write_bytes(storage.canonical(manifest))
+        self.error('evidence_import_lead',evidence.load,path)
+        lead['query_job'] = '1'*32
+        path.write_bytes(storage.canonical(manifest))
+        self.assertEqual(evidence.load(path),manifest)
+        pin['analysis_id'] = self.snapshot['analysis_id']
+        path.write_bytes(storage.canonical(manifest))
+        self.error('evidence_image_pin',evidence.load,path)
+
     def test_evidence_string_does_not_assign_overlapping_reference_owner(self):
         snapshot = copy.deepcopy(self.snapshot)
         first, second = snapshot['functions'][:2]

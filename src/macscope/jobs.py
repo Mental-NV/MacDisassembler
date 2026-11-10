@@ -23,6 +23,7 @@ DETAILS = ("analysis_profile", "limits", "startup", "decompiler_timing", "sandbo
 ANALYSIS_REQUEST = "macscope-analysis-request/1"
 IMPORT_REQUEST = "macscope-import-request/1"
 QUERY_REQUEST = "macscope-query-request/1"
+FOCUSED_REQUEST = "macscope-focused-query-request/1"
 RESTART_REQUESTS = {"analyze": ("analysis_request", ANALYSIS_REQUEST),
                     "import": ("import_request", IMPORT_REQUEST), "query": ("query_request", QUERY_REQUEST)}
 SIGNATURE_RECOVERY_FIELDS = ("dispatch_return_recovery", "direct_signature_recovery", "scalar_signature_recovery",
@@ -366,6 +367,28 @@ def query_request(project, image, function, source, revision, hints, *, signatur
     return request
 
 
+def focused_request(project, image, proof):
+    return {
+        "schema": FOCUSED_REQUEST,
+        "project_id": project.project_id,
+        "image_id": image["image_id"],
+        "arch": image["arch"],
+        "slice_sha256": image["sha256"],
+        "artifact_sha256": image["artifact_sha256"],
+        "source_analysis_id": None,
+        "source_program_sha256": proof["program_sha256"],
+        "function_id": identity({"image_id":image["image_id"], "extent":proof}),
+        "entry_va": proof["entry_va"],
+        "extent": proof,
+    }
+
+
+def focused_record(record):
+    request = record.get("focused_request")
+    return request if (record.get("mode") == "query" and isinstance(request, dict)
+                       and request.get("schema") == FOCUSED_REQUEST) else None
+
+
 def query_receipt(project, job_id, request):
     if not isinstance(job_id, str) or not JOB_ID.fullmatch(job_id) or not isinstance(request, dict):
         raise Error("query_receipt", "Invalid recorded query result identity")
@@ -396,10 +419,24 @@ def query_receipt(project, job_id, request):
                 or any(reported.get(key) != value for key, value in recovery.items()))):
             raise Error("query_receipt", "Recorded signature decision differs from its query request")
     _, producer = get(project, producer_id)
+    focused = request.get("schema") == FOCUSED_REQUEST
+    recorded_request = focused_record(producer) if focused else producer.get("query_request")
     if (producer.get("mode") != "query" or producer["status"] != "complete"
-            or producer.get("query_request") != request
+            or recorded_request != request
             or (producer_id != job_id and producer.get("resumed_from") != job_id)):
         raise Error("query_receipt", "Recorded query result differs from its producing job")
+    if focused:
+        dependencies = producer.get("dependencies", {})
+        if (producer_id != job_id or producer.get("focused_import") != request.get("extent")
+                or producer.get("selected_entry") != request.get("entry_va")
+                or producer.get("image_id") != request.get("image_id")
+                or producer.get("focused_result_sha256") != receipt["result_sha256"]
+                or origin.get("mode") != "focused_readonly_import" or origin.get("extent") != request.get("extent")
+                or result["data"].get("slice_sha256") != request.get("slice_sha256")
+                or result["data"].get("arch") != request.get("arch")
+                or not isinstance(dependencies, dict) or any(origin.get(key) != dependencies.get(key)
+                    for key in ("ghidra_version", "ghidra_tree_sha256", "bridge_sha256"))):
+            raise Error("query_receipt", "Focused result differs from its imported Program or worker")
     return result
 
 
@@ -409,8 +446,18 @@ def publish_query(project, job_id, request, result):
                "result_sha256": identity(result), "result": result}
     payload = canonical(receipt) + b"\n"
     if len(payload) > MAX_SNAPSHOT_BYTES:
-        raise Error("query_result_limit", "Fresh query result exceeds its read limit", 7,
+        raise Error("query_result_limit", "Query result exceeds its read limit", 7,
                     partial={"job_id": job_id})
+    if request.get("schema") == FOCUSED_REQUEST:
+        manifest, producer = get(project, job_id)
+        prior = producer.get("focused_result_sha256")
+        if (focused_record(producer) != request or producer["status"] != "complete"
+                or prior not in (None, receipt["result_sha256"])):
+            raise Error("query_receipt", "Focused publication differs from its producing job", 8)
+        if prior is None:
+            # Bind the result first. A crash before publication leaves no receipt to consume.
+            producer["focused_result_sha256"] = receipt["result_sha256"]
+            write_json(manifest, producer, force=True)
     try:
         atomic(path, payload, mode=0o400)
     except Error as error:
