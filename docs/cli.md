@@ -468,6 +468,17 @@ and CFG queries with an observed gap exit 6. The check also applies when
 reading existing snapshots. It leaves analyzer settings and stored
 snapshots intact. [Held-out and calculator validation](heldout-switch.md#measured-results)
 
+To recover an eligible x86_64 switch in one fresh trusted query, use
+`decompile --fresh --recover-switch-table` with one function selector.
+This option has its own query scope, separate from type hints and other
+recovery options. It requires a guarded relative table whose bytes and
+extent match the immutable Mach-O and the saved Program. Ghidra verifies
+the omitted case blocks and prints the resulting switch with its native
+override warning. `origin.switch_table_recovery` records the verified
+case indexes and ordered targets, including repeated destinations, or
+the reason recovery was skipped. Cached analysis remains independent of
+the query. [Stock engine validation](heldout-switch.md#stock-engine-fresh-query)
+
 The CLI also reports a function-boundary conflict when a linker-confirmed
 function falls through into a competing Ghidra function entry inside the
 same linker extent. Both entries carry the evidence, and cached, fresh and

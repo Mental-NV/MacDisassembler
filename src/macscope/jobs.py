@@ -23,7 +23,7 @@ ANALYSIS_REQUEST = "macscope-analysis-request/1"
 IMPORT_REQUEST = "macscope-import-request/1"
 QUERY_REQUEST = "macscope-query-request/1"
 SIGNATURE_RECOVERY_FIELDS = ("dispatch_return_recovery", "direct_signature_recovery", "scalar_signature_recovery",
-                             "callee_parameter_recovery", "forwarded_return_recovery")
+                             "callee_parameter_recovery", "forwarded_return_recovery", "switch_table_recovery")
 QUERY_RECEIPT = "macscope-query-receipt/1"
 PUBLISH = """
 CREATE TABLE IF NOT EXISTS analysis_publications (

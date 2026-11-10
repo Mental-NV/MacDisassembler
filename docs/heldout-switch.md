@@ -193,6 +193,55 @@ that same full tree with `--ghidra` for import, analyze and fresh queries
 in a new private workspace. Cached queries use the committed snapshot.
 The default engine and existing projects keep their original identity.
 
+## Stock engine fresh query
+
+The installed wheel ran against the stock Ghidra 12.2 tree. Both owned
+x86_64 O0 dispatchers remained partial in cached and ordinary fresh
+queries. Adding only verified computed references and rebuilding the
+function body still left the native jump unresolved. Ghidra's jump-table
+override restored the switch when combined with the verified edges.
+
+The opt-in query requires an exact unsigned guard, a matching signed
+32-bit relative `LC_DATA_IN_CODE` table and linker-bounded case bytes.
+The worker disassembles each omitted partition, checks that its direct
+calls lead to separate function entries, and verifies that every case
+joins the saved body. The worker checks native Ghidra's ordered case
+indexes and targets before reporting `applied`.
+
+| Fixture | Jump | Ordered destinations |
+| --- | --- | --- |
+| Calculator | `0x1000007ea` | `0x100000818`, `0x1000007ec`, `0x100000844`, `0x100000802`, `0x100000844`, `0x10000082e` |
+| Held-out | `0x100000444` | `0x100000446`, `0x100000456`, `0x1000004a6`, `0x100000466`, `0x100000476`, `0x1000004a6`, `0x100000486`, `0x100000496` |
+
+All eight x86_64 O0 queries completed with those targets across both
+symbol states and profiles. The stripped x86_64 O2 and arm64 O0 held-out
+controls skipped in both profiles. Each of the 12 queries preserved the
+export byte for byte and replayed its receipt without a new worker.
+
+```sh
+macscope decompile --project workspaces/calculator --address 0x1000007b0 \
+  --fresh --recover-switch-table --experimental-trusted-input --json
+```
+
+The ordered native diagnostic and installed-wheel matrix report SHA-256
+digests are `912b89ef0d774beb5c4cd41c98073582e90b957eaeb3ceee06997c15545c19e7`
+and `64eae2c925fb0face9d37c1aa9cac9e7228fe3a86d0d54b20c562bf97c1f3665`.
+The installed wheel SHA-256 is
+`b2b79d3dad3c2b60d3e375eda87a64a060f5c185826b8e6187679c419f18fe48`.
+
+The separate behavior probe admitted Ghidra's override label in the
+calculator compatibility evaluator and recognized the label, warning
+comment and unsigned literal suffix in the held-out eligibility check.
+The candidate used the existing aggregate compatibility lowering for
+calculator output and compiled the emitted held-out C as printed. Both
+baseline calculator symbol states hit signed overflow in the recovered
+multiplication helper. Both held-out baseline symbol states hit signed
+overflow in the recovered addition helper. All four parameter-inference
+queries printed a one-parameter declaration for the dispatcher and used
+unnamed input registers for the two other arguments. The behavior probe
+classified those four as untestable. Its report SHA-256 is
+`410f5a83bd5876a2b77f31b002ef8b394054ee0c87023ec96226bcc0eb6d0827`.
+
 ## Recovered C behavior
 
 The evaluator matched all seven source routines to the frozen captures by

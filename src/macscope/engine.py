@@ -15,7 +15,7 @@ import stat
 import subprocess
 import time
 import uuid
-from . import callee_parameters, direct_signatures, dispatch_returns, flow_boundaries, forwarded_returns, jobs, scalar_signatures, worker_lifecycle
+from . import callee_parameters, direct_signatures, dispatch_returns, flow_boundaries, forwarded_returns, jobs, scalar_signatures, switch_tables, worker_lifecycle
 from .annotations import MAX_TYPE_HINTS
 from .errors import Error
 from .storage import canonical, identity, write_json
@@ -30,6 +30,7 @@ SIGNATURE_RECOVERIES = {
     'scalar_signature_recovery': (scalar_signatures, 'scalar-signatures'),
     'callee_parameter_recovery': (callee_parameters, 'callee-parameters'),
     'forwarded_return_recovery': (forwarded_returns, 'forwarded-return'),
+    'switch_table_recovery': (switch_tables, 'switch-table'),
 }
 
 
@@ -363,7 +364,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if mode == 'query':
             argv += ['-readOnly', '-noanalysis']
             if signature_plan is not None and signature_plan['requests']:
-                argv += ['-preScript', 'RecoverCallSignatures.java', str(recovery_request), str(recovery_report),
+                script = getattr(recovery_policy, 'SCRIPT', 'RecoverCallSignatures.java')
+                argv += ['-preScript', script, str(recovery_request), str(recovery_report),
                          str(args.function_timeout)]
         else:
             argv += ['-preScript', 'MacscopeProfile.java']

@@ -204,8 +204,13 @@ collections exceed documented bounds despite successful pseudocode output.
   full Ghidra 12.2 tree containing the upstream native patch. Verified all
   calculator and held-out cases. See the
   [patch evaluation](heldout-switch.md#upstream-patch-evaluation).
+- [x] Expose [guarded switch recovery](heldout-switch.md#stock-engine-fresh-query)
+  for one fresh query on stock Ghidra 12.2. All eight x86_64 O0 scopes
+  restored the verified case targets, and all four resolved or unsupported
+  controls skipped. Saved exports were byte-identical after replay.
 - [ ] Validate a released patched engine before changing the default pin.
-  The installed 12.2 engine continues to report the affected results as partial.
+  The installed 12.2 engine reports the affected cached and ordinary fresh
+  results as partial.
   The latest published release still showed 12.2 on 10 November 2026,
   with the switch regression assigned to 12.2.1.
   [Ghidra release](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.2_build)
