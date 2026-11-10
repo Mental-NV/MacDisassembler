@@ -387,6 +387,17 @@ def record_array(value):
     return isinstance(value, list) and all(isinstance(row, dict) for row in value)
 
 
+def verify_macho_loader(result, image):
+    if result.get('executable_format') != 'Mac OS X Mach-O':
+        raise Error('loader_mismatch', 'Ghidra did not use the Mach-O loader')
+    expected = {'arm64': ('AARCH64:LE:64:AppleSilicon', 'default'),
+                'x86_64': ('x86:LE:64:default', 'gcc')}
+    if (result.get('language_id'), result.get('compiler_spec_id')) != expected.get(image['arch']):
+        raise Error('language_mismatch', 'Loaded Ghidra language disagrees with selected slice')
+    if result.get('executable_sha256') != image['sha256']:
+        raise Error('engine_input_integrity', 'Ghidra loaded a different input digest')
+
+
 def validate_bridge_shape(result, max_functions, *, full_functions):
     error = Error('bridge_result', 'Worker result has invalid status or evidence structure', 10)
     status = result.get('status')
@@ -626,13 +637,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         runtime = result.pop('java_runtime', None)
         engine_checks.verify_runtime(runtime,deps['java_home'])
         manifest['java_runtime'] = runtime
-        if result.get('executable_format') != 'Mac OS X Mach-O':
-            raise Error('loader_mismatch', 'Ghidra did not use the Mach-O loader')
-        lang = result.get('language_id','')
-        if not ((image['arch'] == 'arm64' and lang == 'AARCH64:LE:64:AppleSilicon' and result.get('compiler_spec_id') == 'default') or (image['arch'] == 'x86_64' and lang == 'x86:LE:64:default' and result.get('compiler_spec_id') == 'gcc')):
-            raise Error('language_mismatch', 'Loaded Ghidra language disagrees with selected slice')
-        if result.get('executable_sha256') != image['sha256']:
-            raise Error('engine_input_integrity', 'Ghidra loaded a different input digest')
+        verify_macho_loader(result,image)
         if result.get('status') == 'failed':
             rejected = result.get('manual_boundary_rejection')
             if manual_request is not None and isinstance(rejected,str):

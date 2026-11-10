@@ -1,19 +1,19 @@
 """Immutable slice import requests and crash-recoverable baseline publication."""
 import hashlib
-import json
 import os
 from pathlib import PurePosixPath
 import re
 import sqlite3
 
-from . import engine, jobs
+from . import engine, engine_checks, jobs
 from .errors import Error
 from .macho import checked_path, inspect_bytes, read_regular
-from .storage import atomic, canonical, write_json
+from .storage import atomic, canonical, strict_json, write_json
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
 LOADER_FIELDS = ("executable_format", "language_id", "compiler_spec_id", "executable_sha256")
+JOURNAL_SCHEMA = "macscope-import-journal/1"
 
 
 def request_for(project, image):
@@ -76,6 +76,36 @@ def stage_inputs(project, image, original):
         raise Error("input_integrity", "Existing immutable slice is corrupt")
 
 
+def verify_prepared_job(project, image, journal):
+    try:
+        path, job = jobs.get(project, journal["job_id"])
+        if (job.get("mode") != "import" or job["status"] != "complete" or job.get("image_id") != image["image_id"]
+                or jobs.restart_request(job) != journal["request"]
+                or job.get("resumed_from") != journal.get("resumed_from")
+                or any(job.get(key) != journal[key] for key in ("dependencies", "limits", "sandbox_sha256"))
+                or jobs.leased(path)):
+            raise ValueError("The recorded job did not complete the prepared import")
+        engine.verify_macho_loader(journal["loader_evidence"], image)
+        if "schema" in journal or "import_program_sha256" in job:
+            if journal.get("schema") != JOURNAL_SCHEMA or job.get("import_program_sha256") != journal["program_sha256"]:
+                raise ValueError("The Program digest differs from the completed job")
+            return
+
+        # Earlier prepared imports recorded the Program digest in the journal only.
+        raw = engine.read_worker_object(path.with_name("bridge.json"), 64 * 1024 * 1024)
+        validation = raw.get("validation")
+        if (raw.get("schema") != "macscope-bridge/1" or raw.get("mode") != "import"
+                or raw.get("status") not in ("complete", "partial")
+                or raw.get("bridge_version") != engine.BRIDGE_VERSION
+                or raw.get("ghidra_version") != engine_checks.GHIDRA_VERSION
+                or not isinstance(validation, dict) or validation.get("headless_analysis_enabled") is not False
+                or any(raw.get(key) != journal["loader_evidence"][key] for key in LOADER_FIELDS)
+                or b"Skipping unsupported -loader-" in read_regular(path.with_name("launcher.log"), 8 * 1024 * 1024)):
+            raise ValueError("The legacy journal lacks matching loader evidence")
+    except (Error, OSError, ValueError, RecursionError) as error:
+        raise Error("import_journal", "Prepared import provenance does not match its completed worker") from error
+
+
 def publish(project, image, journal, destination, resumed_from):
     job_id = journal["job_id"]
     source = project.path / "jobs" / job_id / "program"
@@ -86,7 +116,7 @@ def publish(project, image, journal, destination, resumed_from):
     baseline = destination if destination.exists() else source
     checked_path(baseline, directory=True)
     digest = journal["program_sha256"]
-    if engine.tree_digest(baseline) != digest:
+    if any(path.is_symlink() for path in baseline.rglob("*")) or engine.tree_digest(baseline) != digest:
         raise Error("baseline_integrity", "The prepared import Program differs from its recorded digest")
     try:
         if baseline == source:
@@ -128,8 +158,8 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
     journal_path = destination.with_suffix(".import.json")
     if journal_path.exists() or journal_path.is_symlink():
         try:
-            journal = json.loads(read_regular(journal_path, 1024 * 1024))
-        except (ValueError, RecursionError) as error:
+            journal = strict_json(read_regular(journal_path, 1024 * 1024))
+        except (Error, OSError, ValueError, RecursionError) as error:
             raise Error("import_journal", "Invalid prepared import journal") from error
         if (not isinstance(journal, dict) or journal.get("request") != request
                 or journal.get("dependencies") != deps
@@ -142,7 +172,7 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
                 or not isinstance(digest, str) or not SHA256.fullmatch(digest)
                 or not isinstance(evidence, dict) or set(evidence) != set(LOADER_FIELDS)
                 or evidence["executable_sha256"] != image["sha256"]
-                or (prior is not None and (not isinstance(prior, str) or not jobs.JOB_ID.fullmatch(prior)))):
+                or (prior is not None and (not isinstance(prior, str) or not jobs.JOB_ID.fullmatch(prior) or prior == job_id))):
             raise Error("import_journal", "Invalid prepared import provenance")
         if journal.get("sandbox_sha256") != engine.job_sandbox_sha256(project, deps, job_id):
             raise Error("import_baseline_conflict", "The prepared import has a different isolation policy", 8)
@@ -153,6 +183,7 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
                         partial={"job_id": prior})
         origin = prior or resumed_from
         with jobs.result_publication("import", job_id, origin):
+            verify_prepared_job(project, image, journal)
             return publish(project, image, journal, destination, origin)
     if destination.exists() or destination.is_symlink():
         raise Error("engine_project_exists", "An import baseline exists without a verified publication journal", 8)
@@ -162,11 +193,15 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
             raise Error("import_analysis", "Import did not disable autoanalysis", 10)
         source = project.path / "jobs" / job["job_id"] / "program"
         checked_path(source, directory=True)
+        program_digest = engine.tree_digest(source)
+        job["import_program_sha256"] = program_digest
+        write_json(source.parent / "job.json", job, force=True)
         journal = {
+            "schema": JOURNAL_SCHEMA,
             "request": request, "dependencies": deps, "limits": engine.worker_limits(args, args.max_functions),
             "sandbox_sha256": job["sandbox_sha256"],
             "job_id": job["job_id"], "resumed_from": resumed_from,
-            "program_sha256": engine.tree_digest(source), "loader_evidence": {k: raw[k] for k in LOADER_FIELDS},
+            "program_sha256": program_digest, "loader_evidence": {k: raw[k] for k in LOADER_FIELDS},
         }
         write_json(journal_path, journal)
         return publish(project, image, journal, destination, resumed_from)

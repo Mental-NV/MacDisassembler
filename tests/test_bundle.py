@@ -279,10 +279,12 @@ class BundleInventoryTests(unittest.TestCase):
             self.assertEqual(mode, "import")
             job_id = imported["image_id"][:32]
             (workspace.path / "jobs" / job_id / "program").mkdir(parents=True)
+            language, compiler = {"arm64": ("AARCH64:LE:64:AppleSilicon", "default"),
+                                  "x86_64": ("x86:LE:64:default", "gcc")}[imported["arch"]]
             result = {"validation": {"headless_analysis_enabled": False},
-                      "executable_format": "Mac OS X Mach-O", "language_id": imported["arch"],
-                      "compiler_spec_id": "test", "executable_sha256": imported["sha256"]}
-            return result, {"job_id": job_id,
+                      "executable_format": "Mac OS X Mach-O", "language_id": language,
+                      "compiler_spec_id": compiler, "executable_sha256": imported["sha256"]}
+            return result, {"job_id": job_id, "status": "complete", "mode": mode,
                             "sandbox_sha256": engine.job_sandbox_sha256(workspace, dependencies, job_id)}
 
         with patch.object(engine, "dependencies", return_value={"ghidra_path": "/engine", "java_home": "/java"}), \

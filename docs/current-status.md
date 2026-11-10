@@ -509,6 +509,13 @@ collections exceed documented bounds despite successful pseudocode output.
   An owned universal import resumed its prepared second slice without
   another Ghidra worker. Analysis and fresh query failures preserved the
   previous results. All three retries reused their receipts on repeat.
+- [x] Bind prepared imports to their completed worker before promotion.
+  On owned arm64 and x86_64 inputs, interrupted promotion and receipt
+  commits recovered with the source binaries set aside. Duplicate fields,
+  inconsistent loader and worker records, and a changed Program with a
+  recomputed journal digest were rejected. A legacy-format journal
+  required its valid bridge report. Both imports replayed their receipts
+  and completed full headless analysis.
 - [x] Verify [workspace manifest error handling](cli.md#envelopes-errors-and-explicit-omissions)
   and a byte-identical export from an earlier schema 1.0 workspace.
 - [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)

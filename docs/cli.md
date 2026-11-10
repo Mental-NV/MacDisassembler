@@ -1408,6 +1408,11 @@ results to restart that slice. The workspace's artifact copy is sufficient
 even if the original input path has disappeared. Other committed slices stay
 available. If Ghidra finished and the import journal was written, the CLI can
 verify the saved Program and finish publishing it without running Ghidra again.
+New journals bind the Program digest to the completed job and verify its
+request, loader, limits and isolation policy before promotion. Earlier
+prepared journals use the retained bridge report and launcher log to verify
+the completed import. A malformed journal or inconsistent producer record
+returns `import_journal` and leaves the import unpublished.
 
 If a result fails to publish after the worker finishes, the error includes
 the restartable `job_id`. A failure during a retry also includes its
