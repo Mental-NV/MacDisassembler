@@ -213,13 +213,17 @@ limits. One-second timeout attempts cleared their worker groups.
 Ghidra needs writable metadata in the disposable project. The
 prototype protects the Program database files and verifies the copy.
 
-The next owned checkpoint is the trusted launcher and one-shot
-approval binding. Test that wrong digests, architectures, entries,
-extents and engine identities, or a reused approval, fail before a
-worker launches. Enabling the new live route and authorizing the
-exact Weekend request are separate decisions. Any change to host
-security settings, software installation or persistent access would
-need separate approval.
+The [owned one-shot approval prototype](cli.md#owned-one-shot-approval-prototype)
+verified the exact binding with a simulated, process-local issuer on
+both calculator architectures. Each architecture rejected 18 invalid
+requests before staging. Only one of eight concurrent claims succeeded,
+and each verified receipt replayed offline.
+
+A live launcher would still need a trusted channel for human approval,
+cross-process verification, and validation of the remaining isolation
+limits. The user authorized TickTick inspection in principle. The
+artifact, slice, entry and extent pins are launcher requirements.
+Enabling a live third-party route remains a separate gate.
 
 ## Implemented
 
@@ -620,6 +624,9 @@ collections exceed documented bounds despite successful pseudocode output.
   on owned arm64 and x86_64 calculator tools. Both focused receipts
   replayed, both timeout groups cleared, and the access canaries
   verified the stricter profile.
+- [x] Verify [the one-shot focused capture binding](cli.md#owned-one-shot-approval-prototype)
+  with a simulated issuer on both owned calculator architectures. Wrong
+  scopes, edited grants, expiry and reuse produced no extra worker jobs.
 - [x] Validate [chained-fixup layouts](cli.md#chained-fixup-layout-preflight)
   before engine work. Thirty-one import controls stopped before staging.
   Data-only results matched on 24 intact slices, and both owned calculator

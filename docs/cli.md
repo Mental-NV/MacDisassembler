@@ -2291,6 +2291,46 @@ This is one pinned macOS host and runtime. File metadata, other IPC,
 hard process-memory and disk quotas, and hostile-input containment
 remain outside the demonstrated guarantees.
 
+### Owned one-shot approval prototype
+
+The [research supervisor](../analysis/verify_capture_approval.py)
+uses a simulated issuer with an ephemeral, process-local signing key.
+It tests grant authentication and consumption on manifest-verified
+calculator tools. A grant binds the artifact and slice digests, image
+identity and architecture, exact linker entry and extent, project path
+and identity, worker limits, Ghidra and bridge, the JDK tree, the library
+digests and the isolation runner. It expires after five minutes and can
+be consumed once, before staging. The supervisor rechecks the staged
+bytes, requested operation and pinned runtime at each launch. The query
+also checks the digest of the Program produced by the import.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 \
+  analysis/verify_capture_approval.py --fixture-build-root build/review-v2 \
+  --output-dir /private/tmp/new-owned-capture-approval \
+  --experimental-trusted-input
+```
+
+On arm64 and x86_64, one grant yielded one no-analysis import and one
+read-only focused query. Both produced pseudocode and replayed the
+verified receipts with the engine disabled. Extent coverage was complete
+on arm64 and partial on x86_64. Each architecture rejected 18 requests
+before staging, including an actual request for a different calculator
+function, scope changes, tampering, a foreign issuer, a missing signature
+and expiry. One of eight concurrent consumers claimed a grant. Reuse
+after capture produced zero additional jobs.
+
+The `positive.json` report SHA-256 is
+`c5e299ebd8770934415cfc76fa382e86aae5058e3dbd89f99cb0c56ede3814a6`.
+The `negative.json` report SHA-256 is
+`83d06145ff1b7eeda5da5cac72031251788ce7e501eb2baf657f810091da4031`.
+
+This experiment uses an in-process simulation of approval. A production
+launcher would need a trusted approval channel and cross-process grant
+verification. It would also inherit the unverified isolation limits
+listed above. The public CLI continues to require trusted, user-owned
+inputs for worker operations.
+
 ## Envelopes, errors and explicit omissions
 
 Workspace opens validate the manifest structure, schema version, and
