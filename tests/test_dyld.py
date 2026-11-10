@@ -3,7 +3,7 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from macscope import chained_layout, cli, dyld, engine, evidence, handoff_diff, import_state, macho, storage
+from macscope import chained_layout, cli, dyld, dyld_legacy, engine, evidence, handoff_diff, import_state, macho, storage
 from macscope.errors import Error
 from test_core import TemporaryCase
 from test_macho import X86_64, command, image, universal
@@ -348,6 +348,28 @@ class LegacyFixupsTests(TemporaryCase):
         _,rows,gaps = self.decode(bind=b"\xd0\0")
         self.assertEqual(rows,[])
         self.assertEqual(gaps,["bind_opcode_0xd0"])
+
+    def test_engine_validates_all_legacy_streams_before_admission(self):
+        rebase = bytes.fromhex("11 20 80 02 51 00")
+        bind = b"\x70\x80\x02\x11\x40_symbol\0\x90\0"
+        complete = legacy_fixture(rebase=rebase, bind=bind, weak=b"\x48_override\0\0", lazy=bind)
+        self.assertEqual(macho.thin(complete, for_engine=True), macho.thin(complete))
+        for streams, expected in (
+            ({"rebase": rebase[:-1] + b"\x60\x80"}, "legacy_fixup_stream"),
+            ({"bind": bind[:-1] + b"\x60\x80"}, "legacy_fixup_stream"),
+            ({"weak": b"\x48_unterminated"}, "legacy_fixup_stream"),
+            ({"lazy": bind + b"\x70\x80"}, "legacy_fixup_stream"),
+            ({"bind": b"\xd0\0"}, "legacy_fixup_unsupported"),
+            ({"bind": bind.replace(b"\x11", b"\x3c")}, "fixup_ordinal"),
+        ):
+            with self.subTest(streams=streams):
+                binary = legacy_fixture(**streams)
+                macho.thin(binary)
+                self.error(expected, macho.thin, binary, for_engine=True)
+        with patch.object(dyld_legacy, "MAX_ENGINE_OPERATIONS", 3):
+            self.error("legacy_fixup_limit", macho.thin, complete, for_engine=True)
+        with patch.object(dyld_legacy, "MAX_STREAM_BYTES", 1):
+            self.error("legacy_fixup_limit", macho.thin, complete, for_engine=True)
 
     def test_exact_legacy_retains_lazy_and_rebase_at_the_same_address(self):
         rebase = bytes.fromhex("11 20 80 02 51 00")

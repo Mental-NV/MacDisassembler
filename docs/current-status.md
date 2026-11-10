@@ -635,6 +635,10 @@ collections exceed documented bounds despite successful pseudocode output.
   before engine work. Twenty-three controls stopped before staging. Both
   modern and legacy owned calculator variants reproduced their export
   evidence and completed full headless analysis on both architectures.
+- [x] Validate [legacy dyld fixup streams](cli.md#legacy-dyld-stream-preflight)
+  before engine work. Nineteen controls stopped before staging. Data-only
+  queries matched on 28 intact slices, and both owned legacy calculator
+  tools completed full headless analysis and fresh decompilation.
 - [x] Bound [section records across each Mach-O slice](cli.md#limits-and-safety-boundaries).
   Exact-limit thin and universal fixtures passed. An excess failed before
   staging, including in an unselected slice. An owned Calendar bundle

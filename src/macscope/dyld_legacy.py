@@ -7,6 +7,7 @@ from .macho_load import bounded, uleb
 
 MAX_STREAM_BYTES = 1024 * 1024
 MAX_EXACT_MATCHES = 32
+MAX_ENGINE_OPERATIONS = 262144
 POINTER_BYTES = 8
 NON_WEAK_DEFINITION = 0x8
 SPECIAL_LIBRARIES = {0: "self", -1: "main_executable", -2: "flat_lookup", -3: "weak_lookup"}
@@ -197,6 +198,35 @@ def bind_rows(stream, stream_name, segments, image_offset, libraries, *, weak_de
         raise ValueError("Missing dyld bind DONE")
 
 
+def stream_rows(data, name, offset, size, segments, image_offset, libraries, *, weak_definitions=False):
+    stream = Stream(data,offset,size)
+    return (rebase_rows(stream,segments,image_offset) if name=="rebase"
+            else bind_rows(stream,name,segments,image_offset,libraries,weak_definitions=weak_definitions))
+
+
+def require_engine_streams(data, loader, segments):
+    libraries = [d["path"] for d in loader["dylibs"] if d["kind"]!="id"]
+    scanned = 0
+    for extent in loader["dyld_streams"]:
+        name = extent["kind"]
+        if name=="export_trie" or extent["size"]=="0x0":
+            continue
+        offset,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
+        if size>MAX_STREAM_BYTES:
+            raise Error("legacy_fixup_limit", f"{name} stream exceeds the engine admission byte limit", 7)
+        try:
+            for row in stream_rows(data,name,offset,size,segments,0,libraries,weak_definitions=True):
+                scanned += 1
+                if scanned>MAX_ENGINE_OPERATIONS:
+                    raise Error("legacy_fixup_limit", "Legacy fixups exceed the engine admission operation limit", 7)
+                if row["kind"]=="bind" and row["library"] is None:
+                    raise Error("fixup_ordinal", "Unsupported special legacy bind library ordinal")
+        except UnsupportedOperation as error:
+            raise Error("legacy_fixup_unsupported", f"Unsupported {name} operation: {error}", 3) from error
+        except ValueError as error:
+            raise Error("legacy_fixup_stream", f"Malformed {name} stream: {error}") from error
+
+
 def decode_legacy(data, image, parsed, streams, max_fixups, *, weak_definitions=False, address=None):
     result = {"format":"legacy", "streams":[stream["kind"] for stream in streams]}
     if len(result["streams"])!=len(set(result["streams"])):
@@ -213,9 +243,7 @@ def decode_legacy(data, image, parsed, streams, max_fixups, *, weak_definitions=
         if size>MAX_STREAM_BYTES:
             gaps.append(name+"_stream_limit")
             continue
-        stream = Stream(data,offset,size)
-        rows = (rebase_rows(stream,segments,image_offset) if name=="rebase"
-                else bind_rows(stream,name,segments,image_offset,libraries,weak_definitions=weak_definitions))
+        rows = stream_rows(data,name,offset,size,segments,image_offset,libraries,weak_definitions=weak_definitions)
         try:
             for row in rows:
                 if scanned==max_fixups:

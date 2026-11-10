@@ -2263,6 +2263,28 @@ The primary and legacy validation report SHA-256 values are
 and
 `c21bc7c84e381f25f962c3bf9a1ea666a88773a3128abebd65351fd1f8a4add3`.
 
+### Legacy dyld stream preflight
+
+Headless import and new analysis validate each declared nonempty
+rebase, bind, weak-bind and lazy-bind stream with the data-only fixup
+decoder. Admission requires termination and rejects malformed operands,
+out-of-range pointer sites, unsupported operations and unknown bind
+library ordinals. Each stream may occupy at most 1 MiB. Across all four
+streams in a slice, the CLI permits up to 262,144 expanded fixups and
+weak definitions. This bounds compact repeated-fixup opcodes even when
+every operation points to the same slot. Engine validation retains no
+fixup inventory. `fixups` keeps its existing partial coverage semantics
+and query limits.
+
+The temporary wheel rejected 19 owned controls before staging, including
+an over-limit repeated operation and a malformed unselected slice.
+Data-only fixup output matched the previous wheel byte for byte on 28
+intact slices. Legacy arm64 and x86_64 calculator tools completed full
+headless analysis and fresh decompilation. The 14 fixup records for each
+tool matched before and after analysis, and fresh pseudocode matched the
+saved snapshot. The report SHA-256 is
+`d300d298f1758e62b5a5c58d14595e3a97a1c55b471d9ab20931a4fd1563fd05`.
+
 ### Owned per-job isolation experiment
 
 The [research runner](../analysis/verify_job_isolation.py) exercises
