@@ -435,6 +435,12 @@ collections exceed documented bounds despite successful pseudocode output.
   All 16 owned captures passed their source, dSYM and sibling isolation
   probes. Each condition recovered and decompiled all 120 controlled
   entries. The evaluator verified the freeze before opening its mapping.
+- [x] Compare the installed CLI against the [full frozen thin matrix](phase2-validation.md#installed-cli-matrix-against-frozen-direct-evidence).
+  The 16 thin captures shared all 1,273 RAM function entries with direct
+  Ghidra. LLVM matched 30,296 instructions and 5,570 direct targets in
+  selected ranges. The one pseudocode and CFG difference preserved the
+  decoded stub and labeled the inferred Objective-C target separately.
+  Eight byte-identical thin/FAT64 pairs matched after identity remapping.
 - [x] Run the [dSYM-assisted diagnostic](phase1-findings.md#dsym-assisted-diagnostic)
   on the same eight stripped inputs. Ghidra imported all eight matched
   companions and decompiled all 120 controlled entries in the separately
