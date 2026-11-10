@@ -65,7 +65,8 @@ def parser():
     def budgets(s):
         s.add_argument('--timeout',type=int,default=300,help='Total worker wall seconds (1..3600)')
         s.add_argument('--function-timeout',type=int,default=15,help='Per-function decompiler seconds (1..120)')
-        s.add_argument('--startup-timeout',type=int)
+        s.add_argument('--startup-timeout',type=int,default=engine.STARTUP_TIMEOUT_SECONDS,
+                       help='Seconds for headless initialization (1..3600, default 300)')
         s.add_argument('--max-memory-mib',type=int,help='Unsupported hard process cap, rejected explicitly')
         s.add_argument('--heap-mib',type=int,default=1024,help='Java heap only, not process memory (256..4096)')
         s.add_argument('--max-functions',type=int,default=1000,help='Maximum enumerated functions (1..10000)')
@@ -264,7 +265,7 @@ def protect_output(args, target):
 
 
 def limits(args):
-    for key, low, high in [('timeout',1,3600),('function_timeout',1,120),('heap_mib',256,4096),('max_functions',1,10000),('limit',1,1000),('depth',1,8),('max_edges',1,2000),('byte_length',1,4096),('min_length',0,1048576)]:
+    for key, low, high in [('timeout',1,3600),('startup_timeout',1,3600),('function_timeout',1,120),('heap_mib',256,4096),('max_functions',1,10000),('limit',1,1000),('depth',1,8),('max_edges',1,2000),('byte_length',1,4096),('min_length',0,1048576)]:
         v=getattr(args,key,None)
         if v is not None and not low<=v<=high:
             raise Error('argument_limit', key+' must be '+str(low)+'..'+str(high),2)
@@ -398,8 +399,8 @@ def page(rows,args,aid,project_id,filters,*,order='entry-va/function-id/v1'):
 def check_engine_access(args, project):
     if not args.experimental_trusted_input:
         raise Error('isolation_required','Engine operations require explicit --experimental-trusted-input for trusted user-owned fixtures only',3)
-    if args.jobs != 1 or args.max_memory_mib is not None or args.startup_timeout is not None:
-        raise Error('unsupported_budget','Only jobs=1, total --timeout and Java-only --heap-mib are supported; hard process-memory/startup budgets are rejected',3)
+    if args.jobs != 1 or args.max_memory_mib is not None:
+        raise Error('unsupported_budget','Only jobs=1 is supported. Use --heap-mib for the Java heap; hard process-memory budgets are rejected',3)
     if args.command == 'analyze':
         engine.analysis_profile(args.profile)
     if any(c in str(project.path) for c in ('"', '\\', '\n', '\r')):
@@ -627,6 +628,8 @@ def replay_worker_request(args, project, record, *, query_profile=None):
     mode, budgets, policy = record['mode'], record.get('limits'), record.get('analysis_profile')
     fields = {'timeout':'timeout_seconds','function_timeout':'function_timeout_seconds',
               'max_functions':'max_functions','heap_mib':'java_heap_mib'}
+    if isinstance(budgets,dict) and 'startup_timeout_seconds' in budgets:
+        fields['startup_timeout'] = 'startup_timeout_seconds'
     if not isinstance(budgets,dict) or any(type(budgets.get(key)) is not int for key in fields.values()):
         raise Error('job_manifest','Invalid recorded worker limits')
     profile = None
@@ -635,8 +638,9 @@ def replay_worker_request(args, project, record, *, query_profile=None):
             raise Error('job_manifest','Invalid recorded analysis profile')
         profile = policy['name']
     replay = argparse.Namespace(command=mode,profile=profile,jobs=1,max_memory_mib=None,
-                                startup_timeout=None,experimental_trusted_input=True,
+                                experimental_trusted_input=True,
                                 **{arg:budgets[key] for arg,key in fields.items()})
+    replay.startup_timeout = getattr(replay,'startup_timeout',None)
     limits(replay)
     check_engine_access(replay,project)
     expected_profile = engine.analysis_profile(profile) if profile else query_profile
@@ -1057,7 +1061,7 @@ def execute(a):
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest or a.verify_worker)
         probe = verify_doctor_worker(deps) if a.verify_worker else {'status':'not_requested'}
         deps['verification']={'dependency_preflight':'passed','worker_probe':probe}
-        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'forwarded_return_recovery':forwarded_returns.POLICY,'switch_table_recovery':switch_tables.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
+        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'forwarded_return_recovery':forwarded_returns.POLICY,'switch_table_recovery':switch_tables.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':True,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
         return envelope(command,deps)
     if a.command=='inspect':
         data,_=inspect_path(a.input,allow_arm64e=True)

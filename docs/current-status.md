@@ -25,9 +25,9 @@ contains documentation only.
 - Package-owned Java bridge, effective analyzer-option recording, real saved
   Program databases, immutable digest identities, SQLite committed snapshots,
   writer lock, atomic result/output publication and pagination-bound cursors.
-- Owned-process cancellation, wall/per-function deadlines, bounded facets,
-  partial/error envelopes, and explicit rejection of unsupported hard-memory,
-  independent-startup and parallel-worker budgets. Group cleanup retains
+- Owned-process cancellation, startup, wall and per-function deadlines,
+  bounded facets, partial/error envelopes, and explicit rejection of
+  unsupported hard-memory and parallel-worker budgets. Group cleanup retains
   the launcher's child identity through signaling and checks budgets before
   accepting the result.
 - Durable malformed-input, storage, selector, schema, dependency, cached-query
@@ -361,6 +361,10 @@ collections exceed documented bounds despite successful pseudocode output.
   byte for byte on owned arm64 and x86_64 slices. Synthetic 32 MiB results
   exercised bounded serialization, and an interrupted write preserved the
   existing destination.
+- [x] Enforce [a separate headless startup deadline](cli.md#limits-and-safety-boundaries).
+  Six owned arm64 and x86_64 import, analysis and fresh queries recorded
+  readiness. Controlled delays distinguished startup from total timeouts,
+  preserved committed state, and verified a successful exact-limit replay.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

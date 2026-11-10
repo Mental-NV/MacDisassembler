@@ -1649,6 +1649,43 @@ class WorkerTests(TemporaryCase):
         self.assertEqual(self.record()['status'], 'timeout')
         self.assert_reaped()
 
+    def test_startup_timeout_requires_a_complete_exact_launcher_line(self):
+        script = ('import sys,time; '
+                  'sys.stdout.write("other INFO  Headless startup complete (3 ms) (AnalyzeHeadless)\\n"); '
+                  'sys.stdout.write("INFO  Headless startup complete (4 ms) (AnalyzeHeadless)"); '
+                  'sys.stdout.flush(); time.sleep(10)')
+        error = self.error('worker_startup_timeout', self.run_worker, script,
+                           timeout=3, startup_timeout=0.2)
+        self.assertEqual(error.exit_code, 7)
+        self.assertTrue(error.retryable)
+        self.assertEqual(self.record()['startup']['status'], 'timeout')
+        self.assert_reaped()
+
+    def test_ready_worker_keeps_the_total_deadline(self):
+        script = 'import time; print("INFO  Headless startup complete (20 ms) (AnalyzeHeadless)", flush=True); time.sleep(10)'
+        error = self.error('worker_timeout', self.run_worker, script, timeout=1.2, startup_timeout=0.9)
+        self.assertEqual(error.exit_code, 7)
+        startup = self.record()['startup']
+        self.assertEqual((startup['status'], startup['ghidra_reported_ms']), ('ready', 20))
+        self.assertLess(startup['observed_seconds'], 0.9)
+        self.assert_reaped()
+
+    def test_clean_exit_without_startup_marker_fails_closed(self):
+        error = self.error('worker_startup_unconfirmed', self.run_worker, 'print("worker output")',
+                           startup_timeout=2)
+        self.assertEqual(error.exit_code, 4)
+        self.assertEqual(self.record()['startup']['status'], 'unconfirmed')
+        self.assertEqual(self.record()['returncode'], 0)
+        self.assert_reaped()
+
+    def test_startup_probe_recognizes_marker_split_across_log_reads(self):
+        probe = engine.worker_lifecycle.StartupProbe()
+        with (self.job / 'launcher.log').open('w+b', buffering=0) as log:
+            log.write(b'INFO  Headless startup')
+            self.assertIsNone(probe.poll(log.fileno()))
+            log.write(b' complete (123 ms) (AnalyzeHeadless)  \n')
+            self.assertEqual(probe.poll(log.fileno()), 123)
+
     def test_keyboard_interrupt_records_cancelled_and_reaps_process(self):
         real_sleep = time.sleep
         interrupted = False

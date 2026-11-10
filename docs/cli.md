@@ -1236,8 +1236,9 @@ request returned the saved receipt. The validation report SHA-256 is
 
 ## Limits and safety boundaries
 
-Defaults: one worker; 300s total wall deadline; 15s per decompilation;
-1000 functions; 1024MiB Java heap. Allowed ranges are documented by help.
+The defaults are one worker, a 300-second total wall deadline, a 300-second
+startup deadline, 15 seconds per decompilation, 1000 functions and a
+1024 MiB Java heap. Help lists the allowed ranges.
 Fixed bridge bounds include 2000 instructions/function, 500 blocks and
 500 edges/function, 200 references/direction/function, 10000 symbols/category,
 5000 strings, 100000 defined-data entries scanned, and 64MiB result output.
@@ -1250,9 +1251,28 @@ The worker launcher log is sampled at 8MiB and combined job storage at
 accepting any result. These are sampled checks and can overshoot.
 `--max-memory-mib` is rejected because a hard process-memory limit
 is not enforceable here. `--heap-mib` limits only the Java heap, not native
-memory or total process RSS. `--jobs` values other than 1 and independent
-`--startup-timeout` are rejected. `--timeout` bounds startup plus analysis
-plus export as one owned worker wall deadline.
+memory or total process RSS. `--jobs` accepts 1. `--timeout` covers the
+whole owned worker through processing and export.
+
+`--startup-timeout` applies to import, analysis and fresh decompilation.
+It measures elapsed time from launching the worker until the supervisor
+observes Ghidra 12.2's initialization marker in the first 256 KiB of the
+launcher log. Ghidra emits the marker before Program processing begins.
+The first applicable deadline wins, with the total deadline taking
+precedence on a tie. A startup timeout exits 7 with
+`worker_startup_timeout`. A clean exit without the marker returns
+`worker_startup_unconfirmed`. Job details show the configured limit, the
+supervisor's observation time, and Ghidra's own initialization timing.
+Restart reuses the recorded limit, including the total-only policy of
+earlier jobs. [Ghidra 12.2 startup source](https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.2_build/Ghidra/Features/Base/src/main/java/ghidra/app/util/headless/AnalyzeHeadless.java#L1802)
+
+The installed CLI observed readiness on all six import, analysis and fresh
+decompilation jobs for owned arm64 and x86_64 slices. A controlled launch
+delay exercised a 4-second startup deadline and a separate 1-second total
+deadline. Both stopped their worker groups and preserved the saved inputs,
+Programs and snapshots. The startup-timeout job completed on restart with
+the same recorded limits. The validation report SHA-256 is
+`85ba9e0b7824e18e8c94604711081ba88b5d70b9a143facc7acc851d71e7ae66`.
 
 The worker starts a private process group and records an ownership token.
 The supervisor observes the launcher exit without reaping it, stops

@@ -7,6 +7,9 @@ import sys
 
 
 PROTOCOL = "macscope-launch-gate/1"
+STARTUP_EVIDENCE = "ghidra-12.2-headless-startup-log/1"
+STARTUP_PREFIX_LIMIT = 256 * 1024
+_STARTUP_LINE = re.compile(rb"(?m)^INFO  Headless startup complete \(([0-9]{1,12}) ms\) \(AnalyzeHeadless\)[ \t]*\r?\n")
 _RELEASE = b"\x01"
 _GATE = """import os, signal, sys
 fd = int(sys.argv[1])
@@ -20,6 +23,25 @@ for name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
         signal.signal(signum, signal.SIG_DFL)
 os.execv(sys.argv[2], sys.argv[2:])
 """
+
+
+class StartupProbe:
+    """Scan only complete lines in the bounded startup prefix of the owned log."""
+
+    def __init__(self):
+        self.offset = 0
+        self.tail = b""
+
+    def poll(self, fd):
+        block = os.pread(fd, STARTUP_PREFIX_LIMIT - self.offset, self.offset)
+        if not block:
+            return None
+        self.offset += len(block)
+        data = self.tail + block
+        end = data.rfind(b"\n") + 1
+        self.tail = data[end:]
+        match = _STARTUP_LINE.search(data, 0, end)
+        return int(match[1]) if match else None
 
 
 @lru_cache(maxsize=1)

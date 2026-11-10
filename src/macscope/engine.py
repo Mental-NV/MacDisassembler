@@ -26,6 +26,7 @@ GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
 BRIDGE_VERSION = '1.8.0'
+STARTUP_TIMEOUT_SECONDS = 300
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
     'direct_signature_recovery': (direct_signatures, 'direct-signatures'),
@@ -224,31 +225,56 @@ def check_worker_cancellation(manifest_path, manifest):
         raise Error('worker_cancelled', 'Worker cancellation requested by the workspace owner', 130, retryable=True)
 
 
-def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, max_log=8*1024*1024):
+def check_worker_deadline(now, deadline, startup_deadline):
+    if startup_deadline is not None and startup_deadline < deadline and now >= startup_deadline:
+        raise Error('worker_startup_timeout', 'Headless initialization exceeded its startup deadline', 7, retryable=True)
+    if now >= deadline:
+        raise Error('worker_timeout', 'Worker wall-clock timeout', 7, retryable=True)
+
+
+def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest,
+                startup_timeout=None, max_log=8*1024*1024):
     start = time.monotonic()
+    deadline = start + timeout
     proc = None
+    probe = worker_lifecycle.StartupProbe() if startup_timeout is not None else None
     manifest_path = Path(manifest_path)
     owner = jobs.claim(manifest_path)
     try:
         gated = manifest.get('mode') in ('import','analyze','query') and 'job_id' in manifest
         if gated:
             manifest.update(launch_protocol=worker_lifecycle.PROTOCOL, boot_session_id=worker_lifecycle.boot_session())
+        if probe is not None:
+            manifest['startup'] = {'status': 'waiting', 'evidence': worker_lifecycle.STARTUP_EVIDENCE}
         manifest.update(status='starting', argv=argv, timeout_seconds=timeout, started_unix=time.time(), ownership_token=uuid.uuid4().hex)
         write_json(manifest_path, manifest, force=True)
         check_worker_cancellation(manifest_path, manifest)
-        with open(log_path, 'xb', buffering=0) as log:
+        with open(log_path, 'x+b', buffering=0) as log:
+            launch_started = time.monotonic()
+            startup_deadline = launch_started + startup_timeout if probe is not None else None
             proc, gate = worker_lifecycle.start(argv, gated=gated, cwd=cwd, env=env, log=log)
             try:
                 manifest.update(status='running', pid=proc.pid, process_group=proc.pid)
                 write_json(manifest_path, manifest, force=True)
                 if gate is not None:
                     worker_lifecycle.release(gate)
-                while not worker_exited(proc):
+                while True:
+                    exited = worker_exited(proc)
                     check_worker_cancellation(manifest_path, manifest)
-                    if time.monotonic()-start > timeout:
-                        raise Error('worker_timeout', 'Worker wall-clock timeout', 7, retryable=True)
+                    check_worker_deadline(time.monotonic(), deadline, startup_deadline)
                     check_worker_budgets(Path(cwd), Path(log_path), max_log)
-                    time.sleep(0.1)
+                    reported = probe.poll(log.fileno()) if probe is not None else None
+                    now = time.monotonic()
+                    check_worker_deadline(now, deadline, startup_deadline)
+                    if reported is not None:
+                        manifest['startup'].update(status='ready', ghidra_reported_ms=reported,
+                                                   observed_seconds=round(now-launch_started, 6))
+                        write_json(manifest_path, manifest, force=True)
+                        probe = startup_deadline = None
+                    if exited:
+                        break
+                    next_deadline = deadline if startup_deadline is None else min(deadline, startup_deadline)
+                    time.sleep(min(0.1, max(0, next_deadline-time.monotonic())))
             finally:
                 if gate is not None:
                     os.close(gate)
@@ -257,6 +283,8 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
             check_worker_budgets(Path(cwd), Path(log_path), max_log)
         if proc.returncode:
             raise Error('worker_failed', 'Headless worker exited '+str(proc.returncode)+'; see private job log', 10)
+        if probe is not None:
+            raise Error('worker_startup_unconfirmed', 'Headless startup marker missing from the bounded launcher log', 4)
         manifest['status'] = 'complete'
     except KeyboardInterrupt:
         manifest['status'] = 'cancelled'
@@ -270,6 +298,9 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
         raise Error('worker_startup', str(e), 4) from e
     finally:
         try:
+            if probe is not None and 'startup' in manifest:
+                failure = manifest.get('error', {}).get('code')
+                manifest['startup']['status'] = 'timeout' if failure == 'worker_startup_timeout' else 'unconfirmed'
             if proc is not None:
                 if proc.returncode is None:
                     terminate_owned(proc)
@@ -281,12 +312,15 @@ def run_process(argv, *, cwd, env, timeout, log_path, manifest_path, manifest, m
 
 
 def worker_limits(args, max_functions):
-    return {
+    limits = {
         'timeout_seconds': args.timeout, 'function_timeout_seconds': args.function_timeout,
         'max_functions': max_functions, 'jobs': 1, 'java_heap_mib': args.heap_mib,
         'process_memory_limit': None, 'sampled_job_storage_bytes': 512*1024*1024,
         'storage_is_hard_quota': False,
     }
+    if args.startup_timeout is not None:
+        limits['startup_timeout_seconds'] = args.startup_timeout
+    return limits
 
 
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
@@ -301,8 +335,6 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         raise Error('jobs_unsupported', 'Only --jobs 1 is supported', 3)
     if args.max_memory_mib is not None:
         raise Error('hard_memory_unsupported', 'A hard process-memory budget cannot be enforced here. --heap-mib caps only the Java heap.', 3)
-    if args.startup_timeout is not None:
-        raise Error('startup_budget_unsupported', 'Separate startup deadlines are not yet supported; use --timeout for a total wall deadline', 3)
     if entry is not None and (mode != 'query' or not re.fullmatch(r'0x[0-9a-f]{1,16}', entry)):
         raise Error('query_entry', 'Selected query requires an exact saved RAM function entry', 2)
     if hints is not None and (entry is None or not 1<=len(hints)<=MAX_TYPE_HINTS):
@@ -416,7 +448,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         manifest.update(type_hint_view_id=identity({'source_analysis_id':image['active_analysis'],'hints':hints}),
                         type_hints_sha256=digest(request),type_hints=hints)
     try:
-        run_process(argv, cwd=job, env=env, timeout=args.timeout, log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
+        run_process(argv, cwd=job, env=env, timeout=args.timeout, startup_timeout=args.startup_timeout,
+                    log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
     except Error as error:
         if error.partial is None:
             error.partial = {'job_id':jobid}

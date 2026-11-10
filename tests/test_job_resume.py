@@ -102,6 +102,7 @@ class JobResumeTests(TemporaryCase):
             ("job_resume_inputs", {"analysis_request": dict(self.record["analysis_request"], project_id="other")}),
             ("job_resume_conflict", {"analysis_request": dict(self.record["analysis_request"], previous_analysis_id="other")}),
             ("job_manifest", {"limits": dict(self.record["limits"], timeout_seconds=True)}),
+            ("job_manifest", {"limits": dict(self.record["limits"], startup_timeout_seconds=True)}),
             ("job_resume_policy", {"limits": dict(self.record["limits"], jobs=2)}),
             ("job_resume_engine", {
                 "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, "b" * 32),
@@ -118,3 +119,16 @@ class JobResumeTests(TemporaryCase):
         self.assertIsNone(jobs.publication(self.workspace, self.prior))
         self.assertIsNone(self.workspace.select()["active_analysis"])
         runner.assert_not_called()
+
+    def test_replay_uses_recorded_startup_limit_or_legacy_policy(self):
+        resume = self.args("jobs", "resume", self.prior, "--experimental-trusted-input")
+        old_limits = dict(self.record["limits"])
+        self.assertEqual(old_limits.pop("startup_timeout_seconds"), 300)
+        with patch.object(engine, "dependencies", return_value=self.deps):
+            for budget in (None, 12):
+                with self.subTest(budget=budget):
+                    limits = old_limits if budget is None else dict(old_limits, startup_timeout_seconds=budget)
+                    record = dict(self.record, limits=limits)
+                    replay, _ = cli.replay_worker_request(resume, self.workspace, record)
+                    self.assertEqual(replay.startup_timeout, budget)
+                    self.assertEqual(engine.worker_limits(replay, replay.max_functions), limits)
