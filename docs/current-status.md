@@ -17,19 +17,22 @@ verifying it independently. Start with the date-range and time-zone paths
 or recurrence exceptions that could affect a remaining implementation
 decision. Reuse recorded observations for gestures already covered.
 
-- [ ] **Rehearse one selected Calendar workflow on an owned app.** Use the
-  arm64 main image and one explicitly chosen embedded framework. Verify
-  that a selector or string lead reaches an exact function and that the
-  installed CLI returns linked disassembly, pseudocode, incoming and
-  outgoing references, and a bounded caller/callee trace. Include one
-  unresolved dispatch and one resource path with size and SHA-256.
-- [ ] **Produce a small, private evidence handoff.** For each selected lead,
-  record image and slice hashes, architecture, analysis and function IDs,
-  unslid addresses and coverage. Return a typed reason for each missing
-  result. Keep observed behavior, static inference and open questions
-  separate. Reopen or regenerate the handoff from the committed workspace
-  without another whole-image analysis. Use the current cached queries
-  first and add focused export support where the rehearsal exposes a gap.
+- [x] **Rehearse one selected Calendar workflow on an owned app.** The
+  [arm64 main and framework rehearsal](cli.md#owned-calendar-evidence-rehearsal)
+  matched a selector to its exact implementation and a string lead to an
+  incoming reference. It verified linked disassembly and pseudocode,
+  the declared library bind and export, two framework call sites, an
+  unresolved dispatch and a resource hash.
+- [x] **Produce a small, private evidence handoff for the owned rehearsal.**
+  The four-function report included image and slice hashes, exact function
+  and analysis IDs, coverage and a typed missing-selection result. It
+  separated the owned runtime result, static inference and open dispatch
+  question. The saved workspace, resource record and query receipt
+  reproduced the handoff byte for byte with the original bundle absent.
+- [ ] **Make the handoff reusable for a reviewer-selected lead list.**
+  Reuse the saved query facets and typed outcomes in a bounded selection
+  export. The current integration script has fixed fixture selectors and
+  composes individual commands. The ordinary export covers the whole image.
 - [ ] **Repeat on a small approved TickTick lead set.** Match the exact
   archived image and architecture before using historical addresses. Use
   only the main image and the Calendar framework needed for the selected
