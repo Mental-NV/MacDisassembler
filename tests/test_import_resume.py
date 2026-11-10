@@ -150,6 +150,49 @@ class ImportResumeTests(TemporaryCase):
         self.assertEqual(self.workspace.images(), [])
         run.assert_not_called()
 
+    def test_repair_replaces_only_an_unavailable_committed_program(self):
+        path = self.root / "owned"
+        path.write_bytes(self.data)
+        argv = self.args("import", str(path), "--repair", "--experimental-trusted-input")
+
+        def repair():
+            return cli.execute(argv)["data"][0]
+
+        def worker(project, image, mode, args, deps, *, import_request, resumed_from):
+            self.assertEqual(import_request["repair_baseline"], {"sha256": old_digest, "provider": None})
+            self.assertIsNone(resumed_from)
+            synthetic_program(self.source, b"replacement Program")
+            return ({"validation": {"headless_analysis_enabled": False},
+                     "executable_format": "Mac OS X Mach-O", "language_id": "AARCH64:LE:64:AppleSilicon",
+                     "compiler_spec_id": "default", "executable_sha256": image["sha256"]},
+                    {"job_id": self.producer, "status": "complete", "mode": mode, "image_id": image["image_id"],
+                     "import_request": import_request, "limits": engine.worker_limits(args, args.max_functions),
+                     "dependencies": deps, "sandbox_sha256": engine.job_sandbox_sha256(project, deps, self.producer)})
+
+        with patch.object(engine, "dependencies", return_value=self.deps), \
+             patch.object(engine, "run", side_effect=worker) as run:
+            self.error("import_repair_input", repair)
+            synthetic_program(self.baseline, b"original Program")
+            old_digest = engine.tree_digest(self.baseline)
+            aid = "e" * 64
+            image = dict(self.image, engine_baseline_sha256=old_digest)
+            with self.workspace.db(False) as db:
+                db.execute("INSERT INTO images VALUES(?,?,?,1,?)", (image["image_id"], image["arch"],
+                                                                   storage.canonical(image).decode(), aid))
+            self.assertEqual(repair()["status"], "already_imported")
+            run.assert_not_called()
+            (self.baseline / "damage").write_bytes(b"changed original Program")
+            damaged = engine.tree_digest(self.baseline)
+            self.assertEqual(repair()["status"], "repaired")
+            saved = self.workspace.select()
+            self.assertEqual(saved["active_analysis"], aid)
+            self.assertEqual(saved["engine_baseline_job_id"], self.producer)
+            self.assertEqual(saved["previous_program_sha256"], [old_digest])
+            self.assertEqual(engine.import_program_path(self.workspace, saved), self.source)
+            self.assertEqual(engine.tree_digest(self.baseline), damaged)
+            self.assertEqual(repair()["status"], "already_imported")
+            run.assert_called_once()
+
     def test_incomplete_worker_program_does_not_prepare_an_import(self):
         def worker(*args, **kwargs):
             result = self.worker(*args, **kwargs)

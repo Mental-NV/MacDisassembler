@@ -15,9 +15,9 @@ from . import __version__, SCHEMA_VERSION
 from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
-from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, analysis_program_history, atomic, atomic_chunks,
+from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
-                      validate_snapshot_functions, write_json)
+                      program_history, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
@@ -108,6 +108,7 @@ def parser():
     s=sub.add_parser('project');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('create');s.add_argument('path');common(s)
     s=sub.add_parser('import');s.add_argument('input');s.add_argument('--project',required=True);s.add_argument('--arch',choices=('arm64','x86_64','all'));common(s);budgets(s)
+    s.add_argument('--repair',action='store_true',help='Rebuild an unavailable Program for an exact committed import')
     s.add_argument('--include-images',action='append',metavar='PATH|all',
                    help='Include an exact bundle-relative executable path in addition to the main image')
     s=sub.add_parser('analyze');project(s);s.add_argument('--profile',choices=tuple(engine.ANALYSIS_PROFILES),default='baseline',help='select baseline, binary-derived parameter inference, or deep analysis with additional address-table discovery');common(s);budgets(s)
@@ -391,7 +392,8 @@ def normalize(raw, image, deps, manifest):
             f['thunk_target'] = dict(target,address=location(entry),function_id=entries.get(entry),
                                      origin='ghidra_immediate_thunk_target')
     functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['engine_entry'],f['function_id']))
-    value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in ('active_analysis','imported','import_dependencies')},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','Pseudocode spans cover available token addresses within the function body.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
+    image_state = {'active_analysis','imported','import_dependencies','engine_baseline_job_id','previous_program_sha256'}
+    value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in image_state},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','Pseudocode spans cover available token addresses within the function body.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
     if selected_profile['name'] == 'deep':
         value['limitations'].append('Address-table references are inferred from binary evidence and do not establish indirect control-flow targets.')
     return redact(body_ownership.snapshot_view(value,ownership))
@@ -788,8 +790,8 @@ def analyze_image(project, image, args, deps, command, *, resumed_from=None, man
     if manual_plan is not None:
         options['manual_request'] = manual_plan
     edit_identity = manual_boundaries.request_identity(manual_plan) if manual_plan is not None else None
-    baseline = project.path/'engine'/image['image_id']
-    if (baseline.is_symlink() or not baseline.is_dir()
+    baseline = engine.import_program_path(project,image)
+    if (baseline.parent.is_symlink() or baseline.is_symlink() or not baseline.is_dir()
             or engine.tree_digest(baseline) != image['engine_baseline_sha256']):
         raise Error('baseline_integrity','Saved import Program DB changed; create a fresh project')
     raw,job=engine.run(project,image,'analyze',args,deps,boundary_request=boundary_request,
@@ -851,7 +853,7 @@ def save_analysis_record(db, project, image_id, aid, record):
     previous = json_object(existing[1], 'snapshot_record', 'Invalid saved analysis record')
     if existing[0] != image_id or previous.get('snapshot_sha256') != record['snapshot_sha256']:
         raise Error('snapshot_record', 'Saved analysis record differs from the regenerated snapshot')
-    history = analysis_program_history(previous)
+    history = program_history(previous,'analysis_program_sha256')
     try:
         engine.analyzed_program(project,previous)
     except Error:
@@ -862,7 +864,7 @@ def save_analysis_record(db, project, image_id, aid, record):
             history.append(old_digest)
         if history:
             record['previous_program_sha256'] = history
-        analysis_program_history(record)
+        program_history(record,'analysis_program_sha256')
         db.execute('UPDATE analyses SET payload=? WHERE id=?',(canonical(record).decode(),aid))
 
 
@@ -936,8 +938,8 @@ def resume_focused(args, project, command, record, request):
             or record.get('source_analysis_id') is not None or record.get('selected_entry') != entry):
         raise Error('job_resume_inputs','The recorded focused query belongs to different inputs',8)
     image = project.select(image_id)
-    baseline = image.get('engine_baseline_sha256')
-    if not image['imported'] or not is_digest(baseline):
+    baseline = request.get('source_program_sha256')
+    if not image['imported'] or not jobs.matches_program(image,baseline,'engine_baseline_sha256'):
         raise Error('job_resume_inputs','The committed import identity is unavailable',8)
     extent, payload = focused.select(project,image,entry)
     proof = dict(extent, program_sha256=baseline)
@@ -948,6 +950,8 @@ def resume_focused(args, project, command, record, request):
     if reused:
         focused.verify_instructions(extent,payload,response['data'])
     else:
+        if baseline != image['engine_baseline_sha256']:
+            raise Error('baseline_integrity','The original import Program is unavailable for this unfinished query')
         replay,deps = replay_worker_request(args,project,record)
         if replay.max_functions != 1:
             raise Error('job_manifest','A recorded focused query requires max_functions=1')
@@ -997,7 +1001,7 @@ def resume_query(args, project, command, record, request):
         signature_plan = policy.request(metadata.verified_slice(project,image),image,function,functions)
         recovery = engine.signature_request(signature_plan)
     program_digest = request.get('source_program_sha256')
-    if not jobs.matches_query_program(source, program_digest):
+    if not jobs.matches_program(source, program_digest, 'analysis_program_sha256'):
         raise Error('job_resume_inputs','The fresh query Program does not belong to the saved analysis',8)
     request_source = dict(source,analysis_program_sha256=program_digest)
     if (jobs.query_request(project,image,function,request_source,revision,hints,signature_recovery=recovery,
@@ -1046,7 +1050,9 @@ def resume_analysis(args, project, command, record, request):
         manual_plan = boundary_edit_request(project,image,at_revision=cutoff)
         edit_identity = manual_boundaries.request_identity(manual_plan)
     current = jobs.analysis_request(project,image,recovery,edit_identity)
-    if dict(request,previous_analysis_id=image['active_analysis']) != current:
+    digest = request.get('import_baseline_sha256')
+    if (not jobs.matches_program(image,digest,'engine_baseline_sha256')
+            or dict(request,previous_analysis_id=image['active_analysis']) != dict(current,import_baseline_sha256=digest)):
         raise Error('job_resume_inputs','The recorded immutable inputs differ from the workspace',8)
     if record.get('boundary_recovery') != recovery or record.get('manual_boundaries') != edit_identity:
         raise Error('job_resume_policy','The recorded boundary recovery policy differs from the request',3)
@@ -1071,6 +1077,7 @@ def resume_analysis(args, project, command, record, request):
 
 def resume_import(args, project, command, record, request):
     image, original = import_state.restore_request(project,request,record.get('image_id'))
+    repair = request.get('repair_baseline')
     receipt = jobs.publication(project,args.job_id,'import')
     if receipt:
         if receipt['resumed_from'] != args.job_id:
@@ -1079,22 +1086,51 @@ def resume_import(args, project, command, record, request):
             raise Error('import_publication','The import receipt refers to a different image')
         job_id = receipt['job_id']
     else:
-        if any(item['imported'] and item['image_id'] == image['image_id'] for item in project.images()):
+        if repair is not None:
+            image = committed_repair_image(project,image,repair)
+        elif any(item['imported'] and item['image_id'] == image['image_id'] for item in project.images()):
             raise Error('job_resume_conflict','The slice was imported by a different attempt',8)
         jobs.verify_engine_writer_stopped(project)
         replay,deps = replay_worker_request(args,project,record)
-        job_id = import_state.import_slice(project,image,original,replay,deps,resumed_from=args.job_id)
+        job_id = import_state.import_slice(project,image,original,replay,deps,resumed_from=args.job_id,repair=repair)
     data = {'image_id':image['image_id'],'arch':image['arch'],'job_id':job_id,
             'resumed_from':args.job_id,'reused_restart':bool(receipt)}
     if 'bundle_image' in image:
         data['bundle_image'] = image['bundle_image']
+    if repair is not None:
+        data['status'] = 'repaired'
     return envelope(command,data,cov=coverage('recorded slice import'))
+
+
+def committed_repair_image(project, image, repair):
+    current = project.select(image['image_id'])
+    if (not current['imported'] or import_state.baseline_binding(current) != repair
+            or import_state.request_for(project,current,repair) != import_state.request_for(project,image,repair)):
+        raise Error('import_baseline_conflict','The committed import differs from the recorded repair',8)
+    return current
+
+
+def repair_import(project, image, committed, original, args, deps):
+    if committed is None or any(committed[key] != image[key] for key in ('arch','sha256','artifact_sha256')):
+        raise Error('import_repair_input','Repair requires the exact artifact and slice of a committed import',3)
+    repair = import_state.baseline_binding(committed)
+    if not is_digest(repair['sha256']):
+        raise Error('baseline_integrity','The committed import has no valid Program digest')
+    try:
+        source = engine.import_program_path(project,committed)
+        healthy = engine.saved_program_digest(source,'baseline_integrity') == repair['sha256']
+    except Error:
+        healthy = False
+    if healthy:
+        return {'status':'already_imported'}
+    job_id = import_state.import_slice(project,committed,original,args,deps,repair=repair)
+    return {'status':'repaired','job_id':job_id}
 
 
 def import_inputs(args, project, deps):
     bundled = bool(args.include_images)
     targets = bundle.select_images(args.input,args.include_images) if bundled else [(args.input,None,None)]
-    existing = {row['image_id'] for row in project.images() if row['imported']}
+    existing = {row['image_id']:row for row in project.images() if row['imported']}
     scope = 'explicitly selected bundle slices' if bundled else 'explicitly selected slices'
     result = []
     size_total = 0
@@ -1130,11 +1166,14 @@ def import_inputs(args, project, deps):
                 if bundled:
                     origin = {'relative_path':relative,'main_executable':index==0}
                     image['bundle_image'] = row['bundle_image'] = origin
-                if failed_slice in existing:
+                if args.repair:
+                    row.update(repair_import(project,image,existing.get(failed_slice),original,args,deps))
+                    existing[failed_slice] = project.select(failed_slice)
+                elif failed_slice in existing:
                     row['status'] = 'already_imported'
                 else:
                     row.update(status='imported',job_id=import_state.import_slice(project,image,original,args,deps))
-                    existing.add(failed_slice)
+                    existing[failed_slice] = image
                 result.append(row)
     except Error as error:
         if not result:

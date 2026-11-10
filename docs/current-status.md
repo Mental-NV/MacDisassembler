@@ -516,6 +516,14 @@ collections exceed documented bounds despite successful pseudocode output.
   recomputed journal digest were rejected. A legacy-format journal
   required its valid bridge report. Both imports replayed their receipts
   and completed full headless analysis.
+- [x] Recover a missing or changed import Program with explicit
+  [`import --repair`](cli.md#implemented-commands). The owned Calendar
+  repair used the exact staged artifact. An interrupted receipt commit
+  left the previous binding active, and retry promoted the staged
+  replacement without another worker. The cached analysis and older
+  focused receipt and handoff replayed. The replacement supported focused
+  decompilation, full analysis and a fresh query. An unfinished focused
+  query still required its original digest.
 - [x] Verify [workspace manifest error handling](cli.md#envelopes-errors-and-explicit-omissions)
   and a byte-identical export from an earlier schema 1.0 workspace.
 - [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)

@@ -175,6 +175,15 @@ def analyzed_program(project, record):
     return source
 
 
+def import_program_path(project, image):
+    provider = image.get('engine_baseline_job_id')
+    if provider is None:
+        return project.path/'engine'/image['image_id']
+    if not isinstance(provider, str) or not jobs.JOB_ID.fullmatch(provider):
+        raise Error('baseline_integrity', 'Invalid saved import Program provider')
+    return project.path/'jobs'/provider/'program'
+
+
 def copy_program(source, destination, expected_digest, integrity_error):
     if source.is_symlink():
         raise Error('analysis_program_integrity', 'Saved Program directory is a symbolic link')
@@ -520,9 +529,9 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                 imported_engine.get('ghidra_tree_sha256') != deps['ghidra_tree_sha256']):
             raise Error('focused_import_engine', 'Focused query requires a committed import from the selected Ghidra', 4)
         proof, payload = focused.select(project, image, entry)
-        source = project.path/'engine'/image['image_id']
+        source = import_program_path(project,image)
         source_digest = image.get('engine_baseline_sha256')
-        if (not source_digest or source.is_symlink() or not source.is_dir()
+        if (not source_digest or source.parent.is_symlink() or source.is_symlink() or not source.is_dir()
                 or tree_digest(source) != source_digest):
             raise Error('baseline_integrity', 'Saved import Program is missing or differs from its digest', 4)
         proof = dict(proof, program_sha256=source_digest)
@@ -545,7 +554,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         source_digest = active['analysis_program_sha256']
     elif mode == 'analyze':
         # Fresh analysis starts from the saved no-analysis import.
-        source = project.path/'engine'/image['image_id']
+        source = import_program_path(project,image)
         source_digest = image.get('engine_baseline_sha256')
         if not is_digest(source_digest):
             raise Error('baseline_integrity', 'Saved import Program has no valid recorded digest')

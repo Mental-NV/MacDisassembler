@@ -41,11 +41,11 @@ def is_digest(value):
     return isinstance(value, str) and SHA256.fullmatch(value) is not None
 
 
-def analysis_program_history(record):
+def program_history(record, current_key):
     history = record.get('previous_program_sha256', [])
     if (not isinstance(history, list) or len(history) > 4096 or not all(is_digest(item) for item in history)
-            or len(set(history)) != len(history) or record.get('analysis_program_sha256') in history):
-        raise Error('snapshot_record', 'Invalid saved analysis Program history')
+            or len(set(history)) != len(history) or record.get(current_key) in history):
+        raise Error('snapshot_record', 'Invalid saved Program history')
     return history
 
 
@@ -293,6 +293,10 @@ class Project:
                         or type(imported) is not int or imported not in (0, 1)
                         or (aid is not None and not is_digest(aid))):
                     raise Error('workspace_image', 'Image metadata or analysis identity disagrees with the workspace index')
+                provider = image.get('engine_baseline_job_id')
+                if provider is not None and (not isinstance(provider, str) or not re.fullmatch(r'[0-9a-f]{32}', provider)):
+                    raise Error('workspace_image', 'Invalid import Program provider in the workspace index')
+                program_history(image, 'engine_baseline_sha256')
                 images.append(dict(image, imported=bool(imported), active_analysis=aid))
             return images
 
@@ -315,7 +319,7 @@ class Project:
         record = json_object(row[0], 'snapshot_record', 'Invalid saved analysis record in the workspace index')
         if not is_digest(record.get('snapshot_sha256')):
             raise Error('snapshot_record', 'Saved analysis record has no valid snapshot digest')
-        analysis_program_history(record)
+        program_history(record, 'analysis_program_sha256')
         data = read_regular(self.path/'snapshots'/(aid+'.json'), MAX_SNAPSHOT_BYTES)
         if hashlib.sha256(data).hexdigest() != record['snapshot_sha256']:
             raise Error('snapshot_integrity', 'Snapshot digest mismatch')

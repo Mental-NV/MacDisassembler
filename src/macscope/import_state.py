@@ -8,7 +8,7 @@ import sqlite3
 from . import engine, engine_checks, jobs
 from .errors import Error
 from .macho import inspect_bytes, read_regular
-from .storage import atomic, canonical, strict_json, write_json
+from .storage import atomic, canonical, identity, is_digest, json_object, program_history, strict_json, write_json
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -16,8 +16,12 @@ LOADER_FIELDS = ("executable_format", "language_id", "compiler_spec_id", "execut
 JOURNAL_SCHEMA = "macscope-import-journal/1"
 
 
-def request_for(project, image):
-    return {
+def baseline_binding(image):
+    return {"sha256": image.get("engine_baseline_sha256"), "provider": image.get("engine_baseline_job_id")}
+
+
+def request_for(project, image, repair=None):
+    request = {
         "schema": jobs.IMPORT_REQUEST,
         "project_id": project.project_id,
         "image_id": image["image_id"],
@@ -26,6 +30,9 @@ def request_for(project, image):
         "input_name": image["input_name"],
         "bundle_image": image.get("bundle_image"),
     }
+    if repair is not None:
+        request["repair_baseline"] = repair
+    return request
 
 
 def restore_request(project, request, image_id):
@@ -57,7 +64,13 @@ def restore_request(project, request, image_id):
         raise Error("unsupported_arch", "arm64e is available for data-only inspection", 3)
     if origin is not None:
         image["bundle_image"] = origin
-    if request_for(project, image) != request:
+    repair = request.get("repair_baseline")
+    if "repair_baseline" in request:
+        if (not isinstance(repair, dict) or repair.keys() != {"sha256", "provider"}
+                or not is_digest(repair["sha256"]) or (repair["provider"] is not None
+                    and (not isinstance(repair["provider"], str) or not jobs.JOB_ID.fullmatch(repair["provider"])))):
+            raise Error("job_manifest", "Invalid recorded import repair binding")
+    if request_for(project, image, repair) != request:
         raise Error("job_resume_inputs", "Immutable slice metadata differs from the recorded import", 8)
     return image, original
 
@@ -108,17 +121,18 @@ def verify_prepared_job(project, image, journal):
 
 def publish(project, image, journal, destination, resumed_from):
     job_id = journal["job_id"]
+    repair = journal["request"].get("repair_baseline")
     source = project.path / "jobs" / job_id / "program"
-    if destination.is_symlink() or source.is_symlink():
+    if (repair is None and destination.is_symlink()) or source.is_symlink():
         raise Error("import_baseline_conflict", "A prepared import Program is a symbolic link", 8)
-    if destination.exists() and source.exists():
+    if repair is None and destination.exists() and source.exists():
         raise Error("import_baseline_conflict", "Both staged and promoted import Programs exist", 8)
-    baseline = destination if destination.exists() else source
+    baseline = destination if repair is None and destination.exists() else source
     digest = journal["program_sha256"]
     if engine.saved_program_digest(baseline, "baseline_integrity") != digest:
         raise Error("baseline_integrity", "The prepared import Program differs from its recorded digest")
     try:
-        if baseline == source:
+        if repair is None and baseline == source:
             os.rename(source, destination)
         for parent in (source.parent, destination.parent):
             fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -134,12 +148,15 @@ def publish(project, image, journal, destination, resumed_from):
         with project.db(False) as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(jobs.PUBLISH_IMPORT)
-            changed = db.execute(
-                "INSERT INTO images(id,arch,metadata,imported) VALUES(?,?,?,1) "
-                "ON CONFLICT(id) DO UPDATE SET arch=excluded.arch, metadata=excluded.metadata, imported=1 "
-                "WHERE images.imported=0 AND images.active_analysis IS NULL",
-                (image["image_id"], image["arch"], canonical(image).decode()),
-            )
+            if repair is None:
+                changed = db.execute(
+                    "INSERT INTO images(id,arch,metadata,imported) VALUES(?,?,?,1) "
+                    "ON CONFLICT(id) DO UPDATE SET arch=excluded.arch, metadata=excluded.metadata, imported=1 "
+                    "WHERE images.imported=0 AND images.active_analysis IS NULL",
+                    (image["image_id"], image["arch"], canonical(image).decode()),
+                )
+            else:
+                changed = publish_repair(db, image, repair, job_id)
             if changed.rowcount != 1:
                 raise Error("import_publication", "The image already has a committed import", 8)
             db.execute("INSERT INTO import_publications(job_id,image_id,resumed_from) VALUES(?,?,?)",
@@ -149,12 +166,34 @@ def publish(project, image, journal, destination, resumed_from):
     return job_id
 
 
-def import_slice(project, image, original, args, deps, *, resumed_from=None):
+def publish_repair(db, image, repair, job_id):
+    row = db.execute("SELECT metadata FROM images WHERE id=? AND imported=1", (image["image_id"],)).fetchone()
+    if row is None:
+        raise Error("import_baseline_conflict", "The committed import is unavailable for repair", 8)
+    current = json_object(row[0], "workspace_image", "Invalid image metadata in the workspace index")
+    if (baseline_binding(current) != repair or any(current.get(key) != image.get(key)
+            for key in ("image_id", "arch", "sha256", "artifact_sha256", "input_name", "bundle_image"))):
+        raise Error("import_baseline_conflict", "The committed import changed before repair", 8)
+    digest = image["engine_baseline_sha256"]
+    history = [value for value in program_history(current, "engine_baseline_sha256") if value != digest]
+    if repair["sha256"] != digest:
+        history.append(repair["sha256"])
+    current.update(engine_baseline_job_id=job_id, engine_baseline_sha256=digest,
+                   loader_evidence=image["loader_evidence"], import_dependencies=image["import_dependencies"])
+    if history:
+        current["previous_program_sha256"] = history
+    else:
+        current.pop("previous_program_sha256", None)
+    program_history(current, "engine_baseline_sha256")
+    return db.execute("UPDATE images SET metadata=? WHERE id=?", (canonical(current).decode(), image["image_id"]))
+
+
+def import_slice(project, image, original, args, deps, *, resumed_from=None, repair=None):
     """Stage one verified slice, or finish an already prepared publication."""
     stage_inputs(project, image, original)
-    request = request_for(project, image)
+    request = request_for(project, image, repair)
     destination = project.path / "engine" / image["image_id"]
-    journal_path = destination.with_suffix(".import.json")
+    journal_path = destination.with_suffix(".import.json" if repair is None else f".{identity(repair)}.repair.json")
     if journal_path.exists() or journal_path.is_symlink():
         try:
             journal = strict_json(read_regular(journal_path, 1024 * 1024))
@@ -184,7 +223,7 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
         with jobs.result_publication("import", job_id, origin):
             verify_prepared_job(project, image, journal)
             return publish(project, image, journal, destination, origin)
-    if destination.exists() or destination.is_symlink():
+    if repair is None and (destination.exists() or destination.is_symlink()):
         raise Error("engine_project_exists", "An import baseline exists without a verified publication journal", 8)
     raw, job = engine.run(project, image, "import", args, deps, import_request=request, resumed_from=resumed_from)
     with jobs.result_publication("import", job["job_id"], resumed_from):

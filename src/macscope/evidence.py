@@ -96,9 +96,10 @@ def open_image(project, image, pin):
             pin["arch"], pin["slice_sha256"], pin["artifact_sha256"]):
         raise Error("evidence_image_mismatch", "Pinned architecture or input digest differs from the workspace")
     if IMPORT_PIN in pin:
-        if image.get("engine_baseline_sha256") != pin[IMPORT_PIN]:
+        if not jobs.matches_program(image, pin[IMPORT_PIN], "engine_baseline_sha256"):
             raise Error("evidence_import_mismatch", "Pinned Program digest differs from the committed import", 3)
-        return {"image":image, "functions":[], "engine":{"coverage":{"functions":{"status":"partial"}}}}, None
+        selected = dict(image, engine_baseline_sha256=pin[IMPORT_PIN])
+        return {"image":selected, "functions":[], "engine":{"coverage":{"functions":{"status":"partial"}}}}, None
     snapshot, source = project.snapshot(dict(image, active_analysis=pin["analysis_id"]))
     return flow_evidence.snapshot_view(snapshot), source
 
@@ -225,7 +226,7 @@ def query_view(project, job_id, pin, source, function):
                 "artifact_sha256": pin["artifact_sha256"], "function_id": function["function_id"],
                 "entry_va": function["entry_va"]}
     if (record.get("mode") != "query" or request is None
-            or not jobs.matches_query_program(source, request.get("source_program_sha256"))
+            or not jobs.matches_program(source, request.get("source_program_sha256"), "analysis_program_sha256")
             or any(request.get(key) != value for key, value in expected.items())):
         raise Error("evidence_query_mismatch", "Recorded query does not belong to the selected function and analysis", 3)
     result = jobs.query_receipt(project, job_id, request)

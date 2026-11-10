@@ -345,8 +345,8 @@ def analysis_request(project, image, recovery=None, manual=None):
     return request
 
 
-def matches_query_program(source, digest):
-    return is_digest(digest) and (digest == source.get('analysis_program_sha256')
+def matches_program(source, digest, current_key):
+    return is_digest(digest) and (digest == source.get(current_key)
                                   or digest in source.get('previous_program_sha256', ()))
 
 

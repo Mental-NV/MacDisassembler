@@ -174,6 +174,23 @@ workspace has multiple images. A function selector accepts one of
 Duplicate names return candidates. Address-based selectors identify
 **function entries**.
 
+To rebuild an unavailable import Program, use `import --repair` with the
+exact committed artifact and slice. The workspace's saved `.artifact`
+file can supply the input. A healthy import still returns
+`already_imported`. A repaired import reports `repaired` and a job ID.
+
+```sh
+macscope import path/to/OwnedCalendar --repair --arch arm64 \
+  --project workspaces/calendar --experimental-trusted-input --json
+```
+
+Repair stages and verifies a new Program in its own job, then commits
+its pointer and receipt together. The previous analysis stays available.
+If the Program digest changes, later analyses use the new digest in their
+identity. Completed focused receipts and their pinned handoffs can still
+replay using the earlier digest. Unfinished queries still require the
+exact Program in their request.
+
 Bridge 1.10.0 records Ghidra labels at each function entry as alternate
 names, with their namespace and symbol source. A label can select the same
 function as its primary name. Entry-label coverage is partial when the
