@@ -349,7 +349,7 @@ class ProfileRunnerTests(unittest.TestCase):
             db.execute("INSERT INTO analyses(id,image_id,payload) VALUES(?,?,?)",
                        (previous, image["image_id"], json.dumps(record)))
         wrong = raw_result("baseline")
-        job = {"limits": {}, "analysis_profile": engine.analysis_profile("parameter-inference")}
+        job = {"job_id": "d" * 32, "limits": {}, "analysis_profile": engine.analysis_profile("parameter-inference")}
         with mock.patch.object(engine, "dependencies", return_value=self.deps), \
              mock.patch.object(engine, "run", return_value=(wrong, job)):
             with self.assertRaises(Error) as caught:

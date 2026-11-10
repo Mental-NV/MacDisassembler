@@ -1,4 +1,5 @@
 """Read job manifests and request cancellation from their live supervisor."""
+from contextlib import contextmanager
 import fcntl
 import json
 import os
@@ -22,6 +23,8 @@ DETAILS = ("analysis_profile", "limits", "startup", "decompiler_timing", "sandbo
 ANALYSIS_REQUEST = "macscope-analysis-request/1"
 IMPORT_REQUEST = "macscope-import-request/1"
 QUERY_REQUEST = "macscope-query-request/1"
+RESTART_REQUESTS = {"analyze": ("analysis_request", ANALYSIS_REQUEST),
+                    "import": ("import_request", IMPORT_REQUEST), "query": ("query_request", QUERY_REQUEST)}
 SIGNATURE_RECOVERY_FIELDS = ("dispatch_return_recovery", "direct_signature_recovery", "scalar_signature_recovery",
                              "callee_parameter_recovery", "forwarded_return_recovery", "switch_table_recovery")
 QUERY_RECEIPT = "macscope-query-receipt/1"
@@ -103,6 +106,34 @@ def load(path):
 def token_for(record):
     token = record.get("ownership_token")
     return token if isinstance(token, str) and JOB_ID.fullmatch(token) else None
+
+
+def restart_request(record):
+    mode = record.get("mode")
+    spec = RESTART_REQUESTS.get(mode) if isinstance(mode, str) else None
+    if spec is None:
+        return None
+    key, schema = spec
+    request = record.get(key)
+    return request if isinstance(request, dict) and request.get("schema") == schema else None
+
+
+@contextmanager
+def result_publication(mode, job_id, resumed_from=None):
+    location = {"job_id": resumed_from or job_id}
+    if resumed_from is not None and resumed_from != job_id:
+        location["attempt_job_id"] = job_id
+    try:
+        yield
+    except Error as error:
+        if error.partial is None:
+            error.partial = location
+        elif isinstance(error.partial, dict):
+            error.partial = {**error.partial, **location}
+        raise
+    except OSError as error:
+        raise Error(mode + "_publication", f"Could not publish the {mode} result", 8,
+                    retryable=True, partial=location) from error
 
 
 def record_for_resume(path, record, *, allow_reboot=False):

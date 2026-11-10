@@ -98,6 +98,7 @@ class QueryResumeTests(TemporaryCase):
         self.assertEqual(self.workspace.select()["active_analysis"], self.latest)
         detail = cli.execute(self.args("jobs", "show", self.prior))
         self.assertEqual(detail["data"]["publication"], {"job_id": self.producer, "analysis_id": self.aid})
+        self.assertEqual(detail["data"]["publication_status"], "published_by_other_attempt")
         path = self.prior_path.with_name("query-result.json")
         receipt = json.loads(path.read_bytes())
         receipt["result"]["data"]["pseudocode"] = "modified"
@@ -105,6 +106,18 @@ class QueryResumeTests(TemporaryCase):
         with patch.object(engine, "run") as run:
             self.error("query_receipt", self.resume)
             run.assert_not_called()
+
+    def test_query_publication_io_failure_keeps_original_retry_id(self):
+        with (
+            patch.object(engine, "dependencies", return_value=self.deps),
+            patch.object(engine, "run", side_effect=self.worker),
+            patch.object(jobs, "atomic", side_effect=OSError("simulated receipt write failure")),
+        ):
+            error = self.error("query_publication", self.resume)
+        self.assertEqual(error.partial, {"job_id": self.prior, "attempt_job_id": self.producer})
+        detail = cli.execute(self.args("jobs", "show", self.producer))["data"]
+        self.assertEqual((detail["status"], detail["publication_status"]), ("complete", "not_published"))
+        self.assertEqual(self.workspace.select()["active_analysis"], self.latest)
 
     def test_unconfirmed_exit_and_changed_hints_refuse_replay(self):
         with patch.object(engine, "run") as run:

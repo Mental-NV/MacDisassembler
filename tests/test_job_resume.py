@@ -74,7 +74,10 @@ class JobResumeTests(TemporaryCase):
             patch.object(engine, "run", side_effect=[failed, succeeded]) as runner,
             patch.object(cli, "normalize", return_value=snapshot),
         ):
-            self.error("analysis_publication", self.resume)
+            failure = self.error("analysis_publication", self.resume)
+            self.assertEqual(failure.partial, {"job_id": self.prior, "attempt_job_id": "b" * 32})
+            pending = cli.execute(self.args("jobs", "show", "b" * 32))["data"]
+            self.assertEqual((pending["status"], pending["publication_status"]), ("complete", "not_published"))
             self.assertIsNone(self.workspace.select()["active_analysis"])
             self.assertIsNone(jobs.publication(self.workspace, self.prior))
             with self.workspace.db(False) as db:
@@ -90,6 +93,8 @@ class JobResumeTests(TemporaryCase):
                 self.assertEqual(engine.worker_limits(replay, replay.max_functions), self.record["limits"])
                 self.assertEqual(call.kwargs["resumed_from"], self.prior)
             self.assertTrue(self.resume()["data"]["reused_restart"])
+            original = cli.execute(self.args("jobs", "show", self.prior))["data"]
+            self.assertEqual(original["publication_status"], "published_by_other_attempt")
             self.assertEqual(runner.call_count, 2)
         self.assertEqual(jobs.publication(self.workspace, self.prior),
                          {"job_id": "c" * 32, "analysis_id": self.output_id})

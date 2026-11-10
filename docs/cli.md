@@ -1017,9 +1017,12 @@ validation report SHA-256 is
 
 `status` and `jobs list` show up to 100 recent worker records.
 `jobs show JOB_ID` reads a particular job and includes its limits and
-engine digests. Live status requires an ownership lock held by the
-supervisor. Without that lock, an earlier running record is reported as
-`unknown_after_disconnect`.
+engine digests. Its worker status and `publication_status` are separate.
+The latter reports `published`, `published_by_other_attempt`, or
+`not_published` using the durable receipt. An older job with no receipt
+or recorded restart request reports `unknown`. Live status requires an
+ownership lock held by the supervisor. Without that lock, an earlier
+running record is reported as `unknown_after_disconnect`.
 
 ```sh
 macscope jobs show JOB_ID --project workspaces/calculator --json
@@ -1051,6 +1054,18 @@ results to restart that slice. The workspace's artifact copy is sufficient
 even if the original input path has disappeared. Other committed slices stay
 available. If Ghidra finished and the import journal was written, the CLI can
 verify the saved Program and finish publishing it without running Ghidra again.
+
+If a result fails to publish after the worker finishes, the error includes
+the restartable `job_id`. A failure during a retry also includes its
+`attempt_job_id` and keeps the original job as the restart target.
+
+In an installed full Ghidra test, a controlled failure committing the
+second slice of an owned arm64 and x86_64 import reported the failed job
+ID and recovered its prepared Program without another worker. Failed
+analysis and fresh query publication preserved the previous snapshot and
+cached result. After successful retries, all three commands reused their
+receipts. The validation report SHA-256 is
+`c5e00a67cb1e9f856ac1c81229db1458245c0608d757f683422d21b924ced9c9`.
 
 For a fresh decompile, the restart opens the original saved Program and
 uses the recorded function, label and accepted type hints, even if

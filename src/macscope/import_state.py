@@ -151,19 +151,22 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None):
         if prior is not None and resumed_from == job_id:
             raise Error("job_resume_conflict", "Resume the original attempt to finish this prepared import", 8,
                         partial={"job_id": prior})
-        return publish(project, image, journal, destination, prior or resumed_from)
+        origin = prior or resumed_from
+        with jobs.result_publication("import", job_id, origin):
+            return publish(project, image, journal, destination, origin)
     if destination.exists() or destination.is_symlink():
         raise Error("engine_project_exists", "An import baseline exists without a verified publication journal", 8)
     raw, job = engine.run(project, image, "import", args, deps, import_request=request, resumed_from=resumed_from)
-    if raw.get("validation", {}).get("headless_analysis_enabled") is not False:
-        raise Error("import_analysis", "Import did not disable autoanalysis", 10)
-    source = project.path / "jobs" / job["job_id"] / "program"
-    checked_path(source, directory=True)
-    journal = {
-        "request": request, "dependencies": deps, "limits": engine.worker_limits(args, args.max_functions),
-        "sandbox_sha256": job["sandbox_sha256"],
-        "job_id": job["job_id"], "resumed_from": resumed_from,
-        "program_sha256": engine.tree_digest(source), "loader_evidence": {k: raw[k] for k in LOADER_FIELDS},
-    }
-    write_json(journal_path, journal)
-    return publish(project, image, journal, destination, resumed_from)
+    with jobs.result_publication("import", job["job_id"], resumed_from):
+        if raw.get("validation", {}).get("headless_analysis_enabled") is not False:
+            raise Error("import_analysis", "Import did not disable autoanalysis", 10)
+        source = project.path / "jobs" / job["job_id"] / "program"
+        checked_path(source, directory=True)
+        journal = {
+            "request": request, "dependencies": deps, "limits": engine.worker_limits(args, args.max_functions),
+            "sandbox_sha256": job["sandbox_sha256"],
+            "job_id": job["job_id"], "resumed_from": resumed_from,
+            "program_sha256": engine.tree_digest(source), "loader_evidence": {k: raw[k] for k in LOADER_FIELDS},
+        }
+        write_json(journal_path, journal)
+        return publish(project, image, journal, destination, resumed_from)

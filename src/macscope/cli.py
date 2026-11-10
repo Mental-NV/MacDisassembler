@@ -450,7 +450,8 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
                         coverage('fresh selected function pseudocode',int(bool(fresh['pseudocode'])),1,
                                  not complete,reason=None if complete else reason),
                         redact(diagnostics))
-    return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
+    with jobs.result_publication('query',job['job_id'],resumed_from):
+        return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
 
 
 def revise_annotation(args, project, command):
@@ -521,14 +522,20 @@ def job_command(args, project, command):
         data = jobs.request_cancel(path,record) if args.action == 'cancel' else jobs.view(path,record,detail=True)
         if args.action == 'show':
             mode = record.get('mode')
-            if mode == 'query' and record.get('query_request'):
-                result = jobs.query_receipt(project,record.get('resumed_from',args.job_id),record['query_request'])
+            request = jobs.restart_request(record)
+            receipt = None
+            if mode == 'query' and request is not None:
+                result = jobs.query_receipt(project,record.get('resumed_from',args.job_id),request)
                 receipt = ({'job_id':result['data']['origin']['job_id'],'analysis_id':result['analysis_id']}
                            if result else None)
-            else:
+            elif mode in ('analyze','import'):
                 receipt = jobs.publication(project,args.job_id,mode)
             if receipt:
                 data['publication'] = receipt
+                data['publication_status'] = ('published' if receipt['job_id'] == args.job_id
+                                              else 'published_by_other_attempt')
+            else:
+                data['publication_status'] = 'not_published' if request is not None else 'unknown'
         return envelope(command,redact(data))
     rows, gaps = jobs.recent(project)
     rows, cov = page(rows,args,identity(rows),project.project_id,{},order='recent-worker-jobs/v1')
@@ -638,6 +645,11 @@ def analyze_image(project, image, args, deps, command, *, resumed_from=None):
         raise Error('baseline_integrity','Saved import Program DB changed; create a fresh project')
     raw,job=engine.run(project,image,'analyze',args,deps,boundary_request=boundary_request,
                        analysis_request=jobs.analysis_request(project,image,recovery),resumed_from=resumed_from)
+    with jobs.result_publication('analysis',job['job_id'],resumed_from):
+        return publish_analysis(project,image,deps,command,raw,job,resumed_from)
+
+
+def publish_analysis(project, image, deps, command, raw, job, resumed_from):
     normalized=normalize(raw,image,deps,job)
     aid=normalized['analysis_id']
     out=project.path/'snapshots'/(aid+'.json')
@@ -674,14 +686,8 @@ def resume_job(args, project, command):
         path,record = jobs.get(project,args.job_id)
         record = jobs.record_for_resume(path,record)
         mode = record.get('mode')
-        schemas = {'analyze':('analysis_request',jobs.ANALYSIS_REQUEST),
-                   'import':('import_request',jobs.IMPORT_REQUEST),
-                   'query':('query_request',jobs.QUERY_REQUEST)}
-        if not isinstance(mode,str) or mode not in schemas:
-            raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
-        key,schema = schemas[mode]
-        request = record.get(key)
-        if not isinstance(request,dict) or request.get('schema') != schema:
+        request = jobs.restart_request(record)
+        if request is None:
             raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
         if 'resumed_from' in record:
             receipt = jobs.publication(project,args.job_id,mode) if mode != 'query' else None

@@ -308,6 +308,10 @@ collections exceed documented bounds despite successful pseudocode output.
   A live owned Ghidra analysis blocked new import, analysis and restart
   commands. Cached export and fresh read-only decompilation still worked.
   All three writer commands completed after the worker group exited.
+- [x] Report restart IDs after [result publication failures](cli.md#project-and-job-status).
+  An owned universal import resumed its prepared second slice without
+  another Ghidra worker. Analysis and fresh query failures preserved the
+  previous results. All three retries reused their receipts on repeat.
 - [x] Verify [workspace manifest error handling](cli.md#envelopes-errors-and-explicit-omissions)
   and a byte-identical export from an earlier schema 1.0 workspace.
 - [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)

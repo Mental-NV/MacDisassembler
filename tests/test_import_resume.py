@@ -59,7 +59,8 @@ class ImportResumeTests(TemporaryCase):
             patch.object(engine, "run", side_effect=self.worker) as run,
         ):
             with patch.object(import_state.os, "rename", side_effect=OSError("simulated interrupted promotion")):
-                self.error("import_publication", self.resume)
+                failure = self.error("import_publication", self.resume)
+                self.assertEqual(failure.partial, {"job_id": self.prior, "attempt_job_id": self.producer})
             self.assertTrue(self.source.is_dir())
             self.assertTrue(self.baseline.with_suffix(".import.json").is_file())
             self.assertEqual(self.workspace.images(), [])
@@ -67,7 +68,8 @@ class ImportResumeTests(TemporaryCase):
                 db.execute(jobs.PUBLISH_IMPORT)
                 db.execute("CREATE TRIGGER refuse_receipt BEFORE INSERT ON import_publications "
                            "BEGIN SELECT RAISE(ABORT, 'simulated interruption'); END")
-            self.error("import_publication", self.resume)
+            failure = self.error("import_publication", self.resume)
+            self.assertEqual(failure.partial, {"job_id": self.prior, "attempt_job_id": self.producer})
             self.assertTrue(self.baseline.is_dir())
             self.assertFalse(self.source.exists())
             self.assertEqual(self.workspace.images(), [])
