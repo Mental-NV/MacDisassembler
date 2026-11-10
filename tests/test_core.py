@@ -28,7 +28,7 @@ import zipfile
 # Direct invocation and unittest discovery both work without installing a wheel.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from macscope import SCHEMA_VERSION
-from macscope import body_ownership, cli, doctor_probe, engine, engine_checks, jobs, macho, schema, search, storage
+from macscope import body_ownership, cli, doctor_probe, engine, engine_checks, evidence, jobs, macho, schema, search, storage
 from macscope.errors import Error
 
 
@@ -826,6 +826,47 @@ class CliTests(TemporaryCase):
         payload = stdout.buffer.getvalue()
         stdout.close()
         return code, payload, stderr.getvalue()
+
+    def test_evidence_reads_pinned_analysis_and_reports_every_lead(self):
+        image = self.snapshot['image']
+        pin = {'image_id':image['image_id'], 'arch':image['arch'], 'artifact_sha256':image['artifact_sha256'],
+               'slice_sha256':image['sha256'], 'analysis_id':self.snapshot['analysis_id']}
+        leads = [dict(id=key, image_id=image['image_id'], kind=kind, value=value) for key, kind, value in (
+            ('chosen','address','0x100000020'), ('ambiguous','name','duplicate'), ('missing','address','0x1'))]
+        path = self.root/'leads.json'
+        manifest = {'schema':evidence.LEADS_SCHEMA, 'images':[pin], 'leads':leads}
+        path.write_bytes(storage.canonical(manifest))
+        synthetic_snapshot(self.workspace,'e'*64)
+        with mock.patch.object(engine,'dependencies',side_effect=AssertionError('unexpected worker probe')):
+            report = cli.execute(self.args('evidence','--leads',str(path)))
+        selected, ambiguous, missing = report['data']['leads']
+        self.assertEqual(report['status'],'partial')
+        self.assertEqual(report['data']['images'][0]['analysis_id'],self.snapshot['analysis_id'])
+        self.assertEqual(selected['function']['function_id'],'function-2')
+        self.assertIsNone(ambiguous['function'])
+        self.assertEqual(ambiguous['reason'],'lead_ambiguous')
+        self.assertEqual(missing['reason'],'lead_not_found')
+        self.error('output_input_conflict',cli.execute,
+                   self.args('evidence','--leads',str(path),'--output',str(path),'--force'))
+        self.assertEqual(path.read_bytes(),storage.canonical(manifest))
+        pin['slice_sha256'] = 'f'*64
+        path.write_bytes(storage.canonical(manifest))
+        rejected = cli.execute(self.args('evidence','--leads',str(path)))['data']
+        self.assertTrue(all(row['reason']=='evidence_image_mismatch' for row in rejected['leads']))
+
+    def test_evidence_string_does_not_assign_overlapping_reference_owner(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        first, second = snapshot['functions'][:2]
+        site = first['entry_va']
+        second['body_ranges'].append(first['body_ranges'][0])
+        ref = {'from':site,'to':'0x100000050','type':'READ'}
+        first['xrefs_from_sample'] = [ref]
+        candidates, matches, refs, gaps = evidence.string_selection(snapshot,'reference+anchor')
+        self.assertEqual(candidates,[])
+        self.assertEqual(len(matches),1)
+        self.assertEqual(len(refs),1)
+        self.assertNotIn('owner_function_id',refs[0])
+        self.assertIn('ambiguous_reference_owner',gaps)
 
     def test_typed_function_selectors_share_entry_identity_and_annotations(self):
         selected = dict(self.workspace.select(), loader={'preferred_image_base': '0x100000000'},

@@ -1429,6 +1429,78 @@ saved JSON evidence, every function link resolved locally, and annotation
 markup remained literal text. The validation report SHA-256 is
 `1eb844748432ae3e8e8a5971aa9b9e6327ebf700ab75bbe070c5f97599efeba3`.
 
+### Selected evidence handoff
+
+`evidence` exports a reviewer-selected list from committed analyses. It
+can reopen a pinned analysis after another analysis becomes active. It
+reads saved evidence without starting Ghidra or a JDK.
+
+```sh
+macscope evidence --project workspaces/calendar --leads calendar-leads.json \
+  --output private-calendar-evidence.json --json
+```
+
+The lead file uses schema `macscope-evidence-leads/1`. Copy the image ID,
+architecture, artifact SHA-256 and slice `sha256` from `headers`. Use the
+exact `analysis_id` from `analyze`, `status` or an existing export. Replace
+the angle-bracket placeholders in this example with those values.
+
+```json
+{
+  "schema": "macscope-evidence-leads/1",
+  "images": [{
+    "image_id": "<image ID>",
+    "arch": "arm64",
+    "artifact_sha256": "<artifact SHA-256>",
+    "slice_sha256": "<slice SHA-256>",
+    "analysis_id": "<committed analysis ID>"
+  }],
+  "leads": [{
+    "id": "calendar-handler",
+    "image_id": "<same image ID>",
+    "kind": "objc_selector",
+    "value": "calendarDayDuration:",
+    "class_name": "OwnedCalendarController"
+  }]
+}
+```
+
+Each lead has a unique ID and one selector. Use `address` for an unslid
+entry VA, `function_id` for an exact function ID, or `name` for an exact
+saved engine label. `objc_selector` matches a declaration in the verified
+workspace slice and accepts an optional `class_name`. `string` finds a
+case-insensitive literal in saved strings and uses recorded references
+from saved instruction addresses. A known shared body prevents ownership
+from being assigned at that reference site. An ambiguous lead returns its
+observed candidates for review. Incomplete coverage is reported even when
+one observed function can be selected.
+
+Add `query_job` with the fresh result's `data.origin.job_id` to include an
+existing receipt for the same image, analysis and function. The receipt
+appears alongside the stock pseudocode. If it is missing or belongs to a
+different function, the report keeps the saved function and identifies
+the receipt error.
+
+The handoff records hashes, Ghidra provenance, instructions, linked
+pseudocode, incoming and outgoing references, and a one-hop call trace
+within the selected image.
+Computed dispatch stays unresolved where the engine has no proven target.
+Keep runtime observations and `resources list` evidence alongside the
+handoff. The command supports up to four images and 16 leads, with 64
+references per direction, 32 call edges, and 512 KiB of compact JSON per
+lead. A missing, ambiguous or partial lead yields exit 6 with a row for
+every requested lead. `--output` writes an owner-only file and protects
+the lead manifest and managed workspace files from replacement.
+
+The installed CLI verified eight leads across both images of the
+[owned Calendar fixture](#owned-calendar-evidence-rehearsal). Four function
+records matched the independent rehearsal, and a string reference led to
+the app entry. The export retained an unresolved dispatch, a saved
+recovery receipt and typed outcomes for an ambiguous name, a missing
+address and a mismatched receipt. The pinned report matched after the
+active framework analysis changed. The report SHA-256 is
+`5b316bcebf6ead17064bd712b168ef5302f8dadeb7806268ead28ca737120b1d`.
+
 ## Comparing committed exports
 
 ```sh

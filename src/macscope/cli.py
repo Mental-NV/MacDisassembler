@@ -18,7 +18,7 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, identity, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, string_evidence, terminal
+from . import body_ownership, engine_checks, evidence, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -236,6 +236,8 @@ def parser():
             s.add_argument('--parameters',action='store_true',help='Clear the parameter list hint')
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl','html'))
     s.add_argument('--include-annotations',action='store_true')
+    s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed analyses')
+    common(s,('json',));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left committed JSON export')
     s.add_argument('right',help='Right committed JSON export')
@@ -263,7 +265,7 @@ def output_relative_to(target, protected):
 
 
 def protect_output(args, target):
-    inputs = [getattr(args, name, None) for name in ('input', 'left', 'right')]
+    inputs = [getattr(args, name, None) for name in ('input', 'left', 'right', 'leads')]
     if args.command in ('bundle','resources') or (args.command == 'annotations' and args.action == 'import'):
         inputs.append(args.path)
     for source in inputs:
@@ -1397,6 +1399,13 @@ def execute_command(a, address_selection=None):
     if a.command=='fixups' and a.input is not None:
         return file_fixups(a)
     p=Project(a.project)
+    if a.command == 'evidence':
+        report = redact(evidence.export(p,evidence.load(a.leads)))
+        count = len(report['leads'])
+        partial = any(row['status'] != 'resolved' for row in report['leads'])
+        return envelope(command,report,status='partial' if partial else 'complete',
+                        cov=coverage('reviewer-selected evidence leads',count,count,partial,
+                                     reason='lead_evidence_incomplete' if partial else None))
     if a.command == 'jobs':
         return job_command(a,p,command)
     if a.command == 'boundary':

@@ -29,10 +29,13 @@ decision. Reuse recorded observations for gestures already covered.
   separated the owned runtime result, static inference and open dispatch
   question. The saved workspace, resource record and query receipt
   reproduced the handoff byte for byte with the original bundle absent.
-- [ ] **Make the handoff reusable for a reviewer-selected lead list.**
-  Reuse the saved query facets and typed outcomes in a bounded selection
-  export. The current integration script has fixed fixture selectors and
-  composes individual commands. The ordinary export covers the whole image.
+- [x] **Make the handoff reusable for a reviewer-selected lead list.**
+  [`evidence`](cli.md#selected-evidence-handoff) pins the image and analysis
+  for each lead and keeps saved code, references and optional fresh query
+  receipts. The installed CLI checked eight leads across the owned Calendar
+  app and framework, including a missing address, an ambiguous import name
+  and a mismatched receipt. Changing the active analysis preserved the
+  original handoff byte for byte without another worker for the export.
 - [ ] **Repeat on a small approved TickTick lead set.** Match the exact
   archived image and architecture before using historical addresses. Use
   only the main image and the Calendar framework needed for the selected

@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from macscope.schema import validate_envelope, validate_function
 from macscope.storage import atomic
@@ -203,6 +204,29 @@ def handoff(project, context):
     }
 
 
+def verify_selected_handoff(project, context, control):
+    images = context['images']
+    pins = [{**{key: image[key] for key in ('image_id', 'arch', 'artifact_sha256', 'analysis_id')},
+             'slice_sha256': image['sha256']} for image in images.values()]
+    leads = [
+        {'id': 'selector', 'image_id': images[MAIN]['image_id'], 'kind': 'objc_selector', 'value': SELECTOR},
+        {'id': 'string', 'image_id': images[MAIN]['image_id'], 'kind': 'string', 'value': LEAD},
+        {'id': 'duration', 'image_id': images[KIT]['image_id'], 'kind': 'name', 'value': DURATION,
+         'query_job': context['recovered_job']},
+        {'id': 'missing', 'image_id': images[MAIN]['image_id'], 'kind': 'address', 'value': '0x1'},
+    ]
+    with tempfile.TemporaryDirectory(dir=project.parent) as directory:
+        manifest = Path(directory) / 'leads.json'
+        atomic(manifest, json.dumps({'schema': 'macscope-evidence-leads/1', 'images': pins, 'leads': leads}).encode())
+        result = cli('evidence', '--project', project, '--leads', manifest, expected=(6,))
+    selector, string, duration, missing = result['data']['leads']
+    assert selector['function']['function_id'] == control['functions'][METHOD]['function_id']
+    assert string['function']['entry_va'] == context['entries']['_main']
+    assert duration['function']['pseudocode'] == control['functions'][DURATION]['pseudocode']
+    assert duration['query']['pseudocode'] == control['selected_recovery']['pseudocode']
+    assert missing['reason'] == 'lead_not_found' and missing['function'] is None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory', type=Path)
@@ -220,6 +244,7 @@ def main():
         atomic(context_file, json.dumps(context, sort_keys=True).encode() + b'\n')
     before = sorted((project / 'jobs').iterdir())
     evidence = handoff(project, context)
+    verify_selected_handoff(project, context, evidence)
     assert sorted((project / 'jobs').iterdir()) == before
     content = json.dumps(evidence, indent=2, sort_keys=True).encode() + b'\n'
     assert str(root).encode() not in content
