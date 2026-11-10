@@ -86,15 +86,23 @@ and refuses an existing path. For a universal input import requires explicit
 `--arch arm64|x86_64|all`; it extracts each chosen slice before invoking
 Ghidra. Reimporting an already imported immutable identity is idempotent.
 An image operation requires a unique `--image ID` and/or `--arch` when the
-workspace has multiple images. `--name EXACT`, `--address 0xUNSLID_VA`, and
-`--function-id ID` are mutually exclusive; duplicate names return candidates.
-Addresses identify **function entries**, not an arbitrary containing function.
+workspace has multiple images. A function selector accepts one of
+`--name EXACT`, `--function-id ID`, `--address 0xUNSLID_VA`, `--rva 0xRVA`, or
+`--file-offset 0xOFFSET`. Duplicate names return candidates. Address-based
+selectors identify **function entries**.
+
+`--rva` is relative to the Mach-O's preferred image base. `--file-offset`
+is relative to the selected Mach-O slice, including in a universal
+binary. A function offset must map to one file-backed section and a
+saved entry. Both selectors reject a disagreement between the Mach-O
+and recorded Ghidra image bases. All three address forms use hexadecimal
+numbers.
 
 Use `disasm --range START:END` to read committed Ghidra instructions
 across function boundaries. Both addresses are unslid hexadecimal VAs
 and the end is exclusive. A range covers 1 to 4,096 bytes and selects
-one imported image. It uses its own selector in place of `--address`,
-`--name`, or `--function-id`.
+one imported image. It uses its own selector in place of a single-function
+selector.
 
 ```sh
 macscope disasm --project workspaces/calculator --arch x86_64 \
@@ -366,9 +374,26 @@ Two owned Swift libraries built for arm64 and x86_64 and their stripped copies
 matched `nm` on all 38 reported candidates. All eight retained names in the
 imported stripped arm64 library demangled before Ghidra analysis.
 
-`bytes --address 0xVA --length N`
-reads 1–4096 bytes within a single file-backed section of that same slice
-and returns both slice and container offsets.
+`bytes` reads 1–4096 bytes from the immutable selected slice before or after
+analysis. Use `--address 0xVA` or `--rva 0xRVA` for a range within one
+unambiguous file-backed section. Use `--file-offset 0xOFFSET` for any byte
+range within the slice, including its header. The response includes both
+slice and container offsets. VA, RVA, and address space are null where the
+file range has no unambiguous section mapping.
+
+The installed CLI compared VA, RVA, and slice-offset selection on six
+owned stock Ghidra calculator captures. All selectors returned the same
+function views and byte ranges. Annotation edits and history resolved to
+the same entries. Both slices of a newly imported universal binary returned
+the same bytes through all three selectors before analysis. Header reads
+retained the correct container offsets. Two fresh queries selected by RVA
+and file offset replayed the original receipts without starting another
+worker. Saved exports remained byte-identical. The calculator report
+SHA-256 is `3b640173dd5bddb805400d2c77ad9c145a8ba9f2da02815058610b3cf3e54f36`.
+Separately linked arm64 and x86_64 dylibs and bundles also agreed with
+the Mach-O base, Apple `nm` entry and original bytes. Each had a preferred
+and Ghidra image base of zero. The four-probe report SHA-256 is
+`d259b2d072ae0f59239df071bf28c510e3171a2102c0b3799aabc5a2746fbe31`.
 
 `imports`, `exports`, `symbols`, and `strings` query the saved engine
 collections. The first three accept a literal `--name-contains` filter.

@@ -660,6 +660,37 @@ class CliTests(TemporaryCase):
         stdout.close()
         return code, payload, stderr.getvalue()
 
+    def test_typed_function_selectors_share_entry_identity_and_annotations(self):
+        selected = dict(self.workspace.select(), loader={'preferred_image_base': '0x100000000'},
+                        sections=[{'va': '0x100000000', 'file_offset': '0x100', 'size': '0x24'}])
+        with mock.patch.object(storage.Project, 'select', return_value=selected):
+            chosen = ('--rva', '0x20')
+            offset = ('--file-offset', '0x120')
+            label = cli.execute(self.args('rename', 'Review', *offset))['data']['revision']
+            self.assertEqual(label['engine_entry'], '0x100000020')
+            by_va = cli.execute(self.args('decompile', '--address', '0x100000020'))
+            self.assertEqual(cli.execute(self.args('decompile', *chosen)), by_va)
+            self.assertEqual(cli.execute(self.args('decompile', *offset)), by_va)
+            history = cli.execute(self.args('annotations', 'history', *chosen))
+            self.assertEqual(history['data'], [label])
+            self.error('function_selector', cli.execute, self.args('functions', 'show', '--rva', '0x21'))
+            self.error('file_offset_unmapped', cli.execute, self.args('functions', 'show', '--file-offset', '0x0'))
+            self.error('usage', self.args, 'functions', 'show', *chosen, *offset)
+            self.error('usage', self.args, 'disasm', '--range', '0x1:0x2', *offset)
+
+    def test_typed_selectors_refuse_a_disputed_image_base(self):
+        selected = dict(self.workspace.select(), loader={'preferred_image_base': None},
+                        sections=[{'va': '0x100000000', 'file_offset': '0x100', 'size': '0x24'}])
+        args = self.args('functions', 'show', '--rva', '0x0')
+        with mock.patch.object(storage.Project, 'select', return_value=selected):
+            self.error('rva_base_unavailable', cli.execute, args)
+            selected['loader']['preferred_image_base'] = '0x100000000'
+            snapshot = dict(self.snapshot, engine={'image_base': '0x200000000'})
+            with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+                self.error('rva_base_mismatch', cli.execute, args)
+                self.error('file_offset_base_mismatch', cli.execute,
+                           self.args('functions', 'show', '--file-offset', '0x100'))
+
     def test_search_finds_literal_names_symbols_strings_and_pseudocode_without_engine(self):
         with mock.patch.object(engine, 'dependencies') as deps, mock.patch.object(engine, 'run') as run:
             anchors = cli.execute(self.args('search', 'REFERENCE+ANCHOR'))

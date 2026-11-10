@@ -82,6 +82,10 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Query saved disassembly by unslid VA range with explicit byte gaps.
   The installed CLI matched all 534 returned instruction records to LLVM
   and the owned slices across 27 thin and universal queries.
+- [x] Select functions and bytes by explicit RVA or slice file offset.
+  The installed CLI verified equivalent selections, annotation history,
+  and fresh receipt replay on owned thin and universal images. Four
+  owned dylib and bundle probes also passed with a zero image base.
 - [x] Link available Ghidra pseudocode tokens to machine addresses. The
   arm64/x86_64 thin and universal integration checked cached and fresh links.
 - [x] Measure 20 rounds of CLI latency on the development Mac. See the

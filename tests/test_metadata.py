@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from macscope import cli, macho
+from macscope import cli, macho, metadata
 from macscope.errors import Error
 from macscope.storage import Project, atomic, canonical
 from test_macho import segment_image
@@ -53,3 +53,39 @@ class MetadataQueryTests(unittest.TestCase):
         with self.assertRaises(Error) as caught:
             self.query("bytes","--address","0x100000100","--length","4")
         self.assertEqual(caught.exception.code, "input_integrity")
+
+    def test_typed_byte_selectors_work_before_analysis_and_retain_offsets(self):
+        expected = self.query("bytes", "--address", "0x100000100", "--length", "4")["data"]
+        self.assertEqual(expected["rva"], "0x100")
+        for flag, value in (("--rva", "0x100"), ("--file-offset", "0xb8")):
+            result = self.query("bytes", flag, value, "--length", "4")
+            self.assertIsNone(result["analysis_id"])
+            self.assertEqual(result["data"], expected)
+        raw = self.query("bytes", "--file-offset", "0x0", "--length", "4")["data"]
+        self.assertEqual(raw["bytes"], "cffaedfe")
+        self.assertEqual(raw["container_file_offset"], "0x1000")
+        self.assertIsNone(raw["va"])
+        self.assertIsNone(raw["rva"])
+        self.assertIsNone(raw["address_space"])
+        for args, code in ((["--file-offset", "0x10b8"], "bytes_unmapped"),
+                           (["--rva", "0xffffffffffffffff"], "address"),
+                           (["--rva", "256"], "address"),
+                           (["--rva", "0x100", "--file-offset", "0xb8"], "usage")):
+            with self.subTest(args=args), self.assertRaises(Error) as rejected:
+                self.query("bytes", *args, "--length", "4")
+            self.assertEqual(rejected.exception.code, code)
+
+    def test_backing_map_requires_an_unambiguous_round_trip(self):
+        file_backed = {"va": "0x10", "file_offset": "0x8", "size": "0x8"}
+        zero_fill = {"va": "0x18", "file_offset": None, "size": "0x8"}
+        sections = [file_backed, zero_fill]
+        image = {"sections": sections}
+        self.assertEqual(metadata.mapped_location(image, 0x8, 8, from_file=True), 0x10)
+        self.assertIsNone(metadata.mapped_location(image, 0x18, 1, from_file=False))
+        self.assertIsNone(metadata.mapped_location(image, 0xf, 2, from_file=True))
+        zero_fill['va'] = '0x14'
+        self.assertIsNone(metadata.mapped_location(image, 0x8, 8, from_file=True))
+        zero_fill['va'] = '0x18'
+        sections.append({"va": "0x14", "file_offset": "0x20", "size": "0x4"})
+        self.assertIsNone(metadata.mapped_location(image, 0x8, 8, from_file=True))
+        self.assertIsNone(metadata.mapped_location(image, 0x14, 1, from_file=False))

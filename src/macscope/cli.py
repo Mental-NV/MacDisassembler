@@ -44,10 +44,14 @@ def parser():
         s.add_argument('--project',required=True)
         s.add_argument('--image')
         s.add_argument('--arch',choices=('arm64','x86_64'))
+    def address_options(g):
+        g.add_argument('--address',help='Unslid hexadecimal virtual address')
+        g.add_argument('--rva',help='Hexadecimal offset from the preferred Mach-O image base')
+        g.add_argument('--file-offset',help='Hexadecimal offset within the selected Mach-O slice')
     def selector(s, required=True, all_option=False):
         g=s.add_mutually_exclusive_group(required=required)
         g.add_argument('--function-id')
-        g.add_argument('--address')
+        address_options(g)
         g.add_argument('--name')
         if all_option:g.add_argument('--all',action='store_true')
         return g
@@ -108,7 +112,7 @@ def parser():
     s=sub.add_parser('demangle');common(s);s.add_argument('name')
     s.add_argument('--experimental-trusted-input',action='store_true')
     s=sub.add_parser('bytes');project(s);common(s)
-    s.add_argument('--address',required=True)
+    address_options(s.add_mutually_exclusive_group(required=True))
     s.add_argument('--length',type=int,required=True,dest='byte_length')
     for c in (*metadata.PREFLIGHT_LISTS,*metadata.ENGINE_LISTS):
         s=sub.add_parser(c);project(s);common(s);pagination(s)
@@ -254,6 +258,26 @@ def normalize(raw, image, deps, manifest):
     return redact(value)
 
 
+def resolve_selector(args, project, image, snapshot):
+    rva, file_offset = getattr(args,'rva',None), getattr(args,'file_offset',None)
+    if rva is None and file_offset is None:
+        return args
+    analyzed_base = snapshot['engine'].get('image_base')
+    base = metadata.preferred_base(project,image) if rva is not None or analyzed_base is not None else None
+    if rva is not None:
+        address = metadata.rva_to_va(metadata.hex_address(rva,'RVA'),base)
+    else:
+        offset = metadata.hex_address(file_offset,'Slice file offset')
+        address = metadata.mapped_location(image,offset,1,from_file=True)
+        if address is None:
+            raise Error('file_offset_unmapped','File offset has no unambiguous Mach-O section address',2)
+    if base is not None and analyzed_base is not None and (
+            not metadata.VA.fullmatch(analyzed_base) or int(analyzed_base,16) != base):
+        code = 'rva_base_mismatch' if rva is not None else 'file_offset_base_mismatch'
+        raise Error(code,'Ghidra and the Mach-O disagree on the image base. Use --function-id or --address.',3)
+    return argparse.Namespace(**dict(vars(args),address=hex(address)))
+
+
 def select_function(functions,args):
     if args.address:
         try:
@@ -361,6 +385,7 @@ def revise_annotation(args, project, command):
     with project.writer():
         image = project.select(args.image,args.arch)
         snapshot,_ = project.snapshot(image)
+        args = resolve_selector(args,project,image,snapshot)
         _,rows = annotations.read(project,image['image_id'])
         try:
             function = select_function(annotations.with_labels(snapshot['functions'],rows),args)
@@ -897,7 +922,7 @@ def execute(a):
     if a.command=='swift':
         return swift_collection(a,p,image)
     if a.command=='bytes':
-        return envelope(command,metadata.read_bytes_at(p,image,a.address,a.byte_length),
+        return envelope(command,metadata.read_bytes_at(p,image,a.address,a.byte_length,rva=a.rva,file_offset=a.file_offset),
                         cov=coverage('selected image bytes',a.byte_length,a.byte_length))
     if a.command=='fixups':
         return fixup_collection(a,image,metadata.verified_slice(p,image),p.project_id)
@@ -933,6 +958,7 @@ def execute(a):
         transfer = annotation_transfer.export(p,image)
         total = len(transfer['revisions'])
         return envelope(command,transfer,aid,cov=coverage('portable image annotation history',total,total))
+    a = resolve_selector(a,p,image,snapshot)
     snapshot = flow_evidence.snapshot_view(snapshot)
     functions = snapshot['functions']
     if a.command == 'export' and not a.include_annotations:

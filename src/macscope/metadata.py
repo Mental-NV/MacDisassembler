@@ -81,24 +81,75 @@ def records(args, project, image, snapshot):
     return rows, filters, gap
 
 
-def read_bytes_at(project, image, address, length):
-    if not VA.fullmatch(address):
-        raise Error("address", "Address must be an unslid hexadecimal VA", 2)
-    start = int(address,16)
-    ranges = [
-        (int(section["va"],16), int(section["file_offset"],16))
-        for section in image["sections"]
-        if section["file_offset"] is not None and
-        int(section["va"],16) <= start and start+length <= int(section["va"],16)+int(section["size"],16)
-    ]
-    if len(ranges) != 1:
-        raise Error("bytes_unmapped", "Byte range must fit one file-backed Mach-O section", 2)
-    va, file_offset = ranges[0]
-    offset = file_offset + start - va
-    data = verified_slice(project,image)
-    if offset + length > len(data):
-        raise Error("input_integrity", "Mapped range exceeds the imported slice")
-    return {"image_id": image["image_id"], "arch": image["arch"], "address_space": "ram",
-            "va": hex(start), "slice_file_offset": hex(offset),
-            "container_file_offset": hex(int(image["offset"],16)+offset),
-            "length": length, "bytes": data[offset:offset+length].hex()}
+def hex_address(value, label):
+    if not VA.fullmatch(value):
+        raise Error("address", f"{label} must be a hexadecimal 64-bit value", 2)
+    return int(value, 16)
+
+
+def preferred_base(project, image, data=None):
+    loader = image.get("loader", {})
+    if "preferred_image_base" not in loader:
+        loader = thin(verified_slice(project, image) if data is None else data)["loader"]
+    value = loader["preferred_image_base"]
+    return int(value, 16) if value is not None else None
+
+
+def rva_to_va(rva, base):
+    if base is None:
+        raise Error("rva_base_unavailable", "The selected Mach-O has no unique preferred image base", 3)
+    if base + rva >= 2**64:
+        raise Error("address", "RVA exceeds the unslid 64-bit address space", 2)
+    return base + rva
+
+
+def map_section(sections, start, length, source, target):
+    match = None
+    end = start + length
+    for section in sections:
+        origin = section[source]
+        if origin is None:
+            continue
+        lo, size = int(origin, 16), int(section["size"], 16)
+        if not size or lo >= end or lo + size <= start:
+            continue
+        destination = section[target]
+        if match is not None or destination is None or start < lo or end > lo + size:
+            return None
+        match = int(destination, 16) + start - lo
+    return match
+
+
+def mapped_location(image, start, length, *, from_file):
+    source, target = ("file_offset", "va") if from_file else ("va", "file_offset")
+    sections = image["sections"]
+    mapped = map_section(sections, start, length, source, target)
+    if mapped is not None and map_section(sections, mapped, length, target, source) == start:
+        return mapped
+    return None
+
+
+def read_bytes_at(project, image, address, length, *, rva=None, file_offset=None):
+    value, label = (file_offset, "Slice file offset") if file_offset is not None else (
+        (rva, "RVA") if rva is not None else (address, "Unslid virtual address"))
+    position = hex_address(value, label)
+    data = verified_slice(project, image)
+    base = preferred_base(project, image, data)
+    if file_offset is not None:
+        offset = position
+        if offset + length > len(data):
+            raise Error("bytes_unmapped", "File range exceeds the selected Mach-O slice", 2)
+        start = mapped_location(image, offset, length, from_file=True)
+    else:
+        start = position if rva is None else rva_to_va(position, base)
+        offset = mapped_location(image, start, length, from_file=False)
+        if offset is None:
+            raise Error("bytes_unmapped", "Byte range must fit one unambiguous file-backed Mach-O section", 2)
+        if offset + length > len(data):
+            raise Error("input_integrity", "Mapped range exceeds the imported slice")
+    return {"image_id": image["image_id"], "arch": image["arch"],
+            "address_space": "ram" if start is not None else None,
+            "va": hex(start) if start is not None else None,
+            "rva": hex(start - base) if start is not None and base is not None and start >= base else None,
+            "slice_file_offset": hex(offset), "container_file_offset": hex(int(image["offset"], 16) + offset),
+            "length": length, "bytes": data[offset:offset + length].hex()}
