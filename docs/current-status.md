@@ -20,8 +20,8 @@ contains documentation only.
   function list/show, function and range disassembly, cached and fresh selected-function pseudocode, references,
   CFG JSON/DOT, project/job status, cached search, bounded call traversal,
   encoded strings with verified file bytes and incoming references,
-  Mach-O symbol declarations, indirect slots and compact unwind ranges,
-  normalized exports and private HTML reports.
+  Mach-O symbol declarations and indirect slots, compact and DWARF unwind
+  records, normalized exports and private HTML reports.
 - Package-owned Java bridge, effective analyzer-option recording, real saved
   Program databases, immutable digest identities, SQLite committed snapshots,
   writer lock, atomic result/output publication and pagination-bound cursors.
@@ -311,7 +311,13 @@ collections exceed documented bounds despite successful pseudocode output.
   including regular and compressed pages, LSDA entries, personality slots
   and two pages of common encodings. Apple `dwarfdump` confirmed the
   mixed fixture's FDE offset. The C++ queries reproduced after full
-  headless analysis. DWARF frame instructions remain an explicit gap.
+  headless analysis.
+- [x] Verify [DWARF call frame records](cli.md#dwarf-call-frame-records)
+  against Apple `dwarfdump` on owned arm64 and x86_64 inputs. Four CIEs,
+  five FDEs, 57 instructions and their declared locations matched.
+  The universal slices reproduced the same queries after full headless
+  analysis. CFA expressions are retained as bytes and unsupported
+  instruction formats have explicit coverage.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

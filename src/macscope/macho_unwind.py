@@ -1,6 +1,7 @@
 """Decode linked Mach-O compact unwind lookup records."""
 import struct
 
+from . import eh_frame as dwarf_frame
 from .errors import Error
 from .macho import thin
 from .macho_load import MAX_TABLE_ROWS
@@ -201,12 +202,19 @@ def extent(parsed, name, container):
             "container_file_offset": hex(container + offset), "size": section["size"]}
 
 
-def inventory(data, container):
+def inventory(data, container, *, source="compact"):
     parsed = thin(data)
     try:
         compact = extent(parsed, "__unwind_info", container)
         eh_frame = extent(parsed, "__eh_frame", container)
         info = {"compact_unwind": compact, "eh_frame": eh_frame}
+        if source == "dwarf":
+            if eh_frame is None:
+                return info, [], ["eh_frame_unavailable"]
+            if int(eh_frame["size"], 16) > MAX_SECTION_BYTES:
+                return info, [], ["eh_frame_byte_limit"]
+            rows, issues = dwarf_frame.decode(data, parsed, eh_frame, container)
+            return info, rows, sorted(issues)
         gaps = {"eh_frame_not_decoded"} if eh_frame else set()
         if compact is None:
             return info, [], sorted(gaps | {"compact_unwind_unavailable"})
@@ -215,4 +223,5 @@ def inventory(data, container):
         rows, issues = decode(data, parsed, compact, eh_frame, container)
         return info, rows, sorted(gaps | issues)
     except (ValueError, struct.error) as error:
-        raise Error("compact_unwind_malformed", str(error)) from error
+        code = "eh_frame_malformed" if source == "dwarf" else "compact_unwind_malformed"
+        raise Error(code, str(error)) from error

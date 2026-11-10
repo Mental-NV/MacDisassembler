@@ -104,6 +104,7 @@ def parser():
             s.add_argument('--java-home')
     s=sub.add_parser('headers');project(s);common(s)
     s=sub.add_parser('unwind');project(s);common(s);pagination(s)
+    s.add_argument('--source',choices=('compact','dwarf'),default='compact')
     s=sub.add_parser('fixups');common(s);pagination(s)
     source=s.add_mutually_exclusive_group(required=True)
     source.add_argument('--project')
@@ -804,10 +805,13 @@ def file_symbols(args, project, image):
 
 
 def file_unwind(args, project, image):
-    info, records, gaps = macho_unwind.inventory(metadata.verified_slice(project,image),int(image['offset'],16))
+    info, records, gaps = macho_unwind.inventory(metadata.verified_slice(project,image),int(image['offset'],16),
+                                                source=args.source)
     records = [dict(row,image_id=image['image_id'],arch=image['arch']) for row in records]
-    rows,cov = page(records,args,image['image_id'],project.project_id,{},order='compact-unwind-rva/v1')
-    cov['scope'] = 'selected image compact unwind lookup ranges'
+    dwarf = args.source == 'dwarf'
+    order = 'eh-frame-offset/v1' if dwarf else 'compact-unwind-rva/v1'
+    rows,cov = page(records,args,image['image_id'],project.project_id,{},order=order)
+    cov['scope'] = 'selected image DWARF call frame records' if dwarf else 'selected image compact unwind lookup ranges'
     if gaps:
         reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
         cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))

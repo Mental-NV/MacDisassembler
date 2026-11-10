@@ -380,17 +380,17 @@ records after full headless analysis. The report SHA-256 is
 
 ### Compact unwind lookup ranges
 
-`unwind --project P [--arch ARCH] [--limit N] [--cursor TOKEN]` reads
+`unwind --project P --source compact [--arch ARCH] [--limit N] [--cursor TOKEN]` reads
 `__TEXT,__unwind_info` from the digest-verified imported slice. It works
-before analysis. Regular and compressed pages expose the raw encoding,
-range start and exclusive end, available VA and file coordinates,
+before analysis and is the default unwind view. Regular and compressed
+pages expose the raw encoding, range start and exclusive end, available VA and file coordinates,
 personality slot offsets, and LSDA offsets. The next entry or the linker
 sentinel determines the lookup range end. One encoding can cover more
 than one function. [Compact unwind format](https://github.com/llvm/llvm-project/blob/main/libunwind/include/mach-o/compact_unwind_encoding.h) [Linker index and sentinel](https://github.com/llvm/llvm-project/blob/main/lld/MachO/UnwindInfoSection.cpp)
 
-The result reports the `__eh_frame` extent and, where available, the
-declared file offset of a referenced DWARF FDE. DWARF frame instructions
-receive partial coverage. Unsupported versions, pages, encodings and
+The compact view reports the `__eh_frame` extent and, where available, the
+declared file offset of a referenced DWARF FDE. Use the DWARF view for the
+frame instructions. Unsupported versions, pages, encodings and
 table limits also produce explicit coverage gaps. Invalid offsets,
 overlapping arrays or inconsistent indices produce
 `compact_unwind_malformed`. The decoder caps the compact section at
@@ -411,6 +411,41 @@ reference. Two additional variants without a compact section reported
 partial coverage. Both C++ slices reproduced the query after full
 headless analysis. The report SHA-256 is
 `b20f6d336673d29451ddedd3c9046147c8a4239e414e10f1c7842241ce793ba4`.
+
+### DWARF call frame records
+
+```sh
+macscope unwind --project workspaces/calculator --source dwarf --json
+```
+
+The DWARF view reads linked `__TEXT,__eh_frame` records in section order.
+Common Information Entries (CIEs) report the alignment factors, return
+address register, augmentation and pointer encodings. Frame Description
+Entries (FDEs) retain their CIE link, declared PC range, available file
+coordinates, and language-specific data address. Absolute and PC-relative
+pointer forms expose their encoded value and computed unslid VA.
+Indirect fields report the pointer slot separately. Use a compact
+record's `dwarf_fde_offset` to look up the FDE by `section_offset`.
+[DWARF call frame information](https://dwarfstd.org/doc/DWARF5.pdf)
+[LLVM linked EH frame decoder](https://github.com/llvm/llvm-project/blob/main/llvm/lib/DebugInfo/DWARF/DWARFDebugFrame.cpp)
+
+The instruction list reports the opcode, raw operands, and byte span.
+Expression blocks are retained as hex. The command provides static
+evidence for inspection. Unsupported encodings, augmentations and
+instructions carry explicit partial coverage, and malformed records
+return `eh_frame_malformed`. Pagination binds to the selected source
+and image. Bounds include a 16 MiB section, 10,000 records, 1,024
+instructions per record, 20,000 instructions per section, and 4,096
+bytes per expression.
+
+Apple `dwarfdump --eh-frame` matched four CIEs, five FDEs, 57
+opcodes and 28 operand checks across three owned inputs. The run covered an arm64
+executable with deliberately embedded frame records and two linked
+x86_64 variants from the fixtures above. It also checked the CIE
+personality slot, the FDE's language-specific data address, a raw CFA
+expression, universal offsets, and identical queries before and after
+full headless analysis of both slices. The validation report SHA-256 is
+`f0d1705344162623016a79666a92a941208f6f69010645c49d46c20411bb8df1`.
 
 ### Dyld exports and fixups
 
