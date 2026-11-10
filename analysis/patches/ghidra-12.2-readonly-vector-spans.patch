@@ -1,0 +1,38 @@
+--- a/funcdata_varnode.cc
++++ b/funcdata_varnode.cc
+@@ -687,2 +687,18 @@
+-  if (vn->getSize() > sizeof(uintb))
+-    return false;		// Constant will exceed precision
++  int4 size = vn->getSize();
++  bool extended = size == 16;
++  if (size > sizeof(uintb) && !extended)
++    return false;
++  if (extended) {
++    AddrSpace *space = vn->getSpace();
++    if (vn->isVolatile() || space->getWordSize() != 1 || space->getHighest() < size - 1
++        || vn->getOffset() > space->getHighest() - (size - 1))
++      return false;
++    for(int4 i=0;i<size;++i) {
++      Address address = vn->getAddr() + i;
++      uint4 flags = glb->symboltab->getProperty(address);
++      if ((flags & Varnode::readonly) == 0)
++        getScopeLocal()->queryProperties(address,1,Address(),flags);
++      if ((flags & (Varnode::readonly | Varnode::volatil)) != Varnode::readonly)
++        return false;
++    }
++  }
+@@ -690 +706,2 @@
+-  uintb res;
++  uint8 wide[2] = {0,0};
++  uintb res = 0;
+@@ -699 +716,6 @@
+-  if (vn->getSpace()->isBigEndian()) { // Big endian
++  if (extended) {
++    bool bigEndian = vn->getSpace()->isBigEndian();
++    for(int4 i=0;i<size;++i)
++      wide[i/8] |= ((uint8)bytes[bigEndian ? size-1-i : i]) << ((i%8)*8);
++  }
++  else if (vn->getSpace()->isBigEndian()) { // Big endian
+@@ -732 +754 @@
+-    Varnode *cvn = newConstant(vn->getSize(),res);
++    Varnode *cvn = extended ? newExtendedConstant(size,wide,op) : newConstant(size,res);

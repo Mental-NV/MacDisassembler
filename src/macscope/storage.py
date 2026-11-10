@@ -3,52 +3,199 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import re
 import sqlite3
-import tempfile
+import stat
 import uuid
 from .errors import Error
-from .macho import checked_path, read_regular
+from .macho import checked_path, open_directory, read_regular
+
+MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+SHA256 = re.compile(r'[0-9a-f]{64}')
+UNSLID_VA = re.compile(r'0x[0-9a-fA-F]{1,16}')
+WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
+WORKSPACE_RESERVED = frozenset((*WORKSPACE_DIRECTORIES, 'project.json', 'writer.lock',
+                                'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm'))
+CANONICAL_JSON = json.JSONEncoder(sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False)
+JSON_STRUCTURE = re.compile(rb'["\\{}\[\]]')
+MAX_JSON_DEPTH = 64
 
 
 def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    return CANONICAL_JSON.encode(value).encode()
+
+
+def canonical_chunks(value):
+    for part in CANONICAL_JSON.iterencode(value):
+        yield part.encode()
 
 
 def identity(value):
     return hashlib.sha256(canonical(value)).hexdigest()
 
 
-def atomic(path, data, force=False, mode=0o600):
-    path = Path(path)
-    checked_path(path.parent, directory=True)
-    if path.is_symlink():
-        raise Error('symlink', 'Output must not be a symlink')
-    if path.exists() and not force:
-        raise Error('output_exists', 'Output exists; use --force to replace', 8)
-    fd, tmp = tempfile.mkstemp(prefix='.macscope-', dir=path.parent)
-    try:
-        os.fchmod(fd, mode)
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if force:
-            os.replace(tmp, path)
+def is_digest(value):
+    return isinstance(value, str) and SHA256.fullmatch(value) is not None
+
+
+def program_history(record, current_key):
+    history = record.get('previous_program_sha256', [])
+    if (not isinstance(history, list) or len(history) > 4096 or not all(is_digest(item) for item in history)
+            or len(set(history)) != len(history) or record.get(current_key) in history):
+        raise Error('snapshot_record', 'Invalid saved Program history')
+    return history
+
+
+def validate_snapshot_functions(functions, image, analysis_id):
+    ids, entries = set(), set()
+    for function in functions:
+        fid = function.get('function_id')
+        entry = function.get('entry_va')
+        engine_entry = function.get('engine_entry')
+        if (not isinstance(fid, str) or not fid or 'entry_va' not in function
+                or not isinstance(engine_entry, str) or not engine_entry
+                or function.get('analysis_id') != analysis_id
+                or function.get('image_id') != image['image_id'] or function.get('arch') != image['arch']):
+            raise Error('snapshot_function_identity', 'Function identity does not match its saved analysis and image')
+        if entry is None and not engine_entry.startswith('0x'):
+            key = ('engine', engine_entry)
+        elif (isinstance(entry, str) and UNSLID_VA.fullmatch(entry) and UNSLID_VA.fullmatch(engine_entry)
+                and int(entry, 16) == int(engine_entry, 16)):
+            key = ('ram', int(entry, 16))
         else:
-            os.link(tmp, path)  # atomic no-replace publication
-            os.unlink(tmp)
-        dfd = os.open(path.parent, os.O_RDONLY)
+            raise Error('snapshot_function_identity', 'Function entry disagrees with its recorded engine address')
+        if fid in ids or key in entries:
+            raise Error('snapshot_function_identity', 'Analysis contains duplicate function IDs or entry addresses')
+        ids.add(fid)
+        entries.add(key)
+
+
+def check_json_nesting(payload):
+    # Scan ASCII delimiters before the decoder allocates deeply nested containers.
+    # UTF-8 continuation bytes cannot be mistaken for these delimiters.
+    if b'\0' in payload:
+        raise ValueError('Expected UTF-8 JSON without NUL bytes')
+    depth, escaped = 0, -1
+    in_string = False
+    for match in JSON_STRUCTURE.finditer(payload):
+        position = match.start()
+        token = payload[position]
+        if in_string:
+            if position == escaped:
+                continue
+            if token == ord('\\'):
+                escaped = position + 1
+            elif token == ord('"'):
+                in_string = False
+        elif token == ord('"'):
+            in_string = True
+        elif token in b'[{':
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError('JSON nesting exceeds its limit')
+        elif token in b']}':
+            depth -= 1
+            if depth < 0:
+                raise ValueError('Unbalanced JSON delimiters')
+
+
+def strict_json(payload):
+    if isinstance(payload, str):
+        payload = payload.encode('utf-8')
+    check_json_nesting(payload)
+
+    def unique_fields(pairs):
+        value = dict(pairs)
+        if len(value) != len(pairs):
+            raise ValueError('Duplicate JSON field')
+        return value
+
+    def finite_float(text):
+        value = float(text)
+        if not math.isfinite(value):
+            raise ValueError('Nonfinite JSON number')
+        return value
+
+    return json.loads(payload, object_pairs_hook=unique_fields, parse_float=finite_float,
+                      parse_constant=finite_float)
+
+
+def json_object(payload, code, message):
+    try:
+        value = strict_json(payload)
+    except (TypeError, ValueError, RecursionError) as error:
+        raise Error(code, message) from error
+    if not isinstance(value, dict):
+        raise Error(code, message)
+    return value
+
+
+def output_directory_matches(parent, directory):
+    try:
+        current = open_directory(parent)
         try:
-            os.fsync(dfd)
+            return os.path.samestat(os.fstat(directory), os.fstat(current))
         finally:
-            os.close(dfd)
-    except FileExistsError as e:
-        raise Error('output_exists', 'Output appeared during publication', 8) from e
+            os.close(current)
+    except OSError:
+        return False
+
+
+def check_output_entry(directory, name, force):
+    try:
+        current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(current.st_mode):
+        raise Error('symlink', 'Output must not be a symlink')
+    if not force:
+        raise Error('output_exists', 'Output exists; use --force to replace', 8)
+
+
+def atomic(path, data, force=False, mode=0o600):
+    atomic_chunks(path, (data,), force, mode)
+
+
+def atomic_chunks(path, chunks, force=False, mode=0o600):
+    path = Path(os.path.abspath(path))
+    parent = checked_path(path.parent, directory=True)
+    try:
+        directory = open_directory(parent)
+    except OSError as error:
+        raise Error('output_directory_changed', 'Output directory changed before publication', 8) from error
+    try:
+        check_output_entry(directory, path.name, force)
+        tmp = '.macscope-' + uuid.uuid4().hex
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                os.fchmod(stream.fileno(), mode)
+                stream.writelines(chunks)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if not output_directory_matches(parent, directory):
+                raise Error('output_directory_changed', 'Output directory changed before publication', 8)
+            if force:
+                check_output_entry(directory, path.name, force)
+                os.replace(tmp, path.name, src_dir_fd=directory, dst_dir_fd=directory)
+            else:
+                os.link(tmp, path.name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+        except FileExistsError as error:
+            raise Error('output_exists', 'Output appeared during publication', 8) from error
+        finally:
+            try:
+                os.unlink(tmp, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+        os.fsync(directory)
+        if not output_directory_matches(parent, directory):
+            raise Error('output_directory_changed', 'Output was published in the original directory, but its path changed',
+                        8, partial={'published_in_original_directory': True})
     finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+        os.close(directory)
 
 
 def write_json(path, value, force=False, mode=0o600):
@@ -60,13 +207,31 @@ class Project:
         self.path = checked_path(path, directory=True)
         if self.path.stat().st_uid != os.getuid() or self.path.stat().st_mode & 0o077:
             raise Error('workspace_permissions', 'Workspace must be owner-private (chmod 700)', 8)
-        manifest = json.loads(read_regular(self.path/'project.json', 65536))
-        if manifest.get('schema_version') != '1.0':
+        manifest = json_object(read_regular(self.path/'project.json', 65536),
+                               'workspace_manifest', 'Invalid workspace manifest JSON')
+        if not isinstance(manifest.get('schema_version'), str):
+            raise Error('workspace_manifest', 'Invalid workspace manifest structure')
+        if manifest['schema_version'] != '1.0':
             raise Error('workspace_schema', 'Unsupported workspace schema; export with its original version', 3)
-        self.project_id = manifest['project_id']
-        for d in ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp'):
+        project_id = manifest.get('project_id')
+        if not isinstance(project_id, str) or not re.fullmatch(r'[a-f0-9]{32}', project_id):
+            raise Error('workspace_manifest', 'Invalid workspace identifier')
+        self.project_id = project_id
+        for d in WORKSPACE_DIRECTORIES:
             checked_path(self.path/d, directory=True)
         checked_path(self.path/'index.sqlite')
+        try:
+            with self.db() as db:
+                tables = db.execute("SELECT name FROM sqlite_schema WHERE type='table' "
+                                    "AND name IN ('images','analyses')").fetchall()
+                if len(tables) != 2:
+                    raise Error('workspace_index', 'Workspace index is missing a required table')
+                db.execute('SELECT id,arch,metadata,imported,active_analysis FROM images LIMIT 0')
+                db.execute('SELECT id,image_id,payload FROM analyses LIMIT 0')
+        except sqlite3.DatabaseError as error:
+            if getattr(error, 'sqlite_errorcode', 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise Error('workspace_index_busy', 'Workspace index is locked', 8, retryable=True) from error
+            raise Error('workspace_index', 'Workspace index cannot open the supported schema') from error
 
     @classmethod
     def create(cls, path):
@@ -76,7 +241,7 @@ class Project:
             p.mkdir(mode=0o700)
         except FileExistsError as e:
             raise Error('workspace_exists', 'Project path already exists', 8) from e
-        for d in ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp'):
+        for d in WORKSPACE_DIRECTORIES:
             (p/d).mkdir(mode=0o700)
         write_json(p/'project.json', {'schema_version':'1.0', 'project_id':uuid.uuid4().hex})
         with contextlib.closing(sqlite3.connect(p/'index.sqlite')) as db:
@@ -86,16 +251,23 @@ class Project:
 
     @contextlib.contextmanager
     def db(self, readonly=True):
-        db = sqlite3.connect('file:'+str(self.path/'index.sqlite')+('?mode=ro' if readonly else '?mode=rw'), uri=True, timeout=0.1)
+        uri = (self.path/'index.sqlite').as_uri() + ('?mode=ro' if readonly else '?mode=rw')
         try:
-            yield db
-            if not readonly:
-                db.commit()
-        except BaseException:
-            db.rollback()
+            with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as db:
+                try:
+                    yield db
+                    if not readonly:
+                        db.commit()
+                except BaseException:
+                    db.rollback()
+                    raise
+        except sqlite3.DatabaseError as error:
+            code = getattr(error, 'sqlite_errorcode', 0)
+            if code & 0xff in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+                raise Error('workspace_index', 'Workspace index is corrupt') from error
+            if not code and isinstance(error, sqlite3.OperationalError):
+                raise Error('workspace_index', 'Workspace index contains unreadable data') from error
             raise
-        finally:
-            db.close()
 
     @contextlib.contextmanager
     def writer(self):
@@ -111,7 +283,22 @@ class Project:
 
     def images(self):
         with self.db() as db:
-            return [dict(json.loads(m), imported=bool(i), active_analysis=a) for m,i,a in db.execute('SELECT metadata, imported, active_analysis FROM images ORDER BY arch,id')]
+            images = []
+            rows = db.execute('SELECT id,arch,metadata,imported,active_analysis FROM images ORDER BY arch,id')
+            for image_id, arch, payload, imported, aid in rows:
+                image = json_object(payload, 'workspace_image', 'Invalid image metadata in the workspace index')
+                if (not is_digest(image_id) or arch not in ('arm64', 'x86_64')
+                        or image.get('image_id') != image_id or image.get('arch') != arch
+                        or not all(is_digest(image.get(key)) for key in ('sha256', 'artifact_sha256'))
+                        or type(imported) is not int or imported not in (0, 1)
+                        or (aid is not None and not is_digest(aid))):
+                    raise Error('workspace_image', 'Image metadata or analysis identity disagrees with the workspace index')
+                provider = image.get('engine_baseline_job_id')
+                if provider is not None and (not isinstance(provider, str) or not re.fullmatch(r'[0-9a-f]{32}', provider)):
+                    raise Error('workspace_image', 'Invalid import Program provider in the workspace index')
+                program_history(image, 'engine_baseline_sha256')
+                images.append(dict(image, imported=bool(imported), active_analysis=aid))
+            return images
 
     def select(self, image=None, arch=None):
         rows = [r for r in self.images() if (not image or r['image_id'] == image) and (not arch or r['arch'] == arch)]
@@ -121,14 +308,31 @@ class Project:
 
     def snapshot(self, image):
         aid = image['active_analysis']
-        if not aid:
+        if aid is None:
             raise Error('not_analyzed', 'No committed analysis; run analyze first', 3)
+        if not is_digest(aid) or not is_digest(image.get('image_id')):
+            raise Error('snapshot_identity', 'Invalid analysis or image identity for the saved snapshot')
         with self.db() as db:
             row = db.execute('SELECT payload FROM analyses WHERE id=? AND image_id=?', (aid,image['image_id'])).fetchone()
         if row is None:
             raise Error('snapshot_missing', 'Committed snapshot is missing')
-        record = json.loads(row[0])
-        data = read_regular(self.path/'snapshots'/(aid+'.json'), 64*1024*1024)
+        record = json_object(row[0], 'snapshot_record', 'Invalid saved analysis record in the workspace index')
+        if not is_digest(record.get('snapshot_sha256')):
+            raise Error('snapshot_record', 'Saved analysis record has no valid snapshot digest')
+        program_history(record, 'analysis_program_sha256')
+        data = read_regular(self.path/'snapshots'/(aid+'.json'), MAX_SNAPSHOT_BYTES)
         if hashlib.sha256(data).hexdigest() != record['snapshot_sha256']:
             raise Error('snapshot_integrity', 'Snapshot digest mismatch')
-        return json.loads(data), record
+        snapshot = json_object(data, 'snapshot_format', 'Invalid saved analysis snapshot JSON')
+        if (not isinstance(snapshot.get('functions'), list)
+                or any(not isinstance(function, dict) for function in snapshot['functions'])
+                or not isinstance(snapshot.get('engine'), dict)
+                or snapshot.get('status') not in ('complete', 'partial')):
+            raise Error('snapshot_format', 'Saved snapshot has invalid analysis fields')
+        stored_image = snapshot.get('image')
+        if (snapshot.get('analysis_id') != aid or not isinstance(stored_image, dict)
+                or any(stored_image.get(key) != image.get(key)
+                       for key in ('image_id', 'arch', 'sha256', 'artifact_sha256'))):
+            raise Error('snapshot_identity', 'Saved snapshot belongs to a different analysis or image')
+        validate_snapshot_functions(snapshot['functions'], image, aid)
+        return snapshot, record
