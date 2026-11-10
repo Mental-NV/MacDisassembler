@@ -271,6 +271,39 @@ remains open. The private freeze SHA-256 is
 The evaluation SHA-256 is
 `f58f0584ca2290f839c5378f86be516bb0bf53079db52f2889ed43d19cfc6748`.
 
+## Clean analyst packets
+
+Prepare an archive for one case from its completed isolated run.
+
+```sh
+python3 analysis/prepare_clean_review.py \
+  --workspace build/baseline-runs/isolated-matrix \
+  --case DebugAnalysis-arm64-stripped-app \
+  --output /private/tmp/DebugAnalysis-arm64-stripped-app.zip
+```
+
+Each archive contains one verified Mach-O input, its exact frozen Ghidra
+JSON, LLVM disassembly with the staged path removed from the header, a
+manifest with SHA-256 hashes, and an address-based review rubric. It
+includes all functions discovered in that case. The packager checks the
+capture and assembly against the freeze, checks the staged binary against
+the case and Ghidra identities, and requires a successful isolation probe.
+
+All 16 archives were verified against the source freeze. The eight
+binary-only packets contain 637 function records and 467 complete
+pseudocode results. The eight symbol-bearing packets contain 636 records
+and 466 complete results. These are engine totals. The packet index has
+SHA-256
+`cf185dadf99aae99f72fd9e5d214e73fffe0bfd2fcb9250fd218d7784c74228c`.
+A repeat reproduced the exact archive bytes. The packager refused both
+an assisted run and a request to replace an existing archive.
+
+Give each fresh analyst context only one archive. Keep the original run,
+the packet index, the other cases and the source mapping in the evaluator
+workspace. Record the packet and analyst report hashes before opening the
+mapping for adjudication. Report observations and coverage separately by
+condition. The analyst reports are still pending.
+
 ## dSYM-assisted diagnostic
 
 Use the same owned build and completed isolated binary capture for a

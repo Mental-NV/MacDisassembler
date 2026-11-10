@@ -230,7 +230,8 @@ The [isolated rerun](phase1-findings.md#isolated-binary-captures) now verifies
 machine-level source separation for the stripped and symbol-bearing
 conditions. The [dSYM-assisted diagnostic](phase1-findings.md#dsym-assisted-diagnostic)
 completed on the eight matching stripped inputs in a separate run.
-The clean-context qualitative review remains open under the
+All 16 [clean analyst packets](phase1-findings.md#clean-analyst-packets)
+are prepared. The qualitative review remains open under the
 [specified conditions](specification.md#84-blind-analysis-and-controlled-assistance).
 The [optimized baseline measurement](wide-division.md#paired-evidence)
 also records a shortfall against the proposed 90% instruction-byte
@@ -438,8 +439,11 @@ collections exceed documented bounds despite successful pseudocode output.
   on the same eight stripped inputs. Ghidra imported all eight matched
   companions and decompiled all 120 controlled entries in the separately
   frozen diagnostic.
-- [ ] Review the frozen binary-only pseudocode in a clean analyst context
-  before revealing the ground truth.
+- [x] Prepare [case-specific packets](phase1-findings.md#clean-analyst-packets)
+  for both unassisted conditions and verify the 16 archives against the
+  original frozen captures.
+- [ ] Review the frozen pseudocode in clean analyst contexts and freeze
+  their findings before revealing ground truth to the evaluator.
 - [x] Measure 100% branch-direction coverage for the owned reference core
   with directed and seeded stateful tests. See
   [reference coverage](semantics.md#reference-core-coverage).
