@@ -242,6 +242,40 @@ unnamed input registers for the two other arguments. The behavior probe
 classified those four as untestable. Its report SHA-256 is
 `410f5a83bd5876a2b77f31b002ef8b394054ee0c87023ec96226bcc0eb6d0827`.
 
+### Refreshing the dispatcher signature
+
+Ghidra's parameter analyzer had saved a one-argument signature before
+the cases were reachable. Reopening an analysis-sourced signature on
+the private query copy let native Ghidra retain the selector's storage
+and infer the two register arguments read by the restored cases. This
+uses the same source reset as Ghidra's parameter analyzer, scoped to
+the selected function. [Ghidra 12.2 parameter analyzer](https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.2_build/Ghidra/Features/Decompiler/src/main/java/ghidra/app/cmd/function/DecompilerParameterIdCmd.java#L112-L149)
+
+The rebuilt wheel recovered all three arguments in six parameter-inference
+queries across both symbol states of the calculator tool, calculator app
+main and held-out fixture. The six baseline queries also printed three
+arguments. The four stock tool and held-out baseline outputs matched
+their earlier pseudocode exactly. Four resolved or unsupported controls
+skipped recovery. All 16 queries preserved saved exports and replayed
+without new workers. The tool and held-out matrix report SHA-256 is
+`17de0049fc35e48e169f4532e40170e1ef736f1dc0471bc302dd76a705cb5fe4`.
+The app-main matrix report SHA-256 is
+`1a6265be148b44c4a033a65b31be388156eba868fd74f5257d12a2f2c2b49d04`.
+
+The worker kept the original signature for six controls covering
+user-defined, imported, AI-sourced, custom-storage, variadic and
+already-complete signatures. The original held-out query receipt
+replayed byte-identical pseudocode and provenance under the new wheel.
+The six-control report SHA-256 is
+`93ce77a1672103d9b2430647f6c7fa784a711abcbb7d50873c6ff9519aa75ac0`.
+
+All eight stock calculator-tool and held-out outputs compiled with
+the existing sanitizer harnesses after the signature refresh. All
+eight runs stopped on signed overflow in the recovered helper
+closures. The calculator hit multiplication overflow and the held-out
+fixture hit addition overflow. The follow-up behavior report SHA-256
+is `713ec7a6a50e780d15dafecb207dc7a514849db138756bce8652d341323011b9`.
+
 ## Recovered C behavior
 
 The evaluator matched all seven source routines to the frozen captures by

@@ -153,7 +153,16 @@ def decision(plan, report):
             or report.get("labels") != list(range(len(proof["targets"])))
             or report.get("status") != "applied"):
         raise error
-    return dict(result, status="applied", labels=report["labels"], **evidence)
+    prototype = report.get("prototype")
+    fields = ("saved_source", "saved_parameter_count", "native_parameter_count", "refreshed")
+    if not isinstance(prototype, dict) or prototype.keys() != set(fields):
+        raise error
+    source, saved, native, refreshed = (prototype[key] for key in fields)
+    if (source not in ("DEFAULT", "ANALYSIS", "USER_DEFINED", "IMPORTED", "AI")
+            or type(saved) is not int or type(native) is not int or min(saved, native) < 0
+            or type(refreshed) is not bool or (refreshed and (source != "ANALYSIS" or native <= saved))):
+        raise error
+    return dict(result, status="applied", labels=report["labels"], prototype=prototype, **evidence)
 
 
 def reviewed_blocks(blocks, recovery):

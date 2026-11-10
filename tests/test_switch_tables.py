@@ -68,11 +68,17 @@ class GuardedSwitchTests(unittest.TestCase):
         payload, image, root, targets = self.fixture()
         proof, = policy.requests(payload, image, root)
         plan = {"entry_va": root["entry_va"], "requests": [proof]}
-        report = dict(proof, policy=policy.POLICY, entry_va=root["entry_va"], status="applied", labels=list(range(6)))
+        prototype = {"saved_source": "ANALYSIS", "saved_parameter_count": 1,
+                     "native_parameter_count": 3, "refreshed": True}
+        report = dict(proof, policy=policy.POLICY, entry_va=root["entry_va"], status="applied",
+                      labels=list(range(6)), prototype=prototype)
         applied = policy.decision(plan, report)
         self.assertEqual(applied["targets"], list(map(hex, targets)))
         self.assertEqual(applied["labels"], report["labels"])
-        for update in ({"targets": list(dict.fromkeys(report["targets"]))}, {"labels": [0, 1, 2, 3, 5, 4]}):
+        self.assertEqual(applied["prototype"], prototype)
+        for update in ({"targets": list(dict.fromkeys(report["targets"]))}, {"labels": [0, 1, 2, 3, 5, 4]},
+                       {"prototype": dict(prototype, saved_source="IMPORTED")},
+                       {"prototype": dict(prototype, native_parameter_count=1)}):
             with self.subTest(update=update), self.assertRaises(Error) as rejected:
                 policy.decision(plan, dict(report, **update))
             self.assertEqual(rejected.exception.code, "switch_table_result")

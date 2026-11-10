@@ -208,6 +208,12 @@ collections exceed documented bounds despite successful pseudocode output.
   for one fresh query on stock Ghidra 12.2. All eight x86_64 O0 scopes
   restored the verified case targets, and all four resolved or unsupported
   controls skipped. Saved exports were byte-identical after replay.
+- [x] Refresh [stale dispatcher signatures](heldout-switch.md#refreshing-the-dispatcher-signature)
+  from the restored body on stock Ghidra. Both symbol states of the
+  calculator tool, calculator app main and held-out fixture recovered
+  all three arguments under parameter inference. The eight strict
+  calculator-tool and held-out comparisons reached signed overflow in
+  recovered helpers.
 - [ ] Validate a released patched engine before changing the default pin.
   The installed 12.2 engine reports the affected cached and ordinary fresh
   results as partial.

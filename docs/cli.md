@@ -476,8 +476,13 @@ extent match the immutable Mach-O and the saved Program. Ghidra verifies
 the omitted case blocks and prints the resulting switch with its native
 override warning. `origin.switch_table_recovery` records the verified
 case indexes and ordered targets, including repeated destinations, or
-the reason recovery was skipped. Cached analysis remains independent of
-the query. [Stock engine validation](heldout-switch.md#stock-engine-fresh-query)
+the reason recovery was skipped. If the saved signature came from analysis
+of the incomplete body, the worker can refresh it from the restored body.
+It keeps the refresh only when Ghidra finds additional register arguments
+and preserves existing parameter storage. The `prototype` field records
+the saved source, the saved and native parameter counts, and whether the
+worker kept a refresh. Cached analysis remains independent of the query.
+[Stock engine validation](heldout-switch.md#stock-engine-fresh-query)
 
 The CLI also reports a function-boundary conflict when a linker-confirmed
 function falls through into a competing Ghidra function entry inside the

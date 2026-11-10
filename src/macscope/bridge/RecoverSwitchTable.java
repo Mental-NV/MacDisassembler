@@ -20,6 +20,8 @@ import ghidra.app.util.headless.HeadlessScript;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Parameter;
+import ghidra.program.model.pcode.FunctionPrototype;
 import ghidra.program.model.pcode.JumpTable;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.SourceType;
@@ -81,13 +83,40 @@ public class RecoverSwitchTable extends HeadlessScript {
             throw new IllegalStateException("Recovered switch changed the function bounds");
 
         new JumpTable(jump, targets, true, 0).writeOverride(root);
-        JsonArray labels = verifyNative(root, jump, targets, timeout);
+        SourceType savedSource = root.getSignatureSource();
+        Parameter[] savedParameters = root.getParameters();
+        boolean tryRefresh = savedSource == SourceType.ANALYSIS && !root.hasCustomVariableStorage() &&
+            !root.hasVarArgs() && inferred(root.getReturn().getSource()) &&
+            Arrays.stream(savedParameters).allMatch(param -> inferred(param.getSource()));
+        NativeSwitch observed = verifyNative(root, jump, targets, timeout);
+        boolean refreshed = false;
+        if (tryRefresh) {
+            // Parameters inferred before the switch body was reachable can be missing.
+            root.setSignatureSource(SourceType.DEFAULT);
+            try {
+                NativeSwitch candidate = verifyNative(root, jump, targets, timeout);
+                refreshed = addsRegisterParameters(savedParameters, candidate.prototype());
+                if (refreshed) observed = candidate;
+            } catch (IllegalStateException error) {
+                monitor.checkCancelled();
+                println("Switch prototype refresh skipped: " + error.getMessage());
+            } finally {
+                if (!refreshed) root.setSignatureSource(savedSource);
+            }
+        }
+
+        JsonObject prototype = new JsonObject();
+        prototype.addProperty("saved_source", savedSource.name());
+        prototype.addProperty("saved_parameter_count", savedParameters.length);
+        prototype.addProperty("native_parameter_count", observed.prototype().getNumParams());
+        prototype.addProperty("refreshed", refreshed);
         JsonObject report = new JsonObject();
         report.addProperty("policy", POLICY);
         report.add("entry_va", plan.get("entry_va"));
         for (String key : List.of("jump_va", "jump_end_va", "table_va", "targets"))
             report.add(key, row.get(key));
-        report.add("labels", labels);
+        report.add("labels", observed.labels());
+        report.add("prototype", prototype);
         report.addProperty("status", "applied");
         Files.writeString(Path.of(args[1]), new Gson().toJson(report),
             StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
@@ -189,7 +218,23 @@ public class RecoverSwitchTable extends HeadlessScript {
         throw new IllegalStateException("Switch case crosses its proved bound");
     }
 
-    JsonArray verifyNative(Function function, Address jump, ArrayList<Address> targets, int timeout) {
+    boolean inferred(SourceType source) {
+        return source == SourceType.DEFAULT || source == SourceType.ANALYSIS;
+    }
+
+    boolean addsRegisterParameters(Parameter[] saved, FunctionPrototype observed) {
+        if (observed.getNumParams() <= saved.length) return false;
+        for (int i = 0; i < observed.getNumParams(); i++) {
+            var param = observed.getParam(i);
+            if (param == null || (i < saved.length ? !saved[i].getVariableStorage().equals(param.getStorage()) :
+                !param.getStorage().isRegisterStorage())) return false;
+        }
+        return true;
+    }
+
+    record NativeSwitch(JsonArray labels, FunctionPrototype prototype) {}
+
+    NativeSwitch verifyNative(Function function, Address jump, ArrayList<Address> targets, int timeout) {
         var decompiler = new DecompInterface();
         try {
             if (!decompiler.openProgram(currentProgram)) throw new IllegalStateException(decompiler.getLastMessage());
@@ -209,7 +254,7 @@ public class RecoverSwitchTable extends HeadlessScript {
                     throw new IllegalStateException("Native switch labels differ from the proved indexes");
                 report.add(labels[i]);
             }
-            return report;
+            return new NativeSwitch(report, result.getHighFunction().getFunctionPrototype());
         } finally {
             decompiler.dispose();
         }
