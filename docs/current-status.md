@@ -365,6 +365,10 @@ collections exceed documented bounds despite successful pseudocode output.
   Six owned arm64 and x86_64 import, analysis and fresh queries recorded
   readiness. Controlled delays distinguished startup from total timeouts,
   preserved committed state, and verified a successful exact-limit replay.
+- [x] Measure [decompiler initialization and individual calls](benchmark.md#bridge-190-timing).
+  The 20-round owned calculator benchmark verified 60 worker manifests,
+  40 open intervals and 740 calls. Installed arm64 and x86_64 repeat
+  analyses reproduced the normalized exports with timings kept private.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

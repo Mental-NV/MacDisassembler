@@ -1274,6 +1274,14 @@ Programs and snapshots. The startup-timeout job completed on restart with
 the same recorded limits. The validation report SHA-256 is
 `85ba9e0b7824e18e8c94604711081ba88b5d70b9a143facc7acc851d71e7ae66`.
 
+`jobs show` includes a `decompiler_timing` summary for analysis and fresh
+decompilation under bridge 1.9.0. It records the elapsed time and outcome
+of Ghidra's `openProgram` call, plus the count and total time of actual
+`decompileFunction` calls. The private `bridge.json` holds the individual
+call times and available entry addresses. Normalized exports exclude these
+volatile timings. Exact replay of an unfinished job from an earlier bridge
+build requires its original CLI build.
+
 The worker starts a private process group and records an ownership token.
 The supervisor observes the launcher exit without reaping it, stops
 remaining group members while the child PID is still reserved, then

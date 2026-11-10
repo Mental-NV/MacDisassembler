@@ -91,6 +91,16 @@ def benchmark(args):
         samples[stage + "_worker"].append(job["elapsed_seconds"])
         for metric, elapsed in reported_times(read_bytes(directory / "launcher.log").decode(errors="replace")).items():
             samples[stage + "_" + metric].append(elapsed)
+        startup = job.get("startup", {})
+        if startup.get("status") == "ready":
+            samples[stage + "_launcher_to_ready"].append(startup["observed_seconds"])
+        if "decompiler_timing" in job:
+            raw = read_json(directory / "bridge.json")
+            timing = raw["decompiler_timing"]
+            opening = timing["open_program"]
+            if opening is not None:
+                samples[stage + "_decompiler_open_program"].append(opening["elapsed_ns"] / 1e9)
+            samples[stage + "_decompile_call"].extend(call["elapsed_ns"] / 1e9 for call in timing["calls"])
         pinned = {k: v for k, v in job["dependencies"].items()
                   if k not in ("ghidra_path", "java_home")}
         if report.setdefault("engine", pinned) != pinned:

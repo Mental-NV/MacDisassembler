@@ -92,7 +92,7 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.8.0";
+    static final String VERSION = "1.9.0";
     static final String PROFILE = "macscope-binary-only/1";
     static final String PARAMETER_PROFILE = "macscope-binary-only-parameters/1";
     static final String DEEP_PROFILE = "macscope-binary-only-deep/1";
@@ -114,6 +114,8 @@ public class MacscopeBridge extends HeadlessScript {
     final JsonArray errors = new JsonArray(), warnings = new JsonArray();
     final JsonObject coverage = new JsonObject();
     final JsonObject summary = new JsonObject();
+    final JsonObject decompilerTiming = new JsonObject();
+    final JsonArray decompileCalls = new JsonArray();
     long retainedBytes = 0;
     boolean partial = false, fatal = false, textTruncated = false;
     int attempted = 0, completed = 0, timedOut = 0, failed = 0, cancelled = 0, notRequested = 0;
@@ -153,6 +155,11 @@ public class MacscopeBridge extends HeadlessScript {
         root.add("warnings", warnings);
         root.add("coverage", coverage);
         root.add("decompile_summary", summary);
+        if (!mode.equals("import")) {
+            decompilerTiming.add("open_program", JsonNull.INSTANCE);
+            decompilerTiming.add("calls", decompileCalls);
+            root.add("decompiler_timing", decompilerTiming);
+        }
         root.addProperty("max_funcs", maxFunctions);
         root.addProperty("decompile_timeout_secs", timeout);
         root.add("functions", new JsonArray());
@@ -656,7 +663,16 @@ public class MacscopeBridge extends HeadlessScript {
             decomp.setOptions(opts); decomp.toggleCCode(true);
             // Markup tokens resolve their machine addresses through syntax-tree p-code ops.
             decomp.toggleSyntaxTree(true);
-            boolean opened = decomp.openProgram(currentProgram);
+            boolean opened = false;
+            long openStarted = System.nanoTime();
+            try {
+                opened = decomp.openProgram(currentProgram);
+            } finally {
+                JsonObject timing = new JsonObject();
+                timing.addProperty("elapsed_ns", System.nanoTime() - openStarted);
+                timing.addProperty("opened", opened);
+                decompilerTiming.add("open_program", timing);
+            }
             if (!opened) { decompilerError = clipped(decomp.getLastMessage(), MAX_TEXT); partial = true; }
             if (entry == null) {
                 BasicBlockModel model = new BasicBlockModel(currentProgram);
@@ -1004,7 +1020,18 @@ public class MacscopeBridge extends HeadlessScript {
                 status = "failed"; err = "Decompiler failed to open Program: " + decompilerError; failed++;
             } else {
                 try {
-                    DecompileResults result = decomp.decompileFunction(f, timeout, monitor);
+                    DecompileResults result;
+                    long callStarted = System.nanoTime();
+                    try {
+                        result = decomp.decompileFunction(f, timeout, monitor);
+                    } finally {
+                        long elapsed = System.nanoTime() - callStarted;
+                        String entry = address(f.getEntryPoint());
+                        JsonObject timing = new JsonObject();
+                        timing.addProperty("entry", entry != null && entry.length() <= 128 ? entry : null);
+                        timing.addProperty("elapsed_ns", elapsed);
+                        decompileCalls.add(timing);
+                    }
                     if (result == null) { status = "failed"; err = "Native decompiler returned null results"; failed++; }
                     else {
                         err = result.getErrorMessage();

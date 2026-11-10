@@ -25,7 +25,7 @@ from .macho import read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
-BRIDGE_VERSION = '1.8.0'
+BRIDGE_VERSION = '1.9.0'
 STARTUP_TIMEOUT_SECONDS = 300
 SIGNATURE_RECOVERIES = {
     'dispatch_return_recovery': (dispatch_returns, 'dispatch-return'),
@@ -323,6 +323,35 @@ def worker_limits(args, max_functions):
     return limits
 
 
+def decompiler_timing(result, max_functions):
+    """Validate worker timing and retain only its summary in the job manifest."""
+    timing = result.pop('decompiler_timing', None)
+    if result['mode'] == 'import' and timing is None:
+        return None
+    error = Error('decompiler_timing', 'Worker returned invalid decompiler timing evidence', 10)
+    if result['mode'] == 'import' or not isinstance(timing, dict) or timing.keys() != {'open_program', 'calls'}:
+        raise error
+    opening, calls = timing['open_program'], timing['calls']
+    if (not isinstance(calls, list) or len(calls) > max_functions
+            or (opening is not None and (not isinstance(opening, dict)
+                or opening.keys() != {'elapsed_ns', 'opened'} or type(opening['opened']) is not bool
+                or type(opening['elapsed_ns']) is not int or not 0 <= opening['elapsed_ns'] < 2**63))):
+        raise error
+    summary = result.get('decompile_summary')
+    attempted = summary.get('attempted') if isinstance(summary, dict) else None
+    if type(attempted) is not int or not 0 <= attempted <= max_functions:
+        raise error
+    if len(calls) != (attempted if opening and opening['opened'] else 0):
+        raise error
+    for call in calls:
+        if (not isinstance(call, dict) or call.keys() != {'entry', 'elapsed_ns'}
+                or (call['entry'] is not None and (not isinstance(call['entry'], str) or len(call['entry']) > 128))
+                or type(call['elapsed_ns']) is not int or not 0 <= call['elapsed_ns'] < 2**63):
+            raise error
+    return {'open_program': opening, 'call_count': len(calls),
+            'total_call_ns': sum(call['elapsed_ns'] for call in calls)}
+
+
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
         import_request=None, query_request=None, resumed_from=None, boundary_request=None, signature_plan=None):
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
@@ -485,6 +514,9 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             raise Error('engine_input_integrity', 'Ghidra loaded a different input digest')
         if result.get('status') == 'failed':
             raise Error('bridge_failed', 'Bridge failed: '+str(result.get('errors')), 10)
+        timing = decompiler_timing(result,max_functions)
+        if timing is not None:
+            manifest['decompiler_timing'] = timing
         if mode != 'import':
             validate_analysis_profile(result, requested_profile, mode)
         flow_boundaries.verify_recovery(result,boundary_request)

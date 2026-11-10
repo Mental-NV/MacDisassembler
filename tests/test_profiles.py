@@ -38,6 +38,9 @@ def raw_result(name="baseline", mode="analyze"):
             "executable_format": "Mac OS X Mach-O", "executable_sha256": "b" * 64,
             "language_id": "AARCH64:LE:64:AppleSilicon", "compiler_spec_id": "default",
             "image_base": "0x100000000", "status": "complete", "functions": [function],
+            "decompile_summary": {"attempted": 1},
+            "decompiler_timing": {"open_program": {"opened": True, "elapsed_ns": 20},
+                                  "calls": [{"entry": function["entry_va"], "elapsed_ns": 10}]},
             "analysis_profile": {"name": profile["marker"], "applied": True,
                                  "ghidra_version": "12.2",
                                  "parameter_inference_enabled": profile["parameter_inference"]},
@@ -74,6 +77,20 @@ class ProfileTests(unittest.TestCase):
     def test_all_profile_results_validate(self):
         for name in engine.ANALYSIS_PROFILES:
             engine.validate_analysis_profile(raw_result(name), engine.analysis_profile(name), "analyze")
+
+    def test_decompiler_timing_is_checked_and_removed_from_normalized_input(self):
+        raw = raw_result("baseline")
+        self.assertEqual(engine.decompiler_timing(raw, 1), {
+            "open_program": {"opened": True, "elapsed_ns": 20}, "call_count": 1, "total_call_ns": 10,
+        })
+        self.assertNotIn("decompiler_timing", raw)
+        self.error("decompiler_timing", engine.decompiler_timing, raw, 1)
+        raw = raw_result("baseline")
+        raw["decompiler_timing"]["calls"][0]["elapsed_ns"] = True
+        self.error("decompiler_timing", engine.decompiler_timing, raw, 1)
+        raw = raw_result("baseline")
+        raw["decompiler_timing"]["calls"].clear()
+        self.error("decompiler_timing", engine.decompiler_timing, raw, 1)
 
     def test_deep_requires_extra_discovery_and_disabled_switch_inference(self):
         for mode in ("analyze", "query"):

@@ -17,7 +17,7 @@ STATUSES = ACTIVE | {"complete", "failed", "timeout", "cancelled"}
 RECENT = 100
 SCAN_LIMIT = 4096
 SUMMARY = ("job_id", "mode", "image_id", "elapsed_seconds", "started_unix", "returncode", "error")
-DETAILS = ("analysis_profile", "limits", "startup", "sandbox_sha256", "selected_entry", "source_analysis_id",
+DETAILS = ("analysis_profile", "limits", "startup", "decompiler_timing", "sandbox_sha256", "selected_entry", "source_analysis_id",
            "resumed_from", "boundary_recovery")
 ANALYSIS_REQUEST = "macscope-analysis-request/1"
 IMPORT_REQUEST = "macscope-import-request/1"
