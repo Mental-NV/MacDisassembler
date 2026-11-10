@@ -40,6 +40,10 @@ def load(path):
         manifest = strict_json(read_regular(path, MAX_MANIFEST_BYTES))
     except (ValueError, RecursionError) as error:
         raise Error("evidence_manifest", "Invalid lead manifest JSON", 2) from error
+    return validate_manifest(manifest)
+
+
+def validate_manifest(manifest):
     if (not isinstance(manifest, dict) or manifest.keys() != {"schema", "images", "leads"}
             or manifest["schema"] != LEADS_SCHEMA or not isinstance(manifest["images"], list)
             or not isinstance(manifest["leads"], list)):

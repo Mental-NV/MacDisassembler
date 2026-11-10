@@ -18,7 +18,7 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, identity, is_digest, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, evidence, focused, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, string_evidence, terminal
+from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -246,9 +246,9 @@ def parser():
     common(s,('json',));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s=sub.add_parser('diff');common(s);pagination(s)
-    s.add_argument('left',help='Left committed JSON export')
-    s.add_argument('right',help='Right committed JSON export')
-    s.add_argument('--scope',choices=('metadata','functions','pseudocode'),required=True)
+    s.add_argument('left',help='Left JSON export or evidence handoff')
+    s.add_argument('right',help='Right JSON export or evidence handoff')
+    s.add_argument('--scope',choices=('metadata','functions','pseudocode','evidence'),required=True)
     return p
 
 
@@ -1428,8 +1428,12 @@ def execute_command(a, address_selection=None):
     if a.command=='version':
         return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':engine.BRIDGE_VERSION,'backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
     if a.command=='diff':
-        data,rows,binding = binary_diff.compare(a.left,a.right,a.scope)
-        records,cov = page(rows,a,binding,binary_diff.POLICY,{},order='export-diff/v1')
+        if a.scope=='evidence':
+            data,rows,binding = handoff_diff.compare(a.left,a.right)
+            rows = redact(rows)
+        else:
+            data,rows,binding = binary_diff.compare(a.left,a.right,a.scope)
+        records,cov = page(rows,a,binding,data['policy'],{},order='export-diff/v1')
         cov['scope'] = 'observed export differences'
         if data['gaps']:
             reasons = [*data['gaps'],*(['page_limit'] if cov['next_cursor'] else [])]

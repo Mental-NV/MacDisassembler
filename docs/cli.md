@@ -1644,6 +1644,39 @@ decoded instructions matched. The thin and universal comparisons paired
 all eight checked entries by same-slice address. The validation report
 SHA-256 is `a35f371455cded1cf8f96c73672a5e3e975f816bf8e239d8c259371bc55dca2d`.
 
+### Comparing pinned Calendar handoffs
+
+```sh
+macscope diff old-calendar.json new-calendar.json --scope evidence --json
+```
+
+Pass the JSON output of `macscope evidence` on each side. Give the same
+review question the same lead ID across builds. The comparison pairs that
+ID only when the architecture, bundle role and selector intent agree.
+An explicit address or function ID can be repinned for a new build.
+Added and removed rows describe the lead lists. Unresolved rows retain
+the original evidence gaps.
+
+The comparison reports changed observations, coverage and provenance
+separately. Instruction bytes are compared at offsets from the function
+entry. Pseudocode and signatures are compared as saved text. References
+and calls retain their kind and resolution, with out-of-body numeric
+addresses tracked separately. Declared imports retain the symbol, library
+and provider role, with the stub, bind and provider entry locations
+tracked separately. The output contains digests and counts for these
+facets.
+
+`unchanged_observations` means the comparable saved facets match. A
+partial handoff or incompatible lead keeps the comparison partial.
+The comparison runs without the original bundles, workspaces or Ghidra.
+Pagination binds to the two ordered handoff file digests.
+
+On the owned arm64 Calendar fixture, changing the day-length constant
+from 86,400 to 82,800 and moving its framework export changed the provider's
+saved instructions and pseudocode. The caller's declared symbol, library
+and provider role matched while the provider entry moved. Recapturing the
+original in new worker jobs preserved all three leads' saved observations.
+
 ## Experimental binary-derived parameter inference
 
 Baseline remains the default. To request Ghidra's generic whole-program

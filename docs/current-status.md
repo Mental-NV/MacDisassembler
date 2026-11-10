@@ -92,6 +92,13 @@ decision. Reuse recorded observations for gestures already covered.
   Of 512 seeded mutations, 451 produced a typed lead failure and 61
   preserved the original result. Both sibling leads stayed byte-identical,
   no worker started, and restoring the receipt reproduced the clean report.
+- [x] **Compare private Calendar handoffs across an owned update.**
+  [`diff --scope evidence`](cli.md#comparing-pinned-calendar-handoffs)
+  identified changed instruction bytes and pseudocode in the rebuilt
+  provider while tracking its moved entry separately from the unchanged
+  caller and declared library link. Recapturing the original with new
+  worker jobs changed provenance only. The comparison and cursor replayed
+  with the engine unavailable.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose
