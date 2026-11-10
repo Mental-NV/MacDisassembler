@@ -1657,12 +1657,23 @@ candidates and 16 unique stub bindings are considered, with a 128 KiB request
 cap. Exceeding a cap declines all recovery rather than applying a prefix.
 No instruction bytes, saved import database or sandbox policy are changed.
 
-Focused `native_scope` independently scans up to 100,000 native p-code
-operations and retains at most 64 out-of-body addresses. Out-of-body
-operations or an incomplete scan make the result partial even if the printer
-reports completion and emits no jump warning. Address spans still describe
-mapped in-body tokens; they are not proof that all printed operations belong
-to the selected body.
+Focused queries first review the captured instruction listing and raw CFG,
+before decompiler optimization. A non-call jump or fallthrough outside the
+selected body makes coverage partial. Missing direct destinations, non-instruction
+targets, malformed records and incomplete instruction/body/CFG coverage also
+fail closed. Only an applied, receipt-bound tail-call proof exempts a terminal
+call edge. This review is bounded to 2,000 instructions, 500 blocks, 500 edges
+and 64 detailed gaps; exceeding a bound retains an incomplete-coverage gap.
+Previously saved v2 receipts claiming complete coverage are rechecked and
+rejected if unsafe, without changing the saved receipt. Capture a new query
+rather than reusing such a result.
+
+`native_scope` separately scans up to 100,000 optimized native p-code
+operations and retains at most 64 out-of-body addresses. Outside operations
+or an incomplete scan also make the result partial. A zero count alone is
+not proof of confinement: optimization can remove an outside operation or
+fold its value into an in-body constant. Address spans describe mapped in-body
+tokens, not all operations used to derive the printed result.
 
 A terminal ARM64 `BRK #imm16` is classified separately in `control_flow_traps`
 only when its exact four bytes and instruction/block boundary agree. The
@@ -1680,11 +1691,13 @@ PYTHONPATH=src python3 tests/integration_focused_control_flow.py
 ```
 
 It builds but never executes a fixture with local and import tail exits, a
-BRK path and an unresolved register branch. Other decompiler limitations,
+BRK path, an unresolved register branch and six non-linker scope escapes.
+The escape controls cover a constant condition, identical/overwritten/unused
+outside writes, a conditional jump and a fallthrough. Other decompiler limitations,
 including indirect target and calling-signature recovery, still apply.
 
-On 10 November 2026 the production bridge passed this owned Mac/Ghidra 12.2
-fixture: both tail cases and BRK completed with the expected proof records,
+On 10 November 2026 the initial tail-call/trap bridge passed the original
+four-case owned Mac/Ghidra 12.2 fixture: both tail cases and BRK completed with the expected proof records,
 the genuine register branch remained partial, and all four had zero native
 operations outside their selected bodies. A separate owned x86_64 focused
 query also completed with zero scope escapes and no tail override. The final

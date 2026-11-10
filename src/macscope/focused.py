@@ -2,7 +2,7 @@
 
 from hashlib import sha256
 
-from . import focused_tailcalls, macho_load, metadata
+from . import focused_boundaries, focused_tailcalls, macho_load, metadata
 from .direct_signatures import arm64_direct_target
 from .dispatch_returns import direct_target
 from .errors import Error
@@ -137,6 +137,9 @@ def validate_result(result, proof):
         if "tail_calls" in proof:
             verify_native_scope(function)
             focused_tailcalls.verify(proof["tail_calls"], function.get("tail_call_recovery"), function)
+            if focused_boundaries.gaps(function, proof) and (result["status"] == "complete"
+                    or function["decompile_status"] == "complete"):
+                raise ValueError("Focused control flow is not confined to its body; capture a new query")
     except (KeyError, TypeError, ValueError) as error:
         raise Error("query_receipt", str(error), 3) from error
 

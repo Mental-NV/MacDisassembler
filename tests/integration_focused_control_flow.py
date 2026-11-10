@@ -35,7 +35,8 @@ def run(root, source):
         if len(row) == 3 and row[2].startswith('_owned_'):
             symbols[row[2]] = hex(int(row[0], 16))
     expected = {'local': '_owned_tail_local', 'import': '_owned_tail_import',
-                'trap': '_owned_trap', 'indirect': '_owned_indirect'}
+                'trap': '_owned_trap', 'indirect': '_owned_indirect',
+                **{kind:'_owned_escape_'+kind for kind in ('constant','same','overwritten','unused','conditional','fallthrough')}}
     assert set(expected.values()) <= symbols.keys(), symbols
     project = root / 'project'
     invoke(root, 'create', 'project', 'create', project)
@@ -56,16 +57,21 @@ def run(root, source):
         raw = bytes.fromhex(''.join(row['bytes'] for row in function['instructions']))
         assert payload == raw, (label, 'selected bytes changed or missing')
         assert hashlib.sha256(raw).hexdigest() == function['instruction_bytes_sha256'], label
-        if label == 'indirect':
+        escape = label in ('constant','same','overwritten','unused','conditional','fallthrough')
+        if label == 'indirect' or escape:
             assert report['status'] == function['decompile_status'] == 'partial', report
             assert function.get('control_flow_gaps'), label
+            if escape:
+                assert any(gap['reason']=='focused_flow_outside_body' for gap in function['control_flow_gaps']), label
+                assert function['tail_call_recovery']['decisions']==[], label
         else:
             assert report['status'] == function['decompile_status'] == 'complete', report
             assert not function.get('control_flow_gaps'), label
             assert 'Could not recover jumptable' not in function['pseudocode'], label
             assert 'Treating indirect jump as call' not in function['pseudocode'], label
-        assert function['native_scope']['outside_body_operations'] == 0, label
-        assert function['native_scope']['status'] == 'complete', label
+        if not escape or label == 'constant':
+            assert function['native_scope']['outside_body_operations'] == 0, label
+            assert function['native_scope']['status'] == 'complete', label
         if label in ('local','import'):
             decisions = function['tail_call_recovery']['decisions']
             assert len(decisions) == 1 and decisions[0]['outcome'] == 'applied', label
@@ -81,7 +87,9 @@ def run(root, source):
             assert '0x2a' not in function['pseudocode'], 'callee body leaked into selected function'
         summaries[label] = {'status': report['status'], 'entry_va': function['entry_va'],
                             'instruction_count': function['instruction_count'],
-                            'pseudocode_characters': len(function['pseudocode'])}
+                            'pseudocode_characters': len(function['pseudocode']),
+                            'outside_body_operations':function['native_scope']['outside_body_operations'],
+                            'flow_gap_reasons':[gap['reason'] for gap in function.get('control_flow_gaps',[])]}
     assert hashlib.sha256(binary.read_bytes()).hexdigest() == digest
     summary = {'root': str(root), 'fixture_sha256': digest, 'binary_unchanged': True,
                'application_executed': False, 'checks': summaries}

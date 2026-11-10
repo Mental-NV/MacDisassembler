@@ -1,7 +1,7 @@
 """CLI coverage review for observable gaps in Ghidra's control-flow evidence."""
 import re
 
-from . import body_ownership, flow_boundaries
+from . import body_ownership, flow_boundaries, focused_boundaries
 from .metadata import VA
 
 
@@ -56,7 +56,7 @@ def trap_proof(block, instructions):
             "engine_flow": block["flow"]}
 
 
-def review(function, *, blocks=None, boundary_gaps=(), arch=None, instructions=None):
+def review(function, *, blocks=None, boundary_gaps=(), arch=None, instructions=None, focused_extent=None):
     """Preserve original evidence and distinguish unresolved jumps from printer completion."""
     if function.get("is_thunk") or function.get("is_external"):
         return function
@@ -85,6 +85,8 @@ def review(function, *, blocks=None, boundary_gaps=(), arch=None, instructions=N
         gaps.append({"reason": "native_operations_outside_body" if scope.get("outside_body_operations")
                      else "native_operation_scope_unavailable", "source": "ghidra_native_pcode",
                      "scope": scope})
+    if focused_extent is not None:
+        gaps.extend(focused_boundaries.gaps(function, focused_extent))
     gaps.extend(boundary_gaps)
     if traps:
         function = dict(function, control_flow_traps=traps)

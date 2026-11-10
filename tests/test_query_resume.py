@@ -270,10 +270,14 @@ class FocusedResumeTests(TemporaryCase):
         function = {'entry_va':self.entry,'name':'owned','signature':None,'pseudocode':'return;',
                     'decompile_status':'complete','body_ranges':[[self.entry,hex(int(self.entry,16)+3)]],
                     'is_external':False,'is_thunk':False,
-                    'instructions':[{'addr':self.entry,'bytes':self.code.hex(),'flow':'TERMINATOR'}], 'blocks':[],
+                    'instructions':[{'addr':self.entry,'bytes':self.code.hex(),'flow':'TERMINATOR','fallthrough':None}],
+                    'blocks':[{'min':self.entry,'max':hex(int(self.entry,16)+3),
+                               'flow':'TERMINATOR','edges_truncated':False,'dsts':[]}],
                     'xrefs_to_entry':[],'xrefs_from_sample':[],
                     'coverage':{key:{'status':'complete'} for key in ('pseudocode','instructions','body_ranges',
                                                                     'xrefs_from','xrefs_to_entry')}}
+        for key in ('instructions','body_ranges','cfg'):
+            function['coverage'][key]={'status':'complete','emitted':1,'truncated':False,'error':None}
         function['native_scope'] = {'policy':'macscope-focused-native-scope/1','status':'complete',
             'operations_scanned':1,'operations_truncated':False,'outside_body_operations':0,
             'outside_body_addresses':[],'error':None}
@@ -296,6 +300,27 @@ class FocusedResumeTests(TemporaryCase):
         failed = '9'*32
         self.write_job(failed,dict(self.record,job_id=failed,resumed_from=self.original,status='failed'))
         self.error('evidence_query_mismatch',evidence.focused_query,self.workspace,self.image,self.raw,self.entry,failed)
+
+    def test_scope_unsafe_complete_receipt_is_refused_without_rewriting_it(self):
+        with patch.object(engine,'dependencies',return_value=self.deps), patch.object(engine,'run',side_effect=self.worker):
+            self.resume()
+        receipt_path=self.workspace.path/'jobs'/self.original/'query-result.json'
+        receipt=json.loads(receipt_path.read_text())
+        function=receipt['result']['data']
+        self.assertEqual(function['decompile_status'],'complete')
+        function['instructions'][0].update(flow='UNCONDITIONAL_JUMP',bytes='03000014')
+        function['blocks'][0].update(flow='UNCONDITIONAL_JUMP',dsts=[{
+            'from':self.entry,'to':hex(int(self.entry,16)+12),'flow':'UNCONDITIONAL_JUMP'}])
+        receipt['result_sha256']=storage.identity(receipt['result'])
+        producer_path,producer=jobs.get(self.workspace,self.attempt)
+        producer['focused_result_sha256']=receipt['result_sha256']
+        storage.write_json(producer_path,producer,force=True)
+        storage.write_json(receipt_path,receipt,force=True)
+        before=receipt_path.read_bytes()
+        with patch.object(engine,'run',side_effect=AssertionError('Unsafe receipt must not start a worker')):
+            self.error('query_receipt',self.resume)
+            self.error('query_receipt',evidence.focused_query,self.workspace,self.image,self.raw,self.entry,self.original)
+        self.assertEqual(receipt_path.read_bytes(),before)
 
     def test_completed_legacy_receipt_replays_and_exports_without_new_policy(self):
         self.proof = {key:value for key,value in self.proof.items() if key != 'tail_calls'}

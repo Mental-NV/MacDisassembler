@@ -530,8 +530,8 @@ def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_fr
     if deps is None:
         deps = engine.dependencies(args.ghidra,args.java_home,full=True)
     result, job = engine.run(project,image,'query',args,deps,entry=entry,from_import=True,resumed_from=resumed_from)
-    function = flow_evidence.review(result['functions'][0], arch=image['arch'])
     proof = job['focused_import']
+    function = flow_evidence.review(result['functions'][0], arch=image['arch'], focused_extent=proof)
     request = job['focused_request']
     decoded_bytes = sum(len(row['bytes']) // 2 for row in function['instructions'])
     reasons = []

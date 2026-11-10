@@ -80,10 +80,14 @@ The startup and memory cost of the full distribution is an accepted architectura
 The implemented experimental focused path is described in
 [the CLI contract](cli.md#decompile-one-function-from-an-import). A successful
 native C printer is not sufficient for complete selected-function coverage.
-The CLI must separately report unresolved computed jumps and native operations
-outside the selected function body; complete address spans cover retained
-in-body tokens only. Scope scans and recovery requests must be bounded and
-include their limits and evidence.
+The CLI must review instruction fallthroughs and raw CFG edges before native
+optimization, reporting non-call scope escapes and incomplete or unresolved
+boundary evidence as partial. It must also report unresolved computed jumps
+and native operations outside the selected body. Zero outside operations in
+optimized p-code cannot establish confinement because optimization may remove
+those operations or propagate their constants. Complete address spans cover
+retained in-body tokens only. Scope scans and recovery requests must be bounded
+and include their limits and evidence.
 
 For exact no-analysis ARM64 queries, a direct unconditional terminal branch
 may be modeled as a tail call only from verified instruction bytes to an
