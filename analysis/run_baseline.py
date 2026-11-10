@@ -150,6 +150,17 @@ def validate_baseline(path):
     return counts
 
 
+def engine_identity():
+    """Fingerprint the real toolchain only after an owned input was staged."""
+    return {
+        'ghidra_properties_sha256': sha(GHIDRA / 'Ghidra/application.properties'),
+        'native_decompiler_sha256': sha(GHIDRA / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile'),
+        'scripts': {f.name: sha(f) for f in (REPO / 'analysis/scripts').glob('*.java')},
+        'source_revision': subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
+        'jdk_version': subprocess.check_output([str(JAVA / 'bin/java'), '-version'], stderr=subprocess.STDOUT, text=True).strip(),
+    }
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('cases', nargs='*', choices=CASES)
@@ -174,15 +185,11 @@ def main(argv=None):
     identity = {'schema': 'macscope-baseline-run/2', 'run_id': a.run_id,
                 'limits': {'job_secs': a.job_timeout, 'case_secs': a.case_timeout, 'log_bytes': 16 << 20, 'json_bytes': 64 << 20},
                 'isolation': 'sandbox-exec deny network; no filesystem confinement; own fixture inputs only',
-                'ghidra_properties_sha256': sha(GHIDRA / 'Ghidra/application.properties'),
-                'native_decompiler_sha256': sha(GHIDRA / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile'),
-                'scripts': {f.name: sha(f) for f in (REPO / 'analysis/scripts').glob('*.java')},
-                'source_revision': subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
-                'jdk_version': subprocess.check_output([str(JAVA / 'bin/java'), '-version'], stderr=subprocess.STDOUT, text=True).strip(),
                 'host_arch': __import__('platform').machine(),
                 'build_manifest_sha256': sha(a.build_root / 'manifest.json') if (a.build_root / 'manifest.json').exists() else None,
                 'runner_sha256': sha(__file__), 'java_home': str(JAVA), 'java_tool_options': env['JAVA_TOOL_OPTIONS']}
-    exclusive_json(out / 'identity.json', identity)
+    identity_recorded = False
+    identity_failure = None
     for case in a.cases or CASES:
         for kind, rel in [('app', 'CalculatorFixture.app/Contents/MacOS/CalculatorFixture'), ('tool', 'CorpusFixture')]:
             tag = case + '-' + kind
@@ -193,6 +200,16 @@ def main(argv=None):
                 # Binary snapshot only. No sources/dSYMs/maps supplied to engine.
                 inp = d / 'input.bin'; inp.write_bytes(source.read_bytes())
                 rec['input_sha256'] = sha(inp)
+                if not identity_recorded:
+                    try:
+                        identity.update(engine_identity(), engine_preflight='complete')
+                    except Exception as error:
+                        identity_failure = error
+                        identity.update(engine_preflight='failed', engine_error=f'{type(error).__name__}: {error}')
+                    exclusive_json(out / 'identity.json', identity)
+                    identity_recorded = True
+                if identity_failure is not None:
+                    raise identity_failure
                 (d / 'project').mkdir()
                 baseline = d / 'baseline.json'
                 argv = ['/usr/bin/sandbox-exec', '-f', str(REPO / 'analysis/nonet.sb'),
@@ -225,6 +242,11 @@ def main(argv=None):
                 rec.update(status='failed', error=f'{type(e).__name__}: {e}')
             exclusive_json(d / 'result.json', rec); records.append(rec)
             print(tag + ': ' + rec['status'], flush=True)
+    if not identity_recorded:
+        # Missing inputs still produce an immutable failed run without probing
+        # Ghidra, Java or git just to report those input failures.
+        identity['engine_preflight'] = 'not_required'
+        exclusive_json(out / 'identity.json', identity)
     exclusive_json(out / 'freeze.json', {'schema': 'macscope-freeze/2', 'artifacts': freeze,
         'classification': 'binary-only engine inputs; source-aware evaluator; filesystem isolation absent'})
     summary = {'records': records, 'elapsed_secs': round(time.monotonic() - started, 3),

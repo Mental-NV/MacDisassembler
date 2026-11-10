@@ -21,6 +21,7 @@ The broad specification is a roadmap, not a completion claim.
 PYTHONPATH=src python3 -m macscope --help
 PYTHONPATH=src python3 -m macscope doctor --json
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:analysis python3 -m unittest discover -s analysis/tests -v
 ```
 
 The independent repository contains project-owned code, documentation and a
@@ -29,3 +30,8 @@ and recovered outputs are ignored. It does not modify Taskovsky or include
 third-party application binaries or proprietary recovered material. No
 project license has been selected. Remote pushes, publication, paid-engine
 work and optional REA integration remain separate decisions.
+
+The direct baseline runner records missing-input and missing-toolchain failures
+in its immutable run summary. It fingerprints the engine only after staging an
+input, so these failure paths can be tested without a macOS Ghidra install.
+This does not make engine execution portable or change its isolation policy.
