@@ -181,6 +181,26 @@ class ChainedFixupsTests(unittest.TestCase):
                 self.decode(data)
             self.assertEqual(caught.exception.code,code)
 
+    def test_engine_admission_walks_chains_without_inventory_truncation(self):
+        valid = fixture()
+        with patch.object(dyld, "MAX_FIXUPS", 1):
+            self.assertEqual(self.decode(valid)[2], ["fixup_limit"])
+            self.assertEqual(macho.thin(valid, for_engine=True), macho.thin(valid))
+            with self.assertRaises(Error) as caught:
+                macho.thin(fixture(bind_ordinal=1), for_engine=True)
+            self.assertEqual(caught.exception.code, "fixup_ordinal")
+        for raw, expected in (
+                (fixture(step=4095), "macho_bounds"),
+                (fixture(step=1), "fixup_pointer"),
+                (fixture(page_start=0x8000), "fixup_pages"),
+                (fixture(pointer_format=7), "fixup_pointer_unsupported")):
+            with self.subTest(code=expected), self.assertRaises(Error) as caught:
+                macho.thin(raw, for_engine=True)
+            self.assertEqual(caught.exception.code, expected)
+        with patch.object(dyld, "MAX_ENGINE_CHAINED_FIXUPS", 1), self.assertRaises(Error) as caught:
+            macho.thin(valid, for_engine=True)
+        self.assertEqual((caught.exception.code, caught.exception.exit_code), ("fixup_chain_limit", 7))
+
     def test_exact_chain_validates_its_page_beyond_the_inventory_cap(self):
         payload_offset = 0x2200
         table = 66

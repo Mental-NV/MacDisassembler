@@ -92,3 +92,4 @@ def require_engine_layout(data, loader, segments):
         name_offset = (struct.unpack_from("<I", data, at + 4)[0] if format_id == 3
                        else struct.unpack_from("<I", data, at)[0] >> 9)
         symbol_bounds(data, payload + symbols, payload + size, name_offset)
+    return extent

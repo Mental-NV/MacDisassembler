@@ -2,15 +2,15 @@
 import struct
 
 from .chained_layout import (
-    IMPORT_WIDTHS, MAX_PAGE_RECORDS, header, segment_pages, starts_region, symbol_bounds,
+    IMPORT_WIDTHS, MAX_PAGE_RECORDS, header, require_engine_layout, segment_pages, starts_region, symbol_bounds,
 )
 from .errors import Error
 from .dyld_legacy import decode_legacy, library_for_ordinal
-from .macho import thin
 from .macho_load import bounded
 
 
 MAX_FIXUPS = 10000
+MAX_ENGINE_CHAINED_FIXUPS = 262144
 MAX_LEGACY_LOOKUP_OPERATIONS = 262144
 POINTER_FORMATS = {
     1: "DYLD_CHAINED_PTR_ARM64E",
@@ -93,7 +93,7 @@ def ordinary_pointer(value, kind, base):
     return fields, (value >> 51 & 0xFFF) * 4
 
 
-def decode_chained(data, image, parsed, extent, *, address=None, selected=None):
+def decode_chained(data, image, parsed, extent, *, address=None, selected=None, for_engine=False):
     payload,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
     end = payload+size
     version,starts,table,symbols,count,format_id,symbol_format = header(data, payload, size)
@@ -117,6 +117,7 @@ def decode_chained(data, image, parsed, extent, *, address=None, selected=None):
     formats = set()
     pages_seen = 0
     seen_addresses = set()
+    limit = MAX_ENGINE_CHAINED_FIXUPS if for_engine else MAX_FIXUPS
     for segment,kind,segment_offset,page_size,pages,page_table in segment_pages(
             data,payload,starts,starts_end,parsed["segments"],selected=selected):
         formats.add(kind)
@@ -149,7 +150,7 @@ def decode_chained(data, image, parsed, extent, *, address=None, selected=None):
             page_end = min((page+1)*page_size,file_size)
             while True:
                 bounded(offset,8,page_end,"Chained pointer in file-backed page")
-                if address is None and len(records)==MAX_FIXUPS:
+                if address is None and len(seen_addresses)==limit:
                     result["pointer_formats"] = sorted(formats)
                     return result, records, [*unsupported,"fixup_limit"]
                 va = segment_va+offset
@@ -158,26 +159,39 @@ def decode_chained(data, image, parsed, extent, *, address=None, selected=None):
                 seen_addresses.add(va)
                 at = file_offset+offset
                 value = struct.unpack_from("<Q",data,at)[0]
-                row = {"address_space": "ram", "va": hex(va), "slice_file_offset": hex(at),
-                       "container_file_offset": hex(int(image["offset"],16)+at),
-                       "pointer_format": POINTER_FORMATS[kind], "raw": hex(value)}
                 fields, step = decode(value,kind,base)
                 if fields["kind"] == "bind":
                     ordinal = fields.pop("ordinal")
                     if ordinal not in imports:
                         imports[ordinal] = import_symbol(data,payload,end,table,symbols,count,format_id,ordinal,libraries)
                     symbol = imports[ordinal]
+                    if for_engine and symbol["library"] is None:
+                        raise Error("fixup_ordinal", "Unsupported special chained bind library ordinal")
                     fields.update(symbol, resolution=(
                         "declared_symbol" if symbol["library"] else "unresolved_library_ordinal"
                     ))
-                row.update(fields)
-                if address is None or va == address:
-                    records.append(row)
+                if not for_engine and (address is None or va == address):
+                    records.append({"address_space": "ram", "va": hex(va), "slice_file_offset": hex(at),
+                                    "container_file_offset": hex(int(image["offset"],16)+at),
+                                    "pointer_format": POINTER_FORMATS[kind], "raw": hex(value), **fields})
                 if not step:
                     break
+                if for_engine and step < 8:
+                    raise Error("fixup_pointer", "Chained pointer slots overlap")
                 offset += step
     result["pointer_formats"] = sorted(formats)
     return result, records, sorted(set(unsupported))
+
+
+def require_engine_chains(data, parsed):
+    extent = require_engine_layout(data, parsed["loader"], parsed["segments"])
+    if extent is None:
+        return
+    _, _, gaps = decode_chained(data, parsed, parsed, extent, for_engine=True)
+    if "fixup_limit" in gaps or "page_limit" in gaps:
+        raise Error("fixup_chain_limit", "Chained pointer traversal exceeds the engine admission limit", 7)
+    if gaps:
+        raise Error("fixup_pointer_unsupported", "Unsupported chained pointer layout: " + ", ".join(gaps), 3)
 
 
 def slot_segment(parsed, address):
@@ -196,6 +210,8 @@ def slot_segment(parsed, address):
 
 def fixups(data, image, *, parsed=None, weak_definitions=False, address=None):
     if parsed is None:
+        from .macho import thin
+
         parsed = thin(data)
     if address is not None and weak_definitions:
         raise Error("fixup_address_scope", "Weak definitions are keyed by opcode offset rather than slot address", 2)

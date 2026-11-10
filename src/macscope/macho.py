@@ -11,7 +11,7 @@ import stat
 import struct
 from xml.parsers.expat import ExpatError
 from pathlib import Path
-from .chained_layout import require_engine_layout
+from .dyld import require_engine_chains
 from .dyld_legacy import require_engine_streams
 from .errors import Error
 from .export_trie import require_engine_trie
@@ -182,17 +182,18 @@ def thin(data, *, allow_arm64e=False, include_section_linkage=False, for_engine=
     if cursor != end:
         raise Error('command_size', 'Load-command count and byte size disagree')
     loader = details(data,command_records,segments,arch)
-    if for_engine:
-        require_engine_tables(loader, arch)
-        require_engine_layout(data, loader, segments)
-        require_engine_trie(data, loader)
-        require_engine_streams(data, loader, segments)
     if encryption is not None:
         loader['encryption'] = encryption
-    return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,
+    result = {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,
             'flags': hex(flags), 'uuid': uuid, 'segments': segments, 'sections': sections,
             'load_commands': commands, 'warnings': warnings,
             'loader': loader}
+    if for_engine:
+        require_engine_tables(loader, arch)
+        require_engine_chains(data, result)
+        require_engine_trie(data, loader)
+        require_engine_streams(data, loader, segments)
+    return result
 
 
 def with_loader_container_offsets(image):

@@ -2223,8 +2223,7 @@ declared payload. This includes import names that a targeted fixup
 query would never read. Engine admission requires version 0, import
 formats 1 through 3, and uncompressed symbols. It caps the aggregate
 import and page counts at 262,144 each and a segment's page count at
-32,767 to fit the pinned loader. These checks cover layout and names.
-Pointer interpretation and chain traversal have their own coverage.
+32,767 to fit the pinned loader.
 [Apple chained-fixup definitions](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h)
 
 The isolated wheel rejected 31 owned malformed or unsupported import
@@ -2235,6 +2234,27 @@ calculator tools completed full headless import and analysis, and
 both fresh queries reproduced their saved pseudocode. The validation
 report SHA-256 is
 `b4b50f5be8228266a20243c913700d0d45640e0456378aa99f2a6ed90a7da89b`.
+
+### Chained pointer preflight
+
+Engine admission also walks each declared pointer chain within its
+file-backed page. It checks the segment mapping, page starts, pointer
+fields, forward steps, and referenced import ordinals. Consecutive
+slots may not overlap. Unsupported pointer formats and multi-start
+pages fail admission. The walk allows 262,144 pointers per slice and
+retains no output inventory. Data-only `fixups` keeps its separate
+inventory and exact-address behavior. The existing arm64e engine
+support gate still applies.
+
+The temporary wheel rejected 18 owned controls before staging, including
+an escape in an unselected universal slice. A synthetic slice at the
+exact pointer limit passed preflight, and one additional pointer returned
+the typed limit error. Inspection and fixup output matched the previous
+wheel on 24 intact slices. Arm64 and x86_64 calculator tools completed
+full headless analysis and fresh decompilation, with 39 selected
+instructions checked against the original slice bytes. The validation
+report SHA-256 is
+`2ba094f37975e66d4df4072cf8b5442c919a807e817f1ad41d3030bc6bf4ccae`.
 
 ### Dyld export-trie preflight
 

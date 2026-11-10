@@ -631,6 +631,10 @@ collections exceed documented bounds despite successful pseudocode output.
   before engine work. Thirty-one import controls stopped before staging.
   Data-only results matched on 24 intact slices, and both owned calculator
   architectures completed full headless validation.
+- [x] Validate [chained pointer walks](cli.md#chained-pointer-preflight)
+  before engine work. The exact pointer limit passed, and 18 import
+  controls stopped before staging. Both owned calculator architectures
+  completed full headless analysis and fresh decompilation.
 - [x] Validate [dyld export tries](cli.md#dyld-export-trie-preflight)
   before engine work. Twenty-three controls stopped before staging. Both
   modern and legacy owned calculator variants reproduced their export
