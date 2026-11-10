@@ -1638,6 +1638,62 @@ receipt. The receipt can also be included in a handoff.
 Use `--fresh` to query an existing analyzed Program and apply
 saved-analysis options.
 
+Focused receipts now use `macscope-focused-import/2`. On ordinary ARM64,
+byte-decoded unconditional `B` exits may be modeled as `CALL_RETURN` in the
+disposable Program only. The target must be an exact member of the fully
+validated linker-start stream, or a correctly aligned 12-byte ordinary
+`__stubs` entry whose ADRP/LDR/BR bytes and unique strong dyld binding agree.
+Both source and target must exclude encrypted bytes and declared data.
+Conditional branches, `BL`, register jumps, arbitrary executable addresses,
+interior targets, weak/authenticated bindings and x86_64 are not repaired.
+
+`origin.extent.tail_calls` records the requested source/target byte proofs,
+classification and any limit reason. `tail_call_recovery` binds the worker's
+per-candidate decisions to that exact request digest. Applied instructions
+retain `original_flow: UNCONDITIONAL_JUMP` and `flow_override: CALL_RETURN`
+alongside their effective `flow: CALL_TERMINATOR`; selected-call and import
+linking include these proven tail calls. At most 64 outside-extent branch
+candidates and 16 unique stub bindings are considered, with a 128 KiB request
+cap. Exceeding a cap declines all recovery rather than applying a prefix.
+No instruction bytes, saved import database or sandbox policy are changed.
+
+Focused `native_scope` independently scans up to 100,000 native p-code
+operations and retains at most 64 out-of-body addresses. Out-of-body
+operations or an incomplete scan make the result partial even if the printer
+reports completion and emits no jump warning. Address spans still describe
+mapped in-body tokens; they are not proof that all printed operations belong
+to the selected body.
+
+A terminal ARM64 `BRK #imm16` is classified separately in `control_flow_traps`
+only when its exact four bytes and instruction/block boundary agree. The
+original engine flow and printed `SoftwareBreakpoint` remain visible. This
+does not suppress printed decompiler warnings, change a real computed jump,
+or upgrade a previously partial engine result. Missing or ambiguous evidence
+stays unresolved. Completed v1 receipts remain immutable and can still replay and enter
+evidence handoffs under their original policy. They are not retroactively
+repaired or upgraded. An unfinished v1 query requires a new capture under v2.
+
+The owned, static-only regression can be run on the pinned Mac toolchain:
+
+```sh
+PYTHONPATH=src python3 tests/integration_focused_control_flow.py
+```
+
+It builds but never executes a fixture with local and import tail exits, a
+BRK path and an unresolved register branch. Other decompiler limitations,
+including indirect target and calling-signature recovery, still apply.
+
+On 10 November 2026 the production bridge passed this owned Mac/Ghidra 12.2
+fixture: both tail cases and BRK completed with the expected proof records,
+the genuine register branch remained partial, and all four had zero native
+operations outside their selected bodies. A separate owned x86_64 focused
+query also completed with zero scope escapes and no tail override. The final
+cloud suites passed 485 primary and 106 analysis tests. Source/runtime digest
+`62a92674dbc611803c93c3d942c7a4e6bac87f3a617f23a21a132db311dfce1a`
+binds the sorted compact JSON map of relative `src` Python/Java/JSON paths to
+their SHA-256 values. The source distribution and package content were checked;
+this validation did not install or replace the user's CLI.
+
 ### Selected evidence handoff
 
 `evidence` exports a reviewer-selected list from committed analyses and

@@ -1,12 +1,12 @@
 # macOS Binary Analysis CLI Specification
 
-Version 0.2 for review | 9 November 2026 | Working command name `macscope`
+Version 0.2 for review | Updated 10 November 2026 | Working command name `macscope`
 
 ## 1 Selected architecture and scope
 
 **Architecture decision:** full Ghidra headless is selected for MacDisassembler. Use the full Ghidra distribution for Mach-O loading, program analysis, disassembly, function/reference recovery, and C-like pseudocode. The CLI supplies orchestration, evidence records, persistence, macOS-specific presentation, and validation around that pipeline. This selection uses Ghidra's loader and analyzers as well as its decompiler; it is not a standalone decompiler library or an r2ghidra/rz-ghidra plugin. Do not implement a new instruction lifter or decompiler for the first release.
 
-The user has approved the full Ghidra headless approach. This settles the engine architecture, not authorization to start development. The remaining specification and phased validation plan are still for review. The separate Git repository currently contains documentation only. No application has been compiled, no binary analyzed, and no quality or performance result measured for this project. All commands below are interface proposals or future experiment recipes. All numeric gates are proposed targets.
+The full Ghidra headless approach is approved and an experimental implementation now exists, including owned fixtures and measured validation. This broad specification remains a roadmap rather than a completion claim. Use [current status](current-status.md) and the [implemented CLI contract](cli.md) for supported commands and recorded results. Numeric gates below remain proposed targets unless a validation record explicitly reports that they passed.
 
 The intended outcome is a reusable, local-first alternative to the essential analysis features of Hopper, not a replica of Hopper's interface or all of its capabilities. The tool must work without Hopper, paid IDA editions, or an LLM subscription. REA already supports a Ghidra provider and remains an optional comparison and integration path. The initial experiment must establish which additional CLI capabilities need to be built around the selected full Ghidra headless pipeline. [REA repository](https://github.com/morluto/rea)
 
@@ -74,6 +74,33 @@ The engine choice is settled. This comparison records the rationale, not a set o
 5. **Complete or fail:** export bounded, schema-validated results atomically, close the Program/project, and release the worker and lock. Record launcher/JVM, import, analysis and native-decompiler failures separately. A successful process exit alone does not prove analysis or every function completed; combine process status with bridge results, timeout state and per-function errors. Cancellation may terminate only the job's owned worker process group, including its native decompiler child.
 
 The startup and memory cost of the full distribution is an accepted architectural tradeoff, not an excuse to omit limits or silently use a lighter engine. Batch selected functions in one worker job where useful. Preserve completed results across worker failures, and measure cold worker, reopened-project and cached-query latency separately.
+
+### 2.5 Focused-query control-flow evidence amendment
+
+The implemented experimental focused path is described in
+[the CLI contract](cli.md#decompile-one-function-from-an-import). A successful
+native C printer is not sufficient for complete selected-function coverage.
+The CLI must separately report unresolved computed jumps and native operations
+outside the selected function body; complete address spans cover retained
+in-body tokens only. Scope scans and recovery requests must be bounded and
+include their limits and evidence.
+
+For exact no-analysis ARM64 queries, a direct unconditional terminal branch
+may be modeled as a tail call only from verified instruction bytes to an
+independently confirmed linker start or ordinary, strongly bound import stub.
+Record the original flow, effective flow, source/target proof and worker
+request digest. Never infer a function boundary from an arbitrary executable
+destination or remove a warning merely to improve a status. Recognize a BRK
+exception only from architecture-gated terminal instruction bytes; retain
+original CFG and printer evidence. Real register/conditional indirect jumps
+remain unresolved without independent target evidence.
+
+All such flow overrides belong only to the disposable read-only Program
+copy. Input bytes, persisted imports and the isolation policy remain unchanged.
+Use project-owned positive and adversarial fixtures before any authorized
+private acceptance check; never commit third-party binaries or recovered code.
+This amendment is a scoped implementation contract, not a claim of arbitrary
+binary completeness or semantic equivalence.
 
 ## 3 Input support and macOS requirements
 

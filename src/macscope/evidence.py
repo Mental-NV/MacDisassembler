@@ -29,6 +29,7 @@ FUNCTION_FIELDS = (
     "is_external", "is_thunk", "thunk_target", "instructions", "instruction_bytes_sha256",
     "pseudocode", "decompile_status", "decompile_error", "pseudocode_truncated", "address_spans",
     "facets", "coverage", "origin", "control_flow_review", "control_flow_gaps", "body_overlap",
+    "tail_call_recovery", "native_scope", "control_flow_traps",
 )
 
 
@@ -298,7 +299,8 @@ def focused_query(project, image, binary, entry, job_id):
     _, record = jobs.get(project, job_id)
     if jobs.focused_record(record) is None:
         raise Error("evidence_query_mismatch", "The job did not decompile from a committed import", 3)
-    proof, payload = focused.extent(binary, image, entry)
+    policy = record["focused_request"].get("extent", {}).get("policy")
+    proof, payload = focused.extent(binary, image, entry, policy=policy)
     request = jobs.focused_request(project, image, dict(proof, program_sha256=image["engine_baseline_sha256"]))
     if jobs.focused_record(record) != request:
         raise Error("evidence_query_mismatch", "Focused receipt does not match the selected image and entry", 3)

@@ -2,7 +2,7 @@
 from collections import defaultdict
 import posixpath
 
-from . import dyld, export_trie, focused, metadata
+from . import dyld, export_trie, focused, focused_tailcalls, metadata
 from .direct_signatures import arm64_direct_target
 from .dispatch_returns import direct_target, signed
 from .errors import Error
@@ -44,15 +44,17 @@ def stub_slot(binary, image, address, section):
     return hex(slot), [{"va": hex(address), "bytes": raw.hex()}]
 
 
-def call_bytes(binary, image, instruction, callsite, stub_va):
+def call_bytes(binary, image, instruction, callsite, stub_va, *, tail_target=None):
     width, decode = (4, arm64_direct_target) if image["arch"] == "arm64" else (5, direct_target)
     offset = metadata.mapped_location(image, callsite, width, from_file=False)
-    if (instruction is None or instruction.get("flow") != "UNCONDITIONAL_CALL" or offset is None
+    tail = image["arch"] == "arm64" and tail_target == stub_va
+    if (instruction is None or instruction.get("flow") != ("CALL_TERMINATOR" if tail else "UNCONDITIONAL_CALL") or offset is None
             or section_at(image, callsite, "__TEXT", "__text") is None
             or section_at(image, callsite + width - 1, "__TEXT", "__text") is None):
         return None
     raw = binary[offset:offset + width]
-    if raw.hex() != instruction["bytes"] or decode(callsite, raw) != stub_va:
+    target = focused_tailcalls.branch_target(callsite, raw) if tail else decode(callsite, raw)
+    if raw.hex() != instruction["bytes"] or target != stub_va:
         return None
     data = image["loader"]["data_in_code"]
     if data and (data["status"] != "complete" or any(
@@ -142,11 +144,11 @@ class ImageLinkage:
         return {"pin": pin, "name": names[0], "path": self.bundle["relative_path"],
                 "exports": exports, "error": error}
 
-    def call(self, edge, section, instruction):
+    def call(self, edge, section, instruction, *, tail_target=None):
         row = {key: edge[key] for key in ("callsite", "caller_function_id", "callee_function_id")}
         row["stub_va"] = edge["reported_target"]
         callsite, stub_va = int(row["callsite"], 16), int(row["stub_va"], 16)
-        raw = call_bytes(self.binary, self.image, instruction, callsite, stub_va)
+        raw = call_bytes(self.binary, self.image, instruction, callsite, stub_va, tail_target=tail_target)
         if raw is None:
             return dict(row, reason="import_call_bytes_unverified")
         row["call_bytes"] = raw
@@ -190,7 +192,9 @@ class ImageLinkage:
             if section is None:
                 continue
             sites.add(site)
-            row = self.call(edge, section, instructions.get(site))
+            instruction = instructions.get(site)
+            tail = focused_tailcalls.verified_target(function, instruction) if from_import and instruction else None
+            row = self.call(edge, section, instruction, tail_target=tail)
             if row is not None:
                 if len(rows) == MAX_LINKS:
                     return rows, ["import_link_limit"]

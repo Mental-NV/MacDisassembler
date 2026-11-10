@@ -5,7 +5,7 @@ import os
 import struct
 from unittest.mock import patch
 
-from macscope import annotations, cli, direct_signatures, dispatch_returns, engine, evidence, focused, jobs, macho, storage
+from macscope import annotations, cli, direct_signatures, dispatch_returns, engine, evidence, focused, focused_tailcalls, jobs, macho, storage
 from test_core import TemporaryCase
 from test_macho import command, image as macho_image
 
@@ -274,6 +274,11 @@ class FocusedResumeTests(TemporaryCase):
                     'xrefs_to_entry':[],'xrefs_from_sample':[],
                     'coverage':{key:{'status':'complete'} for key in ('pseudocode','instructions','body_ranges',
                                                                     'xrefs_from','xrefs_to_entry')}}
+        function['native_scope'] = {'policy':'macscope-focused-native-scope/1','status':'complete',
+            'operations_scanned':1,'operations_truncated':False,'outside_body_operations':0,
+            'outside_body_addresses':[],'error':None}
+        function['tail_call_recovery'] = {'policy':focused_tailcalls.POLICY,
+            'request_sha256':focused_tailcalls.request_digest(self.proof['tail_calls']), 'decisions':[]}
         return {'functions':[function],'bridge_version':'test'},job
 
     def test_retry_publishes_under_original_id_and_handoff_accepts_the_producer(self):
@@ -291,6 +296,39 @@ class FocusedResumeTests(TemporaryCase):
         failed = '9'*32
         self.write_job(failed,dict(self.record,job_id=failed,resumed_from=self.original,status='failed'))
         self.error('evidence_query_mismatch',evidence.focused_query,self.workspace,self.image,self.raw,self.entry,failed)
+
+    def test_completed_legacy_receipt_replays_and_exports_without_new_policy(self):
+        self.proof = {key:value for key,value in self.proof.items() if key != 'tail_calls'}
+        self.proof['policy'] = 'macscope-focused-import/1'
+        self.request = jobs.focused_request(self.workspace,self.image,self.proof)
+        self.record.update(focused_import=self.proof,focused_request=self.request,status='complete')
+        self.write_job(self.original,self.record)
+        # Construct a saved v1 result without calling the current worker.
+        function = {'function_id':self.request['function_id'],'image_id':self.image_id,'arch':'arm64',
+            'slice_sha256':self.image['sha256'],'entry_va':self.entry,'engine_entry':self.entry,'address_space':'ram',
+            'is_external':False,'is_thunk':False,'names':[],'signature':None,'pseudocode':'return;',
+            'decompile_status':'complete','body_ranges':[[self.entry,hex(int(self.entry,16)+3)]],
+            'instructions':[{'addr':self.entry,'bytes':self.code.hex(),'flow':'TERMINATOR'}],
+            'address_spans':[],'facets':{},'xrefs_to_entry':[],'xrefs_from_sample':[],
+            'coverage':{key:{'status':'complete'} for key in ('pseudocode','instructions','body_ranges',
+                                                            'xrefs_from','xrefs_to_entry')},
+            'origin':{'mode':'focused_readonly_import','job_id':self.original,'extent':self.proof,**self.deps}}
+        response = cli.envelope('decompile',function)
+        jobs.publish_query(self.workspace,self.original,self.request,response)
+        with patch.object(engine,'run',side_effect=AssertionError('Legacy replay must remain offline')):
+            replay=self.resume()
+            self.assertTrue(replay['data']['reused_restart'])
+            handoff=evidence.focused_query(self.workspace,self.image,self.raw,self.entry,self.original)
+            self.assertEqual(handoff['data']['origin']['extent'],self.proof)
+            self.assertNotIn('tail_call_recovery',handoff['data'])
+
+    def test_unfinished_legacy_query_requires_a_new_capture(self):
+        proof={key:value for key,value in self.proof.items() if key != 'tail_calls'}
+        proof['policy']='macscope-focused-import/1'
+        request=jobs.focused_request(self.workspace,self.image,proof)
+        self.write_job(self.original,dict(self.record,focused_import=proof,focused_request=request))
+        with patch.object(engine,'run',side_effect=AssertionError('Do not silently change legacy policy')):
+            self.error('job_resume_policy',self.resume)
 
     def test_unverified_retry_and_mutated_artifact_never_start_a_worker(self):
         attempt = self.write_job(self.attempt,dict(self.record,job_id=self.attempt,resumed_from=self.original))
