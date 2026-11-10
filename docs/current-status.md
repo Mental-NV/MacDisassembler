@@ -34,10 +34,10 @@ contains documentation only.
 ## Phase-2 boundaries still open
 
 Engine operations are **trusted-owned-input-only experimental**, with an
-explicit opt-in. Network and other user-home access are restricted, but the
-tested seatbelt profile is not a complete hostile-input filesystem sandbox.
-Hard process-memory/disk quotas are not available. No automatic unsafe
-fallback exists.
+explicit opt-in. The worker denies network access, restricts user-home reads,
+and confines filesystem write paths to the private project and `/dev/null`.
+A staged hard link inside the project can still refer outside it. Hard
+process-memory and disk quotas are unavailable. Isolation errors fail closed.
 
 Public queries default to completed snapshots. Explicit `decompile --fresh`
 uses the saved Program and the read-only/noanalysis worker. Polished terminal
@@ -237,6 +237,10 @@ collections exceed documented bounds despite successful pseudocode output.
   identities remain ineligible.
 - [x] Verify [workspace manifest error handling](cli.md#envelopes-errors-and-explicit-omissions)
   and a byte-identical export from an earlier schema 1.0 workspace.
+- [x] Validate [SQLite index error handling](cli.md#envelopes-errors-and-explicit-omissions)
+  for corrupt data, missing schema, and a lock held by another connection.
+- [x] Verify [worker write-path confinement](cli.md#limits-and-safety-boundaries)
+  with owned canaries and installed full-headless queries.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

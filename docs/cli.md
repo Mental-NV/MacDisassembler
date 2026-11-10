@@ -658,13 +658,44 @@ remaining group members while the child PID is still reserved, then
 reaps the launcher. Timeout, interruption, and failure preserve prior
 committed results.
 
-The tested macOS seatbelt profile denies network and user-home reads/writes
-outside the private project, bridge, and exact engine/JDK paths. HOME, Java
-user state, cwd and temporary files are private to the workspace; environment
-variables are whitelisted. The profile still broadly permits system data and
-non-home filesystem access. **It is not a complete hostile-input security
-sandbox.** Missing/broken isolation fails with no automatic unsandboxed
-fallback. The explicit experimental flag is required on each engine command.
+The macOS seatbelt profile denies network access. It restricts user-home
+reads to the private project, bridge, exact engine/JDK paths, and
+the listed ancestor directories. Filesystem writes by path are confined to
+the project, with `/dev/null` available to the launcher. HOME, Java user
+state, cwd, and temporary files are private to the workspace. The worker
+inherits a small explicit environment.
+
+In a local canary check, the worker could read its project, bridge, Ghidra,
+and JDK files and write its temporary files. It could neither write to a
+scratch sibling directly or through a symlink nor connect to a loopback
+listener. An unrelated user-home read was denied. Non-home reads remain
+broadly available. The worker could write through a hard link already
+placed inside the project. The policy remains for trusted owned inputs.
+Missing or broken isolation fails closed. Engine commands require the
+explicit experimental flag.
+
+The write policy change gives new analyses a different isolation identity.
+Earlier committed snapshots and published query receipts remain readable.
+Restarting an unfinished job requires its exact recorded policy. An older
+job with a mismatched policy returns `job_resume_engine` before launch.
+
+The installed-wheel matrix covered both analysis profiles in four scopes.
+It used symbol-bearing arm64 and stripped x86_64 with default Ghidra 12.2,
+and stripped arm64 and symbol-bearing x86_64 with the experimental tree.
+All eight scopes imported, analyzed, and reproduced the cached C in a
+fresh query. The saved Program and export digests matched before and
+after each query, and all eight receipts replayed. A prior published
+receipt replayed under the new wheel. On a copy with that receipt
+removed, a simulated unfinished job carrying the old policy was
+rejected before a worker launched.
+
+The local matrix report in
+`/private/tmp/macscope-worker-isolation.X9QyEf/matrix/report.json`
+has SHA-256 `1258b6d9d617325fc90db3ec6c0c2ca056995adebb9ed8dc45fdfd60f931a3c6`.
+The installed canary and hard-link reports in the same trial directory
+have SHA-256 digests
+`b057a7bd67921efad8ee6ae1471ee3e6e4be0ef86c158a6bf768314a1b8b4f67`
+and `9eec5bf40bb7afe8df63fee12a6e1fe8e79cb0ecd5647e40b828eb05a8252bdd`.
 
 No source/dSYM discovery, dependency execution, arbitrary user scripts,
 network symbol fetches, input execution, remote model calls, or automatic
@@ -702,6 +733,20 @@ byte for byte before and after five manifest error cases. The saved
 index retained its digest. The local report in
 `/private/tmp/macscope-forwarded-return.gwE9OS/workspace-check/report.json`
 has SHA-256 `d6ebd323819fa8b5dc31f8372ad39978b776d75c6430459047c23bf4761d6211`.
+
+The SQLite index is validated for the required schema 1.0 tables and
+columns before a project opens. Damaged indexes and missing core schema
+return `workspace_index` and exit 5. A lock during the check returns the
+retryable `workspace_index_busy` error and exits 8. An installed-wheel
+trial reproduced an earlier valid export byte for byte and verified
+that failed opens preserved the test indexes.
+
+The local index report in
+`/private/tmp/macscope-worker-isolation.X9QyEf/index-check/report.json`
+has SHA-256 `4f6af5740a007ecf698c8525ce215665b99049a0996d3568aecca36bc863cad0`.
+On the same saved workspace, 20 paired cached queries produced
+byte-identical JSON with the earlier and current wheels. The observed
+95th percentiles were 0.167 s and 0.143 s on the development Mac.
 
 
 Bundled `envelope.schema.json` and `function.schema.json` use schema1.0.
