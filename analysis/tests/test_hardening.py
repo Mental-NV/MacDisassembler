@@ -102,6 +102,23 @@ class HardeningTests(unittest.TestCase):
         p = self.d / 'base'; p.write_text(json.dumps(self.baseline()))
         self.assertEqual(runner.validate_baseline(p)['complete'], 1)
 
+    def test_assisted_profile_requires_matching_import_evidence(self):
+        p = self.d / 'assisted'
+        baseline = self.baseline()
+        baseline['blind_profile'] = 'dsym-assisted-v1'
+        baseline['dsym'] = {'sha256': 'a' * 64, 'compilation_units': 2,
+                            'functions_before': 3, 'functions_after': 7}
+        p.write_text(json.dumps(baseline))
+        self.assertEqual(runner.validate_baseline(p, 'a' * 64)['complete'], 1)
+        with self.assertRaisesRegex(ValueError, 'pre-script'):
+            runner.validate_baseline(p)
+        with self.assertRaisesRegex(ValueError, 'dSYM import evidence'):
+            runner.validate_baseline(p, 'b' * 64)
+        baseline['dsym']['functions_after'] = 3
+        p.write_text(json.dumps(baseline))
+        with self.assertRaisesRegex(ValueError, 'dSYM import evidence'):
+            runner.validate_baseline(p, 'a' * 64)
+
     def test_each_invalid_status_and_summary_rejected(self):
         for field, value in [('decompiler_opened', False), ('analysis_timeout_occurred', True),
                              ('decompile_summary_completed', '0'), ('functions_truncated', True)]:

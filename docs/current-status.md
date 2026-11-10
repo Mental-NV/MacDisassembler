@@ -228,8 +228,9 @@ The [calculator baseline](phase1-findings.md#historical-experiment-semantics-v10
 froze its outputs before source-aware evaluation by the same developer.
 The [isolated rerun](phase1-findings.md#isolated-binary-captures) now verifies
 machine-level source separation for the stripped and symbol-bearing
-conditions. The separately labeled source/dSYM-assisted diagnostic and
-clean-context qualitative review remain open under the
+conditions. The [dSYM-assisted diagnostic](phase1-findings.md#dsym-assisted-diagnostic)
+completed on the eight matching stripped inputs in a separate run.
+The clean-context qualitative review remains open under the
 [specified conditions](specification.md#84-blind-analysis-and-controlled-assistance).
 The [optimized baseline measurement](wide-division.md#paired-evidence)
 also records a shortfall against the proposed 90% instruction-byte
@@ -433,6 +434,12 @@ collections exceed documented bounds despite successful pseudocode output.
   All 16 owned captures passed their source, dSYM and sibling isolation
   probes. Each condition recovered and decompiled all 120 controlled
   entries. The evaluator verified the freeze before opening its mapping.
+- [x] Run the [dSYM-assisted diagnostic](phase1-findings.md#dsym-assisted-diagnostic)
+  on the same eight stripped inputs. Ghidra imported all eight matched
+  companions and decompiled all 120 controlled entries in the separately
+  frozen diagnostic.
+- [ ] Review the frozen binary-only pseudocode in a clean analyst context
+  before revealing the ground truth.
 - [x] Measure 100% branch-direction coverage for the owned reference core
   with directed and seeded stateful tests. See
   [reference coverage](semantics.md#reference-core-coverage).

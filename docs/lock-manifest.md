@@ -95,8 +95,10 @@ Do not compare these fields as if their definitions were the same.
 - New baseline schema: `macscope-baseline/2`; run manifest records engine,
   bridge, runner, native worker and input hashes, JDK, host architecture,
   effective command arrays and budgets. New freeze schema: version 2.
-- No source/dSYM filesystem confinement is claimed. Network denial remains
-  required; this is restricted to our own calculator/corpus inputs.
+- Each case denies network access and reads from the protected artifact
+  roots outside its own workspace. A separate `--assisted-from` run verifies
+  the prior freeze and stages one SHA-256- and UUID-checked dSYM per case.
+  All runs are restricted to the owned calculator and corpus inputs.
 
 The separate [switch patch experiment](heldout-switch.md#upstream-patch-evaluation)
 records its own native binaries and full engine-tree digests. The installed

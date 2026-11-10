@@ -265,22 +265,56 @@ for the eight sampled arm64 O0 routines within the reported Ghidra
 bodies. These measurements cover discovery and completion. Body accuracy
 and behavioral equivalence have separate checks.
 
-The evaluator was source-aware. The explicitly assisted diagnostic and
-separate qualitative review remain open. The private freeze SHA-256 is
+The evaluator was source-aware. The clean-context qualitative review
+remains open. The private freeze SHA-256 is
 `4730eb0f0456ae89ffbba28ac1ea0fc88807514509f85eb94e60224df7942923`.
 The evaluation SHA-256 is
 `f58f0584ca2290f839c5378f86be516bb0bf53079db52f2889ed43d19cfc6748`.
 
+## dSYM-assisted diagnostic
+
+Use the same owned build and completed isolated binary capture for a
+separately frozen diagnostic.
+
+```sh
+python3 analysis/run_baseline.py --build-root build/review-v2 \
+  --runs-root build/baseline-runs --run-id dsym-diagnostic \
+  --assisted-from build/baseline-runs/isolated-matrix
+```
+
+All eight app and tool inputs matched the frozen stripped captures by
+SHA-256. Each worker received one staged dSYM matched by UUID and
+architecture and verified by SHA-256 before import. A same-architecture
+companion with a different UUID was rejected before Ghidra started.
+Automatic debug discovery stayed disabled. The worker policy also blocked
+the original dSYM, source, unstaged binary, frozen baseline and sibling
+canary. LLVM's disassembly matched the stripped captures after removing
+the staged input path from the header. Four fresh unassisted x86_64 O0
+captures matched the prior entries, names, signatures, pseudocode,
+instructions and control flow across all 254 function records.
+
+Ghidra read 28 compilation units and added 346 function records across
+the eight Programs before autoanalysis. All 120 controlled entries
+decompiled. Each entry's name, signature string and pseudocode text
+differed from its stripped result. Ghidra logged type remappings in four
+captures and unsupported DWARF expressions in six. These counts record
+import and output changes. Semantic quality remains unevaluated in this
+condition.
+
+The diagnostic's 16 frozen Ghidra and LLVM files have their own manifest
+with SHA-256
+`7486a53eb63b4e8203a9a597ec8eec25ae48b3d066aa5d69e77667ad84b20ddf`.
+The separate source-aware comparison has SHA-256
+`45184e80bf8f285fe4bbc40f483f06fbea5fc499a0f17c4c82a57b16b9df4c0b`.
+
 ## Remaining limitations
 
-Seatbelt denies network, **not filesystem access**. Source and dSYM trees
-are on the same readable machine. Disabled analyzers and binary-only input
-directories improve hygiene but do not establish enforced source isolation.
-Only our own fixtures are authorized for this runner; untrusted binaries
-require stronger isolation. User state is isolated in new runner runs, while
-old runs used shared Ghidra state. No x86_64 binary has been executed and no
-Rosetta use is claimed. Neither this review nor the new runner turns partial
-quality gates into a release pass.
+The newer case policy denies network access and reads from the protected
+artifact roots outside the worker's own workspace. It permits system
+reads. Earlier captures used network denial, disabled discovery and
+binary-only input directories with shared Ghidra state. Only owned
+fixtures are authorized for this runner. x86_64 results come from static
+analysis on arm64. Release gates have separate quality checks.
 
 ## Post-baseline display-layout correction
 

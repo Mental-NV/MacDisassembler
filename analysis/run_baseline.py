@@ -94,17 +94,20 @@ def bounded_command(argv, log, timeout, env=None, max_log_bytes=16 << 20,
             'log_bytes': total, 'log_sha256': sha(log)}
 
 
-def case_policy(directory, build_root):
+def case_policy(directory, build_root, blind_root=None):
     root = json.dumps(str(directory))
     private_roots = (*PRIVATE_READ_ROOTS, str(REPO), str(build_root), str(directory.parent))
+    if blind_root is not None:
+        private_roots = (*private_roots, str(blind_root))
     private = " ".join(f'(subpath {json.dumps(path)})' for path in dict.fromkeys(private_roots))
     input_path = json.dumps(str(directory / 'input.bin'))
+    debug_path = json.dumps(str(directory / 'debug.dwarf'))
     scripts = json.dumps(str(directory / 'scripts'))
     return (f'(version 1)\n(allow default)\n(deny network*)\n'
             f'(deny file-read-data (require-all (require-any {private}) (require-not (subpath {root}))))\n'
             f'(deny file-write* (require-all (require-not (subpath {root})) '
             f'(require-not (literal "/dev/null"))))\n'
-            f'(deny file-write* (literal {input_path}) (subpath {scripts}))\n'
+            f'(deny file-write* (literal {input_path}) (literal {debug_path}) (subpath {scripts}))\n'
             f'(deny process-exec (subpath {root}))\n')
 
 
@@ -140,7 +143,7 @@ def verify_case_isolation(sandbox, directory, input_path, sibling, blocked, env)
     return result
 
 
-def validate_baseline(path):
+def validate_baseline(path, dsym_sha256=None):
     if path.stat().st_size > 64 << 20:
         raise ValueError('baseline exceeds 64MiB')
     d = json.loads(path.read_text())
@@ -148,8 +151,14 @@ def validate_baseline(path):
         raise ValueError('missing schema/failed native openProgram')
     if d.get('analysis_timeout_occurred'):
         raise ValueError('Ghidra auto-analysis timeout')
-    if d.get('blind_profile') != 'binary-only-v2':
+    expected_profile = 'dsym-assisted-v1' if dsym_sha256 is not None else 'binary-only-v2'
+    if d.get('blind_profile') != expected_profile:
         raise ValueError('trusted pre-script did not complete')
+    if dsym_sha256 is not None:
+        evidence = d.get('dsym', {})
+        if (evidence.get('sha256') != dsym_sha256 or evidence.get('compilation_units', 0) <= 0
+                or not 0 <= evidence.get('functions_before', -1) < evidence.get('functions_after', -1)):
+            raise ValueError('Explicit dSYM import evidence is missing or invalid')
     opts = d.get('effective_analysis_options', {})
     if opts.get('DWARF') != 'false':
         raise ValueError('DWARF disablement absent')
@@ -187,6 +196,33 @@ def validate_baseline(path):
     return counts
 
 
+def bound_stripped_runs(root, build_digest):
+    from evaluate import verify_freeze
+
+    identity = json.loads(read_regular(root / 'identity.json', 1024 * 1024))
+    summary = json.loads(read_regular(root / 'summary.json', 1024 * 1024))
+    frozen = verify_freeze(REPO, root)
+    if (identity.get('isolation') != 'macscope-baseline-case/1' or identity.get('assisted_from')
+            or identity.get('build_manifest_sha256') != build_digest or summary['status'] != 'complete'):
+        raise ValueError('Assisted work requires a completed isolated capture of the same owned build')
+    return {
+        row['tag']: row['input_sha256'] for row in summary['records']
+        if row['condition'] == 'binary-only'
+        and (root / ('ghidra-' + row['tag']) / 'baseline.json') in frozen
+    }
+
+
+def stage_dsym(source, destination, expected_uuid, arch):
+    destination.write_bytes(read_regular(source))
+    destination.chmod(0o400)
+    uuid = subprocess.check_output(['/usr/bin/xcrun', 'dwarfdump', '--uuid', str(destination)],
+                                   text=True, timeout=15)
+    lines = [line.split() for line in uuid.splitlines()]
+    if len(lines) != 1 or lines[0][:3] != ['UUID:', expected_uuid.upper(), f'({arch})']:
+        raise ValueError('Selected dSYM UUID or architecture differs from the stripped binary')
+    return sha(destination)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('cases', nargs='*', choices=CASES)
@@ -195,7 +231,15 @@ def main(argv=None):
     p.add_argument('--run-id', default=time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + uuid.uuid4().hex[:8])
     p.add_argument('--job-timeout', type=float, default=1800)
     p.add_argument('--case-timeout', type=float, default=600)
+    p.add_argument('--assisted-from', type=Path, metavar='BLIND_RUN',
+                   help='Run a separate dSYM-assisted diagnostic on stripped inputs from a frozen run')
     a = p.parse_args(argv)
+    cases = a.cases or CASES
+    if a.assisted_from:
+        if a.cases and any(not case.endswith('-stripped') for case in cases):
+            p.error('dSYM-assisted diagnostics use the same stripped inputs as the frozen capture')
+        cases = [case for case in cases if case.endswith('-stripped')]
+        a.assisted_from = a.assisted_from.resolve()
     if not re.fullmatch('[A-Za-z0-9_-]{1,80}', a.run_id) or min(a.job_timeout, a.case_timeout) <= 0:
         p.error('invalid run id or timeout')
     os.umask(0o077)
@@ -212,27 +256,38 @@ def main(argv=None):
     manifest_path = a.build_root / 'manifest.json'
     manifest = read_regular(manifest_path, 1024 * 1024) if manifest_path.exists() else None
     expected = {} if manifest is None else {
-        (row['config'], row['arch'], row['symbols'], row['name']): row['sha256']
+        (row['config'], row['arch'], row['symbols'], row['name']): row
         for row in json.loads(manifest)['artifacts'] if row['container'] == 'thin'
     }
+    build_digest = hashlib.sha256(manifest).hexdigest() if manifest is not None else None
+    scripts_used = SCRIPTS
+    if a.assisted_from:
+        if build_digest is None:
+            p.error('dSYM-assisted diagnostics require an owned build manifest')
+        blind_inputs = bound_stripped_runs(a.assisted_from, build_digest)
+        scripts_used = (*SCRIPTS, 'MacscopeDsymProfile.java')
     identity = {'schema': 'macscope-baseline-run/2', 'run_id': a.run_id,
                 'limits': {'job_secs': a.job_timeout, 'case_secs': a.case_timeout, 'log_bytes': 16 << 20, 'json_bytes': 64 << 20},
                 'isolation': 'macscope-baseline-case/1',
                 'ghidra_properties_sha256': sha(GHIDRA / 'Ghidra/application.properties'),
                 'native_decompiler_sha256': sha(GHIDRA / 'Ghidra/Features/Decompiler/os/mac_arm_64/decompile'),
-                'scripts': {name: sha(REPO / 'analysis/scripts' / name) for name in SCRIPTS},
+                'scripts': {name: sha(REPO / 'analysis/scripts' / name) for name in scripts_used},
                 'source_revision': subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
                 'jdk_version': subprocess.check_output([str(JAVA / 'bin/java'), '-version'], stderr=subprocess.STDOUT, text=True).strip(),
                 'host_arch': __import__('platform').machine(),
-                'build_manifest_sha256': hashlib.sha256(manifest).hexdigest() if manifest is not None else None,
+                'build_manifest_sha256': build_digest,
                 'runner_sha256': sha(__file__), 'java_home': str(java)}
+    if a.assisted_from:
+        identity['assisted_from'] = {'path': str(a.assisted_from),
+                                     'freeze_sha256': sha(a.assisted_from / 'freeze.json')}
     exclusive_json(out / 'identity.json', identity)
-    for case in a.cases or CASES:
+    for case in cases:
         for kind, rel in [('app', 'CalculatorFixture.app/Contents/MacOS/CalculatorFixture'), ('tool', 'CorpusFixture')]:
             tag = case + '-' + kind
             d = out / ('ghidra-' + tag); d.mkdir()
             config, arch, symbols = case.split('-')
-            rec = {'tag': tag, 'condition': 'binary-plus-symbol-table' if symbols == 'sym' else 'binary-only'}
+            condition = 'binary-plus-symbol-table' if symbols == 'sym' else 'binary-only'
+            rec = {'tag': tag, 'condition': 'dsym-assisted' if a.assisted_from else condition}
             try:
                 source = a.build_root / 'analyst' / case / rel
                 inp = d / 'input.bin'
@@ -240,17 +295,18 @@ def main(argv=None):
                 inp.chmod(0o400)
                 rec['input_sha256'] = sha(inp)
                 binary_name = 'CalculatorFixture' if kind == 'app' else 'CorpusFixture'
-                if manifest is not None and expected.get((config, arch, symbols, binary_name)) != rec['input_sha256']:
+                artifact = expected.get((config, arch, symbols, binary_name), {})
+                if manifest is not None and artifact.get('sha256') != rec['input_sha256']:
                     raise ValueError('Owned binary differs from the recorded fixture manifest')
                 (d / 'project').mkdir()
                 scripts = d / 'scripts'
                 scripts.mkdir()
-                for name in SCRIPTS:
+                for name in scripts_used:
                     (scripts / name).write_bytes(read_regular(REPO / 'analysis/scripts' / name))
                     if sha(scripts / name) != identity['scripts'][name]:
                         raise ValueError('Baseline script changed after recording its digest')
                 sandbox = d / 'worker.sb'
-                sandbox.write_text(case_policy(d, a.build_root))
+                sandbox.write_text(case_policy(d, a.build_root, a.assisted_from))
                 rec['sandbox_sha256'] = sha(sandbox)
                 env = case_environment(d, java)
                 dsym = a.build_root / 'evaluator' / f'{config}-{arch}' / (
@@ -260,6 +316,17 @@ def main(argv=None):
                           'sibling_case': sibling_probe}
                 if debug_binary.is_file():
                     probes['evaluator_dsym'] = debug_binary
+                dsym_sha256 = None
+                prescript = ['MacscopeBlindProfile.java']
+                if a.assisted_from:
+                    if blind_inputs.get(tag) != rec['input_sha256']:
+                        raise ValueError('Assisted input differs from the frozen stripped input')
+                    debug_input = d / 'debug.dwarf'
+                    dsym_sha256 = stage_dsym(debug_binary, debug_input, artifact['uuid'], arch)
+                    rec['dsym_sha256'] = dsym_sha256
+                    rec['dsym_uuid'] = artifact['uuid']
+                    probes['frozen_baseline'] = a.assisted_from / ('ghidra-' + tag) / 'baseline.json'
+                    prescript = ['MacscopeDsymProfile.java', str(debug_input), dsym_sha256]
                 rec['isolation_probe'] = verify_case_isolation(sandbox, d, inp, sibling_probe, probes.values(), env)
                 if rec['isolation_probe']['exit_code'] or rec['isolation_probe']['failure']:
                     raise ValueError('Blind capture failed its file isolation probe')
@@ -269,7 +336,7 @@ def main(argv=None):
                     str(ghidra / 'support/analyzeHeadless'), str(d / 'project'), 'fixture',
                     '-import', str(inp), '-loader', 'MachoLoader', '-loader-loadLibraries', 'false',
                     '-loader-linkExistingProjectLibraries', 'false', '-loader-reexport', 'false',
-                    '-preScript', 'MacscopeBlindProfile.java',
+                    '-preScript', *prescript,
                     '-postScript', 'MacscopeBaseline.java', str(baseline), '5000', '30',
                     '-scriptPath', str(scripts), '-log', str(d / 'engine.log'),
                     '-scriptlog', str(d / 'script.log'), '-max-cpu', '4', '-analysisTimeoutPerFile', '540']
@@ -282,7 +349,7 @@ def main(argv=None):
                     raise ValueError('engine process failed')
                 if b'Skipping unsupported -loader-' in (d / 'headless.log').read_bytes():
                     raise ValueError('Pinned loader rejected a safety option')
-                rec['counts'] = validate_baseline(baseline)
+                rec['counts'] = validate_baseline(baseline, dsym_sha256)
                 freeze.append({'path': str(baseline), 'sha256': sha(baseline)})
                 llvm = out / ('llvm-' + tag + '.txt')
                 remaining = a.job_timeout - (time.monotonic() - started)
@@ -298,7 +365,8 @@ def main(argv=None):
             exclusive_json(d / 'result.json', rec); records.append(rec)
             print(tag + ': ' + rec['status'], flush=True)
     exclusive_json(out / 'freeze.json', {'schema': 'macscope-freeze/2', 'artifacts': freeze,
-        'classification': 'isolated engine captures; binary-only and binary-plus-symbol-table conditions'})
+        'classification': ('dSYM-assisted diagnostic' if a.assisted_from else
+                           'isolated engine captures; binary-only and binary-plus-symbol-table conditions')})
     summary = {'records': records, 'elapsed_secs': round(time.monotonic() - started, 3),
                'status': 'complete' if all(r['status'] == 'complete' for r in records) else 'failed'}
     exclusive_json(out / 'summary.json', summary)
