@@ -1363,6 +1363,13 @@ The restart returns the stored result if the original or restarted query
 already published one. Replay preserves the active analysis and annotation
 revisions.
 
+For `decompile --from-import`, `jobs resume` verifies the original slice,
+linker extent and committed import identity. A retry uses the recorded
+Ghidra, worker limits and isolation policy. The original job ID locates
+the published receipt and repeat requests reuse that result. A focused
+handoff accepts either the original job ID or the retry that produced
+the receipt.
+
 The result and its publication receipt commit together. Repeating a
 successful restart returns the recorded result. Analysis restart also
 checks that its preceding active analysis is still current.
@@ -1468,8 +1475,9 @@ The result includes the linker extent, its slice and container offsets,
 its digest, the verified instruction bytes and available pseudocode. It
 reports incomplete decompilation or undecoded bytes as partial coverage.
 References come from the local Program copy with automatic analysis
-disabled. A successful result publishes a receipt under its job ID. Use
-the same command to run it again or include its receipt in a handoff.
+disabled. A successful result publishes a receipt under its job ID.
+Use `jobs resume` to retry an interrupted job or return its published
+receipt. The receipt can also be included in a handoff.
 Use `--fresh` to query an existing analyzed Program and apply
 saved-analysis options.
 

@@ -277,9 +277,12 @@ def focused_query(project, image, binary, entry, job_id):
     request = jobs.focused_request(project, image, dict(proof, program_sha256=image["engine_baseline_sha256"]))
     if jobs.focused_record(record) != request:
         raise Error("evidence_query_mismatch", "Focused receipt does not match the selected image and entry", 3)
-    result = jobs.query_receipt(project, job_id, request)
+    original = record.get("resumed_from", job_id)
+    result = jobs.query_receipt(project, original, request)
     if result is None:
         raise Error("evidence_query_unpublished", "The focused job has no published result", 3)
+    if original != job_id and result["data"]["origin"]["job_id"] != job_id:
+        raise Error("evidence_query_mismatch", "The focused result was published by a different retry", 3)
     try:
         validate_envelope(result)
         validate_function(result["data"])

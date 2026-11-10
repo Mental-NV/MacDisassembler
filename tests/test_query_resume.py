@@ -1,10 +1,13 @@
-"""A recorded fresh query reopens the exact archived analysis and annotations."""
+"""A recorded query reopens the exact analyzed or imported Program."""
 import hashlib
 import json
+import os
+import struct
 from unittest.mock import patch
 
-from macscope import annotations, cli, direct_signatures, dispatch_returns, engine, jobs, storage
+from macscope import annotations, cli, direct_signatures, dispatch_returns, engine, evidence, focused, jobs, macho, storage
 from test_core import TemporaryCase
+from test_macho import command, image as macho_image
 
 
 class QueryResumeTests(TemporaryCase):
@@ -178,3 +181,96 @@ class QueryResumeTests(TemporaryCase):
               patch.object(engine, 'run') as run):
             self.error('job_resume_inputs', self.resume)
             run.assert_not_called()
+
+
+class FocusedResumeTests(TemporaryCase):
+    def setUp(self):
+        super().setUp()
+        self.workspace = self.project()
+        self.original, self.attempt = 'a'*32, 'b'*32
+        base, offset = 0x100000000, 0x100
+        self.entry = hex(base+offset)
+        self.code = bytes.fromhex('c0035fd6')
+        starts = b'\x80\x02\x04\0'
+        section = struct.pack('<16s16s2Q8I',b'__text',b'__TEXT',base+offset,8,offset,2,0,0,0x80000400,0,0,0)
+        segment = struct.pack('<16s4Q4I',b'__TEXT',base,4096,0,offset+8+len(starts),7,5,1,0)
+        header = macho_image(commands=[command(0x19,segment+section),command(0x26,struct.pack('<2I',offset+8,len(starts)))])
+        self.raw = header+bytes(offset-len(header))+self.code*2+starts
+        digest = hashlib.sha256(self.raw).hexdigest()
+        selected, = macho.inspect_bytes(self.raw)['slices']
+        self.image = dict(selected, artifact_sha256=digest, engine_baseline_sha256='c'*64)
+        self.image_id = self.image['image_id']
+        self.artifact = self.workspace.path/'inputs'/(digest+'.artifact')
+        self.artifact.write_bytes(self.raw)
+        (self.workspace.path/'inputs'/(self.image_id+'.macho')).write_bytes(self.raw)
+        with self.workspace.db(False) as db:
+            db.execute('INSERT INTO images VALUES(?,?,?,1,NULL)',(self.image_id,'arm64',json.dumps(self.image)))
+        proof, _ = focused.select(self.workspace,self.image,self.entry)
+        self.proof = dict(proof,program_sha256=self.image['engine_baseline_sha256'])
+        self.request = jobs.focused_request(self.workspace,self.image,self.proof)
+        self.deps = {'ghidra_path':'/engine','java_home':'/java','ghidra_version':'12.2',
+                     'ghidra_tree_sha256':'d'*64,'bridge_sha256':'e'*64}
+        options = cli.parser().parse_args(['decompile','--from-import','--address',self.entry,
+                                         '--project',str(self.workspace.path),'--timeout','45'])
+        self.record = {'job_id':self.original,'mode':'query','status':'cancelled','image_id':self.image_id,
+                       'source_analysis_id':None,'selected_entry':self.entry,'focused_import':self.proof,
+                       'focused_request':self.request,'analysis_profile':None,'dependencies':self.deps,
+                       'limits':engine.worker_limits(options,1),'restart_protocol':jobs.RESTART_PROTOCOL,
+                       'sandbox_sha256':engine.job_sandbox_sha256(self.workspace,self.deps,self.original)}
+        self.path = self.write_job(self.original,self.record)
+
+    def write_job(self, job_id, record):
+        path = self.workspace.path/'jobs'/job_id/'job.json'
+        path.parent.mkdir(exist_ok=True)
+        storage.write_json(path,record,force=True)
+        return path
+
+    def run_cli(self, *args):
+        return cli.execute(cli.parser().parse_args([*args,'--project',str(self.workspace.path),'--json']))
+
+    def resume(self):
+        return self.run_cli('jobs','resume',self.original,'--experimental-trusted-input')
+
+    def worker(self, project, image, mode, replay, deps, **kwargs):
+        self.assertEqual((image['active_analysis'], mode, deps),(None,'query',self.deps))
+        self.assertEqual(engine.worker_limits(replay,1),self.record['limits'])
+        self.assertEqual(kwargs,{'entry':self.entry,'from_import':True,'resumed_from':self.original})
+        job = dict(self.record,job_id=self.attempt,resumed_from=self.original,status='complete')
+        self.write_job(self.attempt,job)
+        function = {'entry_va':self.entry,'name':'owned','signature':None,'pseudocode':'return;',
+                    'decompile_status':'complete','body_ranges':[[self.entry,hex(int(self.entry,16)+3)]],
+                    'instructions':[{'addr':self.entry,'bytes':self.code.hex()}], 'blocks':[],
+                    'xrefs_to_entry':[],'xrefs_from_sample':[], 'coverage':{'pseudocode':{'status':'complete'}}}
+        return {'functions':[function],'bridge_version':'test'},job
+
+    def test_retry_publishes_under_original_id_and_handoff_accepts_the_producer(self):
+        with (patch.object(engine,'dependencies',return_value=self.deps),
+              patch.object(engine,'run',side_effect=self.worker) as worker):
+            response = self.resume()
+            self.assertFalse(response['data']['reused_restart'])
+            self.assertEqual(response['data']['origin']['job_id'],self.attempt)
+            self.assertTrue(self.resume()['data']['reused_restart'])
+            worker.assert_called_once()
+        self.assertEqual(self.run_cli('jobs','show',self.original)['data']['publication_status'],'published_by_other_attempt')
+        for job_id in (self.original,self.attempt):
+            report = evidence.focused_query(self.workspace,self.image,self.raw,self.entry,job_id)
+            self.assertEqual(report['data']['function_id'],self.request['function_id'])
+        failed = '9'*32
+        self.write_job(failed,dict(self.record,job_id=failed,resumed_from=self.original,status='failed'))
+        self.error('evidence_query_mismatch',evidence.focused_query,self.workspace,self.image,self.raw,self.entry,failed)
+
+    def test_unverified_retry_and_mutated_artifact_never_start_a_worker(self):
+        attempt = self.write_job(self.attempt,dict(self.record,job_id=self.attempt,resumed_from=self.original))
+        jobs.record_restart_attempt(attempt,jobs.load(attempt))
+        with (patch.object(engine,'dependencies',return_value=self.deps),patch.object(engine,'run') as worker):
+            owner = jobs.claim(attempt)
+            try:
+                self.error('job_resume_ownership',self.resume)
+            finally:
+                os.close(owner)
+            self.write_job(self.original,dict(self.record,focused_import=dict(self.proof,extent_sha256='f'*64)))
+            self.error('job_resume_inputs',self.resume)
+            self.write_job(self.original,self.record)
+            self.artifact.write_bytes(b'changed')
+            self.error('input_integrity',self.resume)
+            worker.assert_not_called()

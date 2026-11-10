@@ -16,9 +16,9 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
-                      canonical, canonical_chunks, identity, write_json)
+                      canonical, canonical_chunks, identity, is_digest, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, evidence, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, string_evidence, terminal
+from . import body_ownership, engine_checks, evidence, focused, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -502,10 +502,12 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
         return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
 
 
-def focused_decompile(args, project, image):
-    entry = hex(metadata.hex_address(args.address, 'Unslid function entry'))
-    deps = engine.dependencies(args.ghidra,args.java_home,full=True)
-    result, job = engine.run(project,image,'query',args,deps,entry=entry,from_import=True)
+def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_from=None):
+    if entry is None:
+        entry = hex(metadata.hex_address(args.address, 'Unslid function entry'))
+    if deps is None:
+        deps = engine.dependencies(args.ghidra,args.java_home,full=True)
+    result, job = engine.run(project,image,'query',args,deps,entry=entry,from_import=True,resumed_from=resumed_from)
     function = flow_evidence.review(result['functions'][0])
     proof = job['focused_import']
     request = job['focused_request']
@@ -534,8 +536,8 @@ def focused_decompile(args, project, image):
                                      reason=';'.join(reasons) or None),diagnostics=redact(diagnostics))
     validate_function(response['data'])
     validate_envelope(response)
-    with jobs.result_publication('query',job['job_id']):
-        return jobs.publish_query(project,job['job_id'],request,response)
+    with jobs.result_publication('query',job['job_id'],resumed_from):
+        return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
 
 
 def revise_annotation(args, project, command, address_selection):
@@ -824,7 +826,7 @@ def resume_job(args, project, command):
         path,record = jobs.get(project,args.job_id)
         record = jobs.record_for_resume(path,record)
         mode = record.get('mode')
-        request = jobs.restart_request(record)
+        request = jobs.restart_request(record) or jobs.focused_record(record)
         if request is None:
             raise Error('job_resume_unsupported','The job has no supported recorded restart request',3)
         if 'resumed_from' in record:
@@ -837,6 +839,8 @@ def resume_job(args, project, command):
         if mode == 'import':
             return resume_import(args,project,command,record,request)
         if mode == 'query':
+            if request['schema'] == jobs.FOCUSED_REQUEST:
+                return resume_focused(args,project,command,record,request)
             return resume_query(args,project,command,record,request)
         return resume_analysis(args,project,command,record,request)
 
@@ -869,6 +873,42 @@ def replay_worker_request(args, project, record, *, query_profile=None):
             or engine.job_sandbox_sha256(project, deps, record.get('job_id')) != record.get('sandbox_sha256')):
         raise Error('job_resume_engine','Select the exact recorded engine, JDK and isolation policy to restart',4)
     return replay,deps
+
+
+def verify_replay_artifact(project, image):
+    artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
+    if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
+        raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
+
+
+def resume_focused(args, project, command, record, request):
+    image_id, entry = request.get('image_id'), request.get('entry_va')
+    if not is_digest(image_id) or not isinstance(entry,str) or not re.fullmatch(r'0x[0-9a-f]{1,16}',entry):
+        raise Error('job_manifest','Invalid recorded focused query identity')
+    if (request.get('project_id') != project.project_id or record.get('image_id') != image_id
+            or record.get('source_analysis_id') is not None or record.get('selected_entry') != entry):
+        raise Error('job_resume_inputs','The recorded focused query belongs to different inputs',8)
+    image = project.select(image_id)
+    baseline = image.get('engine_baseline_sha256')
+    if not image['imported'] or not is_digest(baseline):
+        raise Error('job_resume_inputs','The committed import identity is unavailable',8)
+    extent, payload = focused.select(project,image,entry)
+    proof = dict(extent, program_sha256=baseline)
+    if record.get('focused_import') != proof or jobs.focused_request(project,image,proof) != request:
+        raise Error('job_resume_inputs','The focused request differs from its saved import or extent',8)
+    response = jobs.query_receipt(project,args.job_id,request)
+    reused = response is not None
+    if reused:
+        focused.verify_instructions(extent,payload,response['data'])
+    else:
+        replay,deps = replay_worker_request(args,project,record)
+        if replay.max_functions != 1:
+            raise Error('job_manifest','A recorded focused query requires max_functions=1')
+        verify_replay_artifact(project,image)
+        response = focused_decompile(replay,project,image,entry=entry,deps=deps,resumed_from=args.job_id)
+    data = response['data']
+    reused = reused or data['origin']['job_id'] == args.job_id
+    return dict(response,command=command,data=dict(data,resumed_from=args.job_id,reused_restart=reused))
 
 
 def resume_query(args, project, command, record, request):
@@ -923,9 +963,7 @@ def resume_query(args, project, command, record, request):
         if replay.max_functions != 1:
             raise Error('job_manifest','A recorded selected-function query requires max_functions=1')
         metadata.verified_slice(project,image)
-        artifact = read_regular(project.path/'inputs'/(image['artifact_sha256']+'.artifact'))
-        if hashlib.sha256(artifact).hexdigest()!=image['artifact_sha256']:
-            raise Error('input_integrity','Immutable artifact digest differs from the recorded request')
+        verify_replay_artifact(project,image)
         response = fresh_decompile(replay,project,image,function,source,revision,hints,
                                    deps=deps,resumed_from=args.job_id,signature_plan=signature_plan,
                                    address_selection=address_selection)

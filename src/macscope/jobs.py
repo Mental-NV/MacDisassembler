@@ -194,7 +194,8 @@ def record_restart_attempt(path, attempt):
     source = path.parent.parent / original / "job.json"
     root = load(source)
     if ("resumed_from" in root or root.get("mode") != attempt.get("mode")
-            or root.get("image_id") != attempt.get("image_id")):
+            or root.get("image_id") != attempt.get("image_id")
+            or focused_record(root) != focused_record(attempt)):
         raise Error("job_restart_record", "Restart attempt does not match the original job")
     write_json(source.with_name(RESTART_RECORD), {
         "schema": RESTART_PROTOCOL, "original": original, "attempt": attempt["job_id"],
@@ -224,7 +225,8 @@ def verify_restart_stopped(project, path, original):
         except (Error, OSError) as error:
             raise Error("job_restart_record", "Recorded restart attempt is unavailable") from error
         if (attempt.get("resumed_from") != root or attempt.get("mode") != original.get("mode")
-                or attempt.get("image_id") != original.get("image_id")):
+                or attempt.get("image_id") != original.get("image_id")
+                or focused_record(attempt) != focused_record(original)):
             raise Error("job_restart_record", "Recorded restart attempt does not match the original job")
         record_for_resume(attempt_path, attempt)
     if original.get("restart_protocol") == RESTART_PROTOCOL:
@@ -427,7 +429,9 @@ def query_receipt(project, job_id, request):
         raise Error("query_receipt", "Recorded query result differs from its producing job")
     if focused:
         dependencies = producer.get("dependencies", {})
-        if (producer_id != job_id or producer.get("focused_import") != request.get("extent")
+        original = producer if producer_id == job_id else get(project, job_id)[1]
+        if (focused_record(original) != request or "resumed_from" in original
+                or producer.get("focused_import") != request.get("extent")
                 or producer.get("selected_entry") != request.get("entry_va")
                 or producer.get("image_id") != request.get("image_id")
                 or producer.get("focused_result_sha256") != receipt["result_sha256"]
@@ -449,9 +453,13 @@ def publish_query(project, job_id, request, result):
         raise Error("query_result_limit", "Query result exceeds its read limit", 7,
                     partial={"job_id": job_id})
     if request.get("schema") == FOCUSED_REQUEST:
-        manifest, producer = get(project, job_id)
+        producer_id = result["data"]["origin"]["job_id"]
+        manifest, producer = get(project, producer_id)
+        original = producer if producer_id == job_id else get(project, job_id)[1]
         prior = producer.get("focused_result_sha256")
         if (focused_record(producer) != request or producer["status"] != "complete"
+                or focused_record(original) != request or "resumed_from" in original
+                or (producer_id != job_id and producer.get("resumed_from") != job_id)
                 or prior not in (None, receipt["result_sha256"])):
             raise Error("query_receipt", "Focused publication differs from its producing job", 8)
         if prior is None:

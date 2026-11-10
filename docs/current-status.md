@@ -80,6 +80,13 @@ decision. Reuse recorded observations for gestures already covered.
   mismatched job receipts. It replayed with the source bundle set aside
   and the engine unavailable. A later framework analysis preserved the
   import-only replay and supplied a provider for a mixed handoff.
+- [x] **Recover an interrupted focused Calendar job.** On both owned
+  architectures, the installed CLI rejected an overlapping resume and
+  cancelled the Ghidra worker. Retrying used the original extent, import
+  and worker limits. The saved result replayed with the engine and source
+  bundle unavailable, and the handoff resolved both the original job ID
+  and the producing retry ID. With both the Program and receipt set aside,
+  retry returned `baseline_integrity` before creating a new job.
 
 Defer unrelated fixture scenarios, broad Objective-C and Swift recovery,
 arm64e execution semantics, additional host support, and general-purpose

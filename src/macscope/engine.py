@@ -379,7 +379,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     if entry is not None and (mode != 'query' or not re.fullmatch(r'0x[0-9a-f]{1,16}', entry)):
         raise Error('query_entry', 'Selected query requires an exact saved RAM function entry', 2)
     if from_import and (mode != 'query' or entry is None or any(value is not None for value in
-            (hints, query_request, signature_plan, resumed_from))):
+            (hints, query_request, signature_plan))):
         raise Error('focused_scope', 'Focused import requires one exact entry without saved-analysis options', 2)
     if hints is not None and (entry is None or not 1<=len(hints)<=MAX_TYPE_HINTS):
         raise Error('type_hint_scope', 'Accepted hints require a bounded selected-function query', 2)
@@ -418,6 +418,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if (not baseline_digest or source.is_symlink() or not source.is_dir()
                 or tree_digest(source) != baseline_digest):
             raise Error('baseline_integrity', 'Saved import Program is missing or differs from its digest', 4)
+        proof = dict(proof, program_sha256=baseline_digest)
+        focus_request = jobs.focused_request(project,image,proof)
+        if resumed_from is not None and jobs.focused_record(jobs.get(project,resumed_from)[1]) != focus_request:
+            raise Error('job_resume_inputs', 'Focused retry differs from the original selected extent', 8)
         program_content_digest = tree_digest(source, ignore=focused.PROJECT_BACKUPS)
     elif mode == 'query':
         saved_snapshot, active = project.snapshot(image)
@@ -525,8 +529,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     if entry is not None:
         manifest.update(selected_entry=entry, source_analysis_id=None if from_import else image['active_analysis'])
     if from_import:
-        manifest['focused_import'] = dict(proof, program_sha256=baseline_digest)
-        manifest['focused_request'] = jobs.focused_request(project,image,manifest['focused_import'])
+        manifest['focused_import'] = proof
+        manifest['focused_request'] = focus_request
     if hints is not None:
         manifest.update(type_hint_view_id=identity({'source_analysis_id':image['active_analysis'],'hints':hints}),
                         type_hints_sha256=digest(request),type_hints=hints)
