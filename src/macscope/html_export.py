@@ -1,0 +1,132 @@
+"""Render a private, standalone view of a committed analysis envelope."""
+import base64
+import hashlib
+from html import escape
+import io
+import json
+import re
+
+from .errors import Error
+
+
+MAX_HTML_BYTES = 64 * 1024 * 1024
+CONTROLS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ud800-\udfff]")
+STYLE = """body { font: 1rem/1.5 system-ui, sans-serif; margin: 2rem auto; padding: 0 1rem; max-width: 80rem; }
+:root { color-scheme: light dark; }
+dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem; }
+dd { margin: 0; overflow-wrap: anywhere; }
+details { margin: .75rem 0; padding: .5rem; border: 1px solid GrayText; }
+summary { cursor: pointer; overflow-wrap: anywhere; }
+pre { overflow: auto; padding: .75rem; border: 1px solid GrayText; }
+.record { white-space: pre-wrap; overflow-wrap: anywhere; }
+.status { font-size: .9em; font-weight: 600; }
+"""
+STYLE_HASH = base64.b64encode(hashlib.sha256(STYLE.encode()).digest()).decode("ascii")
+JSON = json.JSONEncoder(ensure_ascii=True, indent=2, sort_keys=True)
+
+
+def text(value):
+    value = "Unavailable" if value is None else str(value)
+    return escape(CONTROLS.sub(lambda match: f"\\u{ord(match[0]):04x}", value))
+
+
+def function_label(function):
+    names = function.get("names", ())
+    name = function.get("name") or (names[0]["name"] if names else "Unnamed function")
+    address = function.get("entry_va") or function.get("engine_entry")
+    return f"<code>{text(address)}</code> {text(name)}"
+
+
+class Report:
+    def __init__(self):
+        self.buffer = io.BytesIO()
+
+    def add(self, markup):
+        encoded = markup.encode("utf-8")
+        if self.buffer.tell() + len(encoded) > MAX_HTML_BYTES:
+            raise Error("html_output_limit", "HTML export exceeds its output byte limit", 7)
+        self.buffer.write(encoded)
+
+    def evidence(self, title, value):
+        self.add(f'<details><summary>{escape(title)}</summary><pre class="record">')
+        for chunk in JSON.iterencode(value):
+            self.add(escape(chunk))
+        self.add("</pre></details>\n")
+
+    def function(self, index, function):
+        status = text(function.get("decompile_status"))
+        self.add(f'<details id="function-{index}"><summary>{function_label(function)} '
+                 f'<span class="status">({status})</span></summary>\n')
+        self.add(f'<p><strong>Function ID</strong> <code>{text(function["function_id"])}</code></p>\n')
+        self.add(f'<p><strong>Signature</strong> <code>{text(function.get("signature"))}</code></p>\n')
+        self.add("<h3>Pseudocode</h3>\n")
+        pseudocode = function.get("pseudocode")
+        if pseudocode:
+            # The initial newline is discarded by HTML's pre parsing rule.
+            self.add(f"<pre>\n{text(pseudocode)}</pre>\n")
+        else:
+            self.add(f'<p>{text(function.get("decompile_error") or "Pseudocode unavailable.")}</p>\n')
+        instructions = function.get("instructions", ())
+        if instructions:
+            self.add(f"<details><summary>Assembly ({len(instructions)} instructions)</summary><pre>\n")
+            for instruction in instructions:
+                fields = (instruction.get("addr"), instruction.get("bytes"),
+                          instruction.get("text") or instruction.get("mnemonic"))
+                self.add("  ".join(map(text, fields)) + "\n")
+            self.add("</pre></details>\n")
+        self.evidence("Control flow, references and function coverage",
+                      {key: value for key, value in function.items() if key != "pseudocode"})
+        self.add("</details>\n")
+
+
+def render(result):
+    snapshot = result["data"]
+    image, engine, functions = (snapshot[key] for key in ("image", "engine", "functions"))
+    report = Report()
+    report.add(f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-{STYLE_HASH}'; base-uri 'none'; form-action 'none'">
+<title>Macscope analysis report</title>
+<style>{STYLE}</style>
+</head>
+<body>
+<main>
+<header>
+<p>Macscope analysis report</p>
+<h1>{text(image.get("input_name") or "Committed image")}</h1>
+<p>Private analysis data. The report may contain recovered code and strings.</p>
+<dl>
+""")
+    for label, value in (
+        ("Analysis ID", result["analysis_id"]), ("Image ID", image["image_id"]),
+        ("Architecture", image["arch"]), ("Slice SHA-256", image.get("sha256")),
+        ("Ghidra version", engine.get("ghidra_version")),
+        ("Profile", snapshot.get("identity", {}).get("profile")), ("Status", result["status"]),
+        ("Functions shown", len(functions)), ("Coverage", result["coverage"]["status"]),
+    ):
+        report.add(f"<dt>{label}</dt><dd>{text(value)}</dd>\n")
+    if reason := result["coverage"].get("truncation_reason"):
+        report.add(f"<dt>Coverage gap</dt><dd>{text(reason)}</dd>\n")
+    report.add("</dl>\n</header>\n<h2>Analysis evidence</h2>\n")
+    report.evidence("Manifest, coverage and diagnostics",
+                    dict(result, data={key: value for key, value in snapshot.items()
+                                       if key not in ("image", "engine", "functions", "annotations")}))
+    report.evidence("Mach-O image metadata", image)
+    report.evidence("Ghidra evidence and effective options", engine)
+    if "annotations" in snapshot:
+        report.evidence("Annotation history", snapshot["annotations"])
+    report.add("<h2>Functions</h2>\n")
+    if functions:
+        report.add('<nav aria-label="Function index"><ol>\n')
+        for index, function in enumerate(functions, 1):
+            report.add(f'<li><a href="#function-{index}">{function_label(function)}</a></li>\n')
+        report.add("</ol></nav>\n")
+        for index, function in enumerate(functions, 1):
+            report.function(index, function)
+    else:
+        report.add("<p>The snapshot contains zero function records.</p>\n")
+    report.add("</main>\n</body>\n</html>\n")
+    return report.buffer.getvalue()

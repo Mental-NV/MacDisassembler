@@ -77,6 +77,7 @@ errors also have a short stderr diagnostic. `--format text|json|jsonl`,
 Text currently renders escaped, indented JSON, not a polished terminal view.
 JSONL collection records each have the complete versioned envelope.
 Successful `--output` writes only the file, not a duplicate stdout response.
+The `export` command also supports a [standalone HTML report](#private-html-export).
 
 ```sh
 macscope --version
@@ -765,6 +766,34 @@ exports can still contain sensitive recovered code/strings; never publish
 them by default. Logs are bounded per job but retained until the owner removes
 the workspace; no automatic retention or deletion task is installed.
 
+### Private HTML export
+
+```sh
+macscope export --project workspaces/calculator --format html \
+  --output private-report.html
+```
+
+The report opens from a local file. It shows the analysis identity, status
+and coverage, with an index that links to each function's pseudocode,
+assembly, control-flow and reference records. Expand the evidence sections
+to inspect the Mach-O metadata, Ghidra options, diagnostics and provenance.
+Use `--include-annotations` to include the saved annotation history.
+Use `--json` for machine-readable evidence and `macscope diff`.
+
+HTML export reads the committed snapshot and preserves its complete or
+partial status. Repeated exports from the same snapshot and annotation
+revision are byte-identical. Binary strings, code, names and comments are
+escaped as text. The standalone report uses local links and a content
+policy that allows its stylesheet and blocks active content. Output files
+use mode 0600 and require `--force` to replace. Reports exceeding 64 MiB
+return `html_output_limit` and preserve any existing file.
+
+The installed CLI reproduced reports for four owned Ghidra snapshots
+covering arm64, x86_64 and partial analysis. The report sections matched
+saved JSON evidence, every function link resolved locally, and annotation
+markup remained literal text. The validation report SHA-256 is
+`1eb844748432ae3e8e8a5971aa9b9e6327ebf700ab75bbe070c5f97599efeba3`.
+
 ## Comparing committed exports
 
 ```sh
@@ -1060,8 +1089,8 @@ internal failure, 130 interrupt. A bounded collection page can have partial
 coverage while the page request itself exits0; use `next_cursor`.
 
 Remaining capabilities include richer Objective-C and Swift views,
-compound type hints, HTML exports and manual function
-corrections. Additional release requirements include stronger isolation,
+compound type hints and manual function corrections. Additional release
+requirements include stronger isolation,
 hard RSS/disk quotas, schema migrations, signed packaging, x86_64 host
 workers and expanded fuzzing. The [progress checklist](current-status.md)
 tracks behavior validation and the separately gated work.

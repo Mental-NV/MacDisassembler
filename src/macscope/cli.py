@@ -16,7 +16,7 @@ from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import string_evidence
+from . import html_export, string_evidence
 from .schema import validate_envelope, validate_function
 
 
@@ -197,7 +197,7 @@ def parser():
             s.add_argument('--accept',action='store_true')
             s.add_argument('--author',default='local')
         if action=='set':s.add_argument('--return-type',required=True)
-    s=sub.add_parser('export');project(s);common(s,('text','json','jsonl'))
+    s=sub.add_parser('export');project(s);common(s,('text','json','jsonl','html'))
     s.add_argument('--include-annotations',action='store_true')
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left committed JSON export')
@@ -1175,6 +1175,8 @@ def execute(a):
 
 
 def render(result,fmt):
+    if fmt=='html':
+        return html_export.render(result)
     if fmt=='dot':
         rows=['digraph cfg {','  // status: '+result['status']+'; bounded static evidence, not exhaustive runtime flow']
         for b in result['data']['blocks']:
@@ -1194,9 +1196,13 @@ def render(result,fmt):
 def main(argv=None):
     os.umask(0o077)
     args=None
+    output=None
     try:
         args=parser().parse_args(argv)
         result=execute(args)
+        validate_envelope(result)
+        fmt=getattr(args,'format','json')
+        output=render(result,fmt if not result.get('error') else 'json')
         code=6 if result['status']=='partial' else 0
     except Error as e:
         command=getattr(args,'command','unknown') if args else 'unknown'
@@ -1211,9 +1217,9 @@ def main(argv=None):
         result=envelope(getattr(args,'command','unknown'),None,status='failed',cov=coverage('requested command',0,None,True,reason='internal_failure'),diagnostics=[str(e)])
         result['error']={'code':'internal_failure','message':str(e),'affected_object':None,'retryable':False,'partial_results':None}
         code=10
-    fmt=getattr(args,'format','json') if args else 'json'
-    validate_envelope(result)
-    output=render(result,fmt if not result.get('error') else 'json')
+    if output is None:
+        validate_envelope(result)
+        output=render(result,'json')
     try:
         if getattr(args,'output',None) and code in (0,6):atomic(args.output,output,args.force)
         else:sys.stdout.buffer.write(output)

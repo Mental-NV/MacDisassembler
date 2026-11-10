@@ -1175,6 +1175,52 @@ class CliTests(TemporaryCase):
             self.assertNotIn(b'\x07', output)
             self.assertEqual(json.loads(output)['data']['name'], '\x1b[31munsafe\x07')
 
+    def test_html_export_escapes_saved_evidence_and_preserves_partial_status(self):
+        hostile = '</pre><script>alert(1)</script><img src="https://example.invalid/leak">'
+        note = 'Private annotation ' + hostile
+        cli.execute(self.args('comment', 'set', note, '--name', 'unique'))
+        self.snapshot['image']['input_name'] = hostile
+        self.snapshot['functions'][0].update(name=hostile, pseudocode=hostile + '\x1b\u202e\ud800')
+        self.snapshot['engine']['strings'][0]['value'] = hostile
+        self.snapshot['status'] = 'partial'
+        path = self.root / 'report.html'
+        args = ['export', '--project', str(self.workspace.path), '--format', 'html']
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(self.snapshot, {})), \
+             mock.patch.object(engine, 'dependencies', side_effect=AssertionError('cached HTML launched Ghidra')):
+            code, output, stderr = self.invoke(args)
+            self.assertEqual((code, stderr), (6, ''))
+            self.assertNotIn(b'Private annotation', output)
+            args.append('--include-annotations')
+            code, annotated, stderr = self.invoke(args)
+            self.assertEqual((code, stderr), (6, ''))
+            self.assertEqual(self.invoke([*args, '--output', str(path)]), (6, b'', ''))
+
+        self.assertEqual(path.read_bytes(), annotated)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertIn(b'Private annotation', annotated)
+        self.assertIn(b'<dt>Status</dt><dd>partial</dd>', annotated)
+        self.assertIn(b'href="#function-1"', annotated)
+        self.assertIn(b'<details id="function-1">', annotated)
+        self.assertIn(b'0x100000000  c0035fd6  ret', annotated)
+        self.assertIn(b'&lt;/pre&gt;&lt;script&gt;alert(1)&lt;/script&gt;', annotated)
+        self.assertIn(b'\\u001b\\u202e\\ud800', annotated)
+        self.assertIn(b'Content-Security-Policy', annotated)
+        for unsafe in (b'<script', b'<img', b'\x1b', '\u202e'.encode()):
+            self.assertNotIn(unsafe, annotated)
+
+    def test_html_output_limit_preserves_existing_report(self):
+        path = self.root / 'report.html'
+        path.write_bytes(b'existing report')
+        args = ['export', '--project', str(self.workspace.path), '--format', 'html',
+                '--output', str(path), '--force']
+        with mock.patch.object(cli.html_export, 'MAX_HTML_BYTES', 1500):
+            code, output, stderr = self.invoke(args)
+        self.assertEqual(code, 7)
+        self.assertEqual(json.loads(output)['error']['code'], 'html_output_limit')
+        self.assertIn('output byte limit', stderr)
+        self.assertEqual(path.read_bytes(), b'existing report')
+        self.assertEqual(list(self.root.glob('.macscope-*')), [])
+
     def test_invalid_budgets_fail_before_dependency_probe(self):
         for extra in (['--timeout', '0'], ['--max-functions', '10001'], ['--heap-mib', '255']):
             with self.subTest(extra=extra), mock.patch.object(engine, 'dependencies') as probe:
