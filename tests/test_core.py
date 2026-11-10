@@ -1192,12 +1192,47 @@ class CliTests(TemporaryCase):
             self.assertEqual(row['coverage']['returned_count'], 1)
 
     def test_terminal_controls_are_escaped(self):
-        result = cli.envelope('inspect', {'name': '\x1b[31munsafe\x07'})
-        for fmt in ('text', 'json', 'jsonl'):
+        value = '\x1b[31munsafe\x07\u202e\r\n\ud800'
+        result = cli.envelope('inspect', {'name': value})
+        for fmt in (None, 'json', 'jsonl'):
             output = cli.render(result, fmt)
             self.assertNotIn(b'\x1b', output)
             self.assertNotIn(b'\x07', output)
-            self.assertEqual(json.loads(output)['data']['name'], '\x1b[31munsafe\x07')
+            self.assertEqual(json.loads(output)['data']['name'], value)
+        output = cli.render(result, 'text')
+        self.assertIn(rb'\u{1b}[31munsafe\u{7}\u{202e}\r\n\u{d800}', output)
+        self.assertNotIn(b'\x1b', output)
+        self.assertNotIn(b'\x07', output)
+        with mock.patch.object(cli, 'execute', side_effect=Error('owned_test', value)):
+            code, stdout, stderr = self.invoke(['version', '--format', 'text'])
+        self.assertEqual(code, 5)
+        self.assertEqual(json.loads(stdout)['error']['message'], value)
+        self.assertEqual(stderr, r'\u{1b}[31munsafe\u{7}\u{202e}\r\n\u{d800}' + '\n')
+
+    def test_explicit_text_view_preserves_cursor_and_default_json(self):
+        at = ['--project', str(self.workspace.path)]
+        command = ['functions', 'list', *at, '--limit', '1']
+        code, default, _ = self.invoke(command)
+        self.assertEqual(code, 0)
+        envelope = json.loads(default)
+        cursor = envelope['coverage']['next_cursor']
+        self.assertEqual(envelope, json.loads(self.invoke([*command, '--json'])[1]))
+        code, page, _ = self.invoke([*command, '--format', 'text'])
+        self.assertEqual(code, 0)
+        self.assertIn(b'Coverage  selected image function collection  (partial)', page)
+        self.assertIn(b'Next cursor  ' + cursor.encode(), page)
+        second = self.invoke([*command, '--format', 'text', '--cursor', cursor])[1]
+        self.assertIn(b'0x100000010  duplicate', second)
+
+    def test_text_disassembly_and_pseudocode_use_saved_evidence(self):
+        at = ['--project', str(self.workspace.path), '--name', 'unique', '--format', 'text']
+        with mock.patch.object(engine, 'dependencies', side_effect=AssertionError('cached text started Ghidra')):
+            code, assembly, _ = self.invoke(['disasm', *at])
+            self.assertEqual(code, 0)
+            self.assertRegex(assembly, rb'0x100000020 +c0035fd6 +ret\n')
+            code, pseudocode, _ = self.invoke(['decompile', *at])
+            self.assertEqual(code, 0)
+            self.assertIn(b'    void unique(void) { return; }\n', pseudocode)
 
     def test_html_export_escapes_saved_evidence_and_preserves_partial_status(self):
         hostile = '</pre><script>alert(1)</script><img src="https://example.invalid/leak">'

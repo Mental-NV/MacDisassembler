@@ -21,7 +21,7 @@ contains documentation only.
   CFG JSON/DOT, project/job status, cached search, bounded call traversal,
   encoded strings with verified file bytes and incoming references,
   Mach-O symbol declarations and indirect slots, compact and DWARF unwind
-  records, normalized exports and private HTML reports.
+  records, normalized exports, explicit terminal views and private HTML reports.
 - Package-owned Java bridge, effective analyzer-option recording, real saved
   Program databases, immutable digest identities, SQLite committed snapshots,
   writer lock, atomic result/output publication and pagination-bound cursors.
@@ -45,8 +45,8 @@ Hard process-memory and disk quotas are unavailable. Isolation errors
 fail closed.
 
 Public queries default to completed snapshots. Explicit `decompile --fresh`
-uses the saved Program and the read-only/noanalysis worker. Polished terminal
-output, full Mach-O load-command and dyld decoding, and broader host support remain
+uses the saved Program and the read-only/noanalysis worker. Full Mach-O
+load-command and dyld decoding and broader host support remain
 incomplete. Some calculator batches correctly exit6 because their reference
 collections exceed documented bounds despite successful pseudocode output.
 
@@ -323,6 +323,11 @@ collections exceed documented bounds despite successful pseudocode output.
   The universal slices reproduced the same queries after full headless
   analysis. CFA expressions are retained as bytes and unsupported
   instruction formats have explicit coverage.
+- [x] Verify [explicit terminal views](cli.md#terminal-view) on saved owned
+  arm64 and x86_64 analysis and a fresh arm64 hinted query. Pseudocode,
+  assembly, graph and byte views matched the saved evidence. Partial
+  ranges, unresolved targets, cursors and private output kept their
+  existing semantics, and default exports matched the archived JSON.
 - [ ] Expand malformed-input coverage and exercise isolation, schema migrations and
   additional host versions before a wider release. Release SBOM and notices
   need dependency and packaging decisions.

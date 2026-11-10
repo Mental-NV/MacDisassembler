@@ -16,7 +16,7 @@ from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import html_export, macho_symbols, macho_unwind, string_evidence
+from . import html_export, macho_symbols, macho_unwind, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 
@@ -38,7 +38,7 @@ def parser():
     p.add_argument('--version', action='version', version='macscope '+__version__)
     sub = p.add_subparsers(dest='command',required=True)
     def common(s, formats=('text','json','jsonl')):
-        s.add_argument('--format',choices=formats,default='text')
+        s.add_argument('--format',choices=formats)
         s.add_argument('--json',dest='format',action='store_const',const='json')
         s.add_argument('--output')
         s.add_argument('--force',action='store_true')
@@ -1224,6 +1224,8 @@ def execute(a):
 
 
 def render(result,fmt):
+    if fmt=='text':
+        return terminal.render(result)
     if fmt=='html':
         return html_export.render(result)
     if fmt=='dot':
@@ -1273,7 +1275,7 @@ def main(argv=None):
         if getattr(args,'output',None) and code in (0,6):atomic(args.output,output,args.force)
         else:sys.stdout.buffer.write(output)
     except Error as e:
-        sys.stderr.write(e.code+': '+str(e)+'\n')
+        sys.stderr.write(terminal.safe(e.code)+': '+terminal.safe(e)+'\n')
         return e.exit_code
-    if code not in (0,6):sys.stderr.write(result.get('error',{}).get('message','Command failed')+'\n')
+    if code not in (0,6):sys.stderr.write(terminal.safe(result.get('error',{}).get('message','Command failed'))+'\n')
     return code

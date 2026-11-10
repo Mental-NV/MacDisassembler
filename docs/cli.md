@@ -74,7 +74,8 @@ bridge remained readable. The job report SHA-256 is
 All commands have `--help`; unknown flags are errors. Data goes to stdout,
 errors also have a short stderr diagnostic. `--format text|json|jsonl`,
 `--json`, `--output FILE`, and `--force` are supported as applicable.
-Text currently renders escaped, indented JSON, not a polished terminal view.
+Omitting `--format` retains the original indented JSON output. Explicit
+`--format text` selects the [terminal view](#terminal-view).
 JSONL collection records each have the complete versioned envelope.
 Successful `--output` writes only the file, not a duplicate stdout response.
 The `export` command also supports a [standalone HTML report](#private-html-export).
@@ -313,6 +314,30 @@ Program digests and unassisted exports matched after the queries. A
 cancelled arm64 query restarted with its original accepted list after a
 later clear and replayed the saved receipt. The validation report SHA-256 is
 `7d02cc3692d50511d128122efc0fe19c6dba1870969efdccff4a209634a2fa61`.
+
+## Terminal view
+
+```sh
+macscope decompile --project workspaces/calculator --name _calc_add --format text
+macscope disasm --project workspaces/calculator --name _calc_add --format text
+```
+
+The text view shows the command result, analysis ID, coverage, and any
+continuation cursor. It prints indented pseudocode, aligned assembly
+bytes, function identities, control-flow and reference rows, search
+context, and a hex view. Other commands use indented field names and
+values. Use `--json` or `--format jsonl` for the full versioned records.
+Terminal control characters in binary data and diagnostics appear as
+visible escapes. Explicit text output uses the same private, atomic
+file handling and exit codes as the other formats.
+
+The installed CLI matched the text layouts against saved JSON evidence
+from owned arm64 and x86_64 slices. The run also checked pagination,
+unresolved references, partial instruction ranges, and a fresh arm64
+type-hinted result. Default exports reproduced the archived JSON and
+private text output preserved the partial exit code. The validation
+report SHA-256 is
+`d86317c2ed167b3c54cc6d1b3c5de64fa2303d147d8343543196340f61824847`.
 
 ## Input preflight
 
