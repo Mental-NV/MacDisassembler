@@ -69,9 +69,15 @@ def result_rows(paths, pairs, side):
             seen.add(key)
             for routine, row in capture["routines"].items():
                 index = (*key, routine)
+                measured = "results" in row
+                if (measured and not row.get("pseudocode_sha256")
+                        or row["status"] == "passed" and not measured):
+                    raise ValueError("Measured behavior lacks its result or pseudocode provenance")
                 previous = records.get(index)
                 if previous is not None:
-                    if any(row[field] != previous[field] for field in ("pseudocode_sha256", "llvm_instruction_bytes")):
+                    # Missing or incomplete recovery can appear in both inventories.
+                    if (row.get("pseudocode_sha256") != previous.get("pseudocode_sha256")
+                            or row["llvm_instruction_bytes"] != previous["llvm_instruction_bytes"]):
                         raise ValueError("Behavior reports disagree about the source evidence")
                     if "results" in previous:
                         if routine != "calc_engine_sign_toggle":

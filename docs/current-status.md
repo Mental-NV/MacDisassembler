@@ -233,9 +233,10 @@ completed on the eight matching stripped inputs in a separate run.
 All 16 [clean analyst packets](phase1-findings.md#clean-analyst-packets)
 are prepared. The qualitative review remains open under the
 [specified conditions](specification.md#84-blind-analysis-and-controlled-assistance).
-The [optimized baseline measurement](wide-division.md#paired-evidence)
-also records a shortfall against the proposed 90% instruction-byte
-threshold.
+The [installed stock engine](semantics.md#cached-behavior-on-the-installed-engine)
+passed 29/52 O2 baseline routines and 1,730/4,269 instruction bytes in
+each symbol state. The [experimental engine with opt-in fresh recovery](direct-signatures.md#installed-cli-validation)
+passed all 52 O2 routines and all 4,269 bytes in each profile and symbol state.
 
 ## Phase-2 boundaries still open
 
@@ -450,6 +451,11 @@ collections exceed documented bounds despite successful pseudocode output.
   original frozen captures.
 - [ ] Review the frozen pseudocode in clean analyst contexts and freeze
   their findings before revealing ground truth to the evaluator.
+- [x] Measure [cached stock-engine behavior](semantics.md#cached-behavior-on-the-installed-engine)
+  on both profiles and symbol states across the 416 owned tool instances.
+  The matched stock and experimental engines passed 206 and 380 instances,
+  respectively. The report retains incomplete pseudocode in the
+  instruction-byte denominator.
 - [x] Measure 100% branch-direction coverage for the owned reference core
   with directed and seeded stateful tests. See
   [reference coverage](semantics.md#reference-core-coverage).

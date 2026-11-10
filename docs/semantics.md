@@ -237,6 +237,50 @@ Exit 6 records partial coverage. The measured report SHA-256 is
 `6592ed5ee95d80eb37ebdf76ce371874ce4c30ab9715187c5d22f27a42e81f94`.
 The full behavior and O2 testability gates remain open.
 
+### Cached behavior on the installed engine
+
+The installed macscope 0.2.0 and bridge 1.14.0 captured both profiles
+with stock Ghidra 12.2 on all eight owned tool binaries. The evaluator
+verified the input, profile, export and analysis identities before
+scoring the saved C with compatibility policy
+`macscope-ghidra-aggregate-compat/10`. It used the existing scalar,
+history, aggregate, state and formatting harnesses and the
+DWARF-confirmed, LLVM-decoded instruction denominators. A second
+capture used the installed bridge with the experimental Ghidra tree
+selected explicitly. All 16 pairs matched in binary identity,
+language, compiler specification, bridge, JDK and analyzer options.
+Across 5,442 engine files and symlinks, only the native decompiler
+differed.
+
+Each row applies independently to stripped and symbol-bearing inputs.
+
+| Optimization | Profile | Stock routines | Stock instruction bytes | Experimental routines | Experimental instruction bytes |
+| --- | --- | ---: | ---: | ---: | ---: |
+| O0 | Baseline | 21/52 | 2,940/8,644 | 41/52 | 5,360/8,644 |
+| O0 | Parameter inference | 21/52 | 2,940/8,644 | 50/52 | 7,869/8,644 |
+| O2 | Baseline | 29/52 | 1,730/4,269 | 48/52 | 3,772/4,269 |
+| O2 | Parameter inference | 32/52 | 2,068/4,269 | 51/52 | 4,206/4,269 |
+
+Across the 416 stock instances, 206 passed all declared domains. The
+evaluator recorded 146 sanitizer failures in the main domains and
+16 in the wide-counter domains. Twenty-four failed compilation and
+20 were outside the compatibility contract. Four x86_64 O0
+`calc_apply_op` instances retained partial pseudocode. Each instance
+contributes 192 instruction bytes to the denominator. The combined
+report accepts those incomplete entries and requires pseudocode
+provenance and a result for any measured pass.
+
+The experimental engine passed 380 of 416 cached instances. The
+experimental O2 parameter-inference profile exceeded both 90% thresholds
+in each symbol state. Its baseline profile covered 3,772 of 4,269 bytes
+with saved output. Separate [opt-in fresh queries](direct-signatures.md#installed-cli-validation)
+completed the O2 matrix in earlier validation.
+
+The matched comparison report SHA-256 is
+`5d117399dad1e4e8185674258dec60023912cf918677917bb9e58849a9d720fd`.
+The engine-tree comparison SHA-256 is
+`1b5c0a80e92000e2e3fddb389cd57770aa2ce4be231bcca8a925cc1a716ec48c`.
+
 ### Aggregate returns
 
 Policy `macscope-ghidra-aggregate-compat/1` lowers the printed
