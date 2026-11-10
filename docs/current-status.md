@@ -561,6 +561,13 @@ collections exceed documented bounds despite successful pseudocode output.
   Both clean retries replayed their receipts, and a fresh query reopened
   the recovered analysis. The layout check matched 89 archived Program
   tree digests.
+- [x] Recover an unavailable Program when reanalysis reproduces the
+  identical snapshot. A healthy rerun preserved the original Program.
+  After it was set aside, the owned Calendar test used a replacement with
+  a distinct tree digest and kept the analysis ID and cached export.
+  Fresh queries reopened successfully. The completed query receipt and
+  pinned handoff replayed offline, while an unfinished query still
+  required its original Program digest.
 - [x] Verify the [deep analysis profile](cli.md#deep-analysis-profile) with
   installed full Ghidra 12.2 on owned arm64 and x86_64 fixtures. Deep
   added three byte-checked data references per architecture, preserved

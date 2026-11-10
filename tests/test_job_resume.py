@@ -98,6 +98,34 @@ class JobResumeTests(TemporaryCase):
         self.assertEqual(jobs.publication(self.workspace, self.prior),
                          {"job_id": "c" * 32, "analysis_id": self.output_id})
 
+    def test_same_snapshot_rebinds_only_an_unavailable_program(self):
+        original = "b" * 32
+        replacement = "c" * 32
+        first = self.workspace.path / "jobs" / original / "program"
+        second = self.workspace.path / "jobs" / replacement / "program"
+        synthetic_program(first, b"original Program")
+        synthetic_program(second, b"replacement Program")
+        digest = engine.tree_digest(first)
+        snapshot = {"analysis_id": self.output_id, "image": self.image, "functions": [], "engine": {},
+                    "status": "complete"}
+        path = self.workspace.path / "snapshots" / (self.output_id + ".json")
+        storage.write_json(path, snapshot)
+        record = {"snapshot_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                  "job_id": original, "analysis_program_sha256": digest}
+        repair = dict(record, job_id=replacement, analysis_program_sha256=engine.tree_digest(second))
+        image = dict(self.image, active_analysis=self.output_id)
+        with self.workspace.db(False) as db:
+            cli.save_analysis_record(db, self.workspace, self.image_id, self.output_id, record)
+            cli.save_analysis_record(db, self.workspace, self.image_id, self.output_id, repair)
+        self.assertEqual(self.workspace.snapshot(image)[1], record)
+        first.rename(first.with_name('held-aside'))
+        with self.workspace.db(False) as db:
+            cli.save_analysis_record(db, self.workspace, self.image_id, self.output_id, repair)
+        saved, source = self.workspace.snapshot(image)
+        self.assertEqual(saved, snapshot)
+        self.assertEqual(source, dict(repair, previous_program_sha256=[digest]))
+        self.assertEqual(engine.analyzed_program(self.workspace, source), second)
+
     def test_refusals_leave_previous_attempt_and_workspace_untouched(self):
         scenarios = (
             ("job_resume_unsupported", {"mode": "import"}),

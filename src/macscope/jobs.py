@@ -8,7 +8,7 @@ import stat
 from . import focused, worker_lifecycle
 from .errors import Error
 from .macho import read_regular
-from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity, strict_json, write_json
+from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, identity, is_digest, strict_json, write_json
 
 
 JOB_ID = re.compile(r"[0-9a-f]{32}")
@@ -343,6 +343,11 @@ def analysis_request(project, image, recovery=None, manual=None):
     if manual is not None:
         request["manual_boundaries"] = manual
     return request
+
+
+def matches_query_program(source, digest):
+    return is_digest(digest) and (digest == source.get('analysis_program_sha256')
+                                  or digest in source.get('previous_program_sha256', ()))
 
 
 def query_request(project, image, function, source, revision, hints, *, signature_recovery=None,

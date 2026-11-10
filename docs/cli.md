@@ -1996,6 +1996,12 @@ existing tree digest after this check. Missing or incomplete Programs
 return `baseline_integrity` for import or `analysis_program_integrity`
 for analysis and keep the previous committed state available.
 
+If reanalysis produces the same snapshot bytes and analysis ID, the CLI
+keeps the original Program while it passes its digest and layout checks.
+An unavailable or damaged Program is replaced with the verified new one.
+Completed fresh-query receipts can replay against their original Program
+digest. An unfinished query still requires the exact digest in its request.
+
 ### Targeted malformed Mach-O payloads
 
 The installed data-only parsers processed 20,480 seeded mutations in

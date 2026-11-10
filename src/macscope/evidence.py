@@ -221,10 +221,11 @@ def query_view(project, job_id, pin, source, function):
     request = jobs.restart_request(record)
     expected = {"project_id": project.project_id, "image_id": pin["image_id"],
                 "source_analysis_id": pin["analysis_id"], "source_snapshot_sha256": source["snapshot_sha256"],
-                "source_program_sha256": source.get("analysis_program_sha256"), "slice_sha256": pin["slice_sha256"],
+                "slice_sha256": pin["slice_sha256"],
                 "artifact_sha256": pin["artifact_sha256"], "function_id": function["function_id"],
                 "entry_va": function["entry_va"]}
-    if (record.get("mode") != "query" or request is None or not is_digest(expected["source_program_sha256"])
+    if (record.get("mode") != "query" or request is None
+            or not jobs.matches_query_program(source, request.get("source_program_sha256"))
             or any(request.get(key) != value for key, value in expected.items())):
         raise Error("evidence_query_mismatch", "Recorded query does not belong to the selected function and analysis", 3)
     result = jobs.query_receipt(project, job_id, request)

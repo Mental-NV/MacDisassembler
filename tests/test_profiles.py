@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from macscope import cli, engine, storage
 from macscope.errors import Error
+from test_core import synthetic_program
 
 
 def raw_result(name="baseline", mode="analyze"):
@@ -267,16 +268,17 @@ class ProfileRunnerTests(unittest.TestCase):
     def test_analysis_and_plain_query_decline_changed_program_copies(self):
         previous = "c" * 32
         saved = self.project.path / "jobs" / previous / "program"
-        saved.mkdir(parents=True)
-        (saved / "program").write_text("saved analyzed Program")
+        synthetic_program(saved, b"saved analyzed Program")
         snapshot = {"identity": {"profile": "baseline/1"}}
         record = {"job_id": previous, "analysis_program_sha256": engine.tree_digest(saved)}
         baseline = self.project.path / "engine" / self.image["image_id"]
         original_copy = engine.shutil.copytree
 
-        def alter_copy(source, destination, **options):
-            original_copy(source, destination, **options)
-            (destination / "program").write_text("changed Program copy")
+        def alter_copy(source, destination, *arguments, **options):
+            result = original_copy(source, destination, *arguments, **options)
+            if Path(destination).name == "program":
+                (Path(destination) / "copy-control").write_text("changed Program copy")
+            return result
 
         with mock.patch.object(storage.Project, "snapshot", return_value=(snapshot, record)), \
              mock.patch.object(engine.shutil, "copytree", side_effect=alter_copy), \
@@ -340,8 +342,8 @@ class ProfileRunnerTests(unittest.TestCase):
 
     def test_query_uses_saved_profile_not_analyze_argument_default(self):
         old = "c" * 32
-        source = self.project.path / "jobs" / old / "program"; source.mkdir(parents=True)
-        (source / "saved").write_text("parameter-inference analyzed Program")
+        source = self.project.path / "jobs" / old / "program"
+        synthetic_program(source, b"parameter-inference analyzed Program")
         before = engine.tree_digest(source)
         snapshot = {"identity": {"profile": "parameter-inference/1"}}
         record = {"job_id": old, "analysis_program_sha256": before}
@@ -356,8 +358,7 @@ class ProfileRunnerTests(unittest.TestCase):
     def test_selected_query_checks_engine_pin_and_exact_worker_entry(self):
         job_id = "c" * 32
         source = self.project.path / "jobs" / job_id / "program"
-        source.mkdir(parents=True)
-        (source / "saved").write_text("analyzed Program")
+        synthetic_program(source, b"analyzed Program")
         before = engine.tree_digest(source)
         snapshot = {"identity": {"profile": "baseline/1",
                                  "engine": {"ghidra_tree_sha256": "pinned"}}}

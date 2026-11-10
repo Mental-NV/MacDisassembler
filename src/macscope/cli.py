@@ -15,8 +15,8 @@ from . import __version__, SCHEMA_VERSION
 from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
-from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
-                      canonical, canonical_chunks, identity, is_digest, validate_snapshot_functions, write_json)
+from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, analysis_program_history, atomic, atomic_chunks,
+                      canonical, canonical_chunks, identity, is_digest, json_object, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
@@ -831,14 +831,36 @@ def publish_analysis(project, image, deps, command, raw, job, resumed_from):
         with project.db(False) as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute(jobs.PUBLISH)
-            db.execute('INSERT OR IGNORE INTO analyses(id,image_id,payload) VALUES(?,?,?)',
-                       (aid,image['image_id'],canonical(record).decode()))
+            save_analysis_record(db,project,image['image_id'],aid,record)
             db.execute('UPDATE images SET active_analysis=? WHERE id=?',(aid,image['image_id']))
             db.execute('INSERT INTO analysis_publications(job_id,analysis_id,resumed_from) VALUES(?,?,?)',
                        (job['job_id'],aid,resumed_from))
     except sqlite3.Error as error:
         raise Error('analysis_publication','Could not commit the analysis and job receipt',8,retryable=True) from error
     return analysis_response(command,normalized,job['job_id'],resumed_from=resumed_from)
+
+
+def save_analysis_record(db, project, image_id, aid, record):
+    existing = db.execute('SELECT image_id,payload FROM analyses WHERE id=?',(aid,)).fetchone()
+    if existing is None:
+        db.execute('INSERT INTO analyses(id,image_id,payload) VALUES(?,?,?)',(aid,image_id,canonical(record).decode()))
+        return
+    previous = json_object(existing[1], 'snapshot_record', 'Invalid saved analysis record')
+    if existing[0] != image_id or previous.get('snapshot_sha256') != record['snapshot_sha256']:
+        raise Error('snapshot_record', 'Saved analysis record differs from the regenerated snapshot')
+    history = analysis_program_history(previous)
+    try:
+        engine.analyzed_program(project,previous)
+    except Error:
+        old_digest = previous.get('analysis_program_sha256')
+        new_digest = record['analysis_program_sha256']
+        history = [digest for digest in history if digest != new_digest]
+        if is_digest(old_digest) and old_digest != new_digest:
+            history.append(old_digest)
+        if history:
+            record['previous_program_sha256'] = history
+        analysis_program_history(record)
+        db.execute('UPDATE analyses SET payload=? WHERE id=?',(canonical(record).decode(),aid))
 
 
 def resume_job(args, project, command):
@@ -971,7 +993,11 @@ def resume_query(args, project, command, record, request):
         policy, _ = engine.SIGNATURE_RECOVERIES[fields[0]]
         signature_plan = policy.request(metadata.verified_slice(project,image),image,function,functions)
         recovery = engine.signature_request(signature_plan)
-    if (jobs.query_request(project,image,function,source,revision,hints,signature_recovery=recovery,
+    program_digest = request.get('source_program_sha256')
+    if not jobs.matches_query_program(source, program_digest):
+        raise Error('job_resume_inputs','The fresh query Program does not belong to the saved analysis',8)
+    request_source = dict(source,analysis_program_sha256=program_digest)
+    if (jobs.query_request(project,image,function,request_source,revision,hints,signature_recovery=recovery,
                            address_selection=address_selection) != request
             or record.get('type_hint_view_id') != request['type_hint_view_id']
             or record.get('type_hints') != hints
@@ -980,6 +1006,8 @@ def resume_query(args, project, command, record, request):
     response = jobs.query_receipt(project,args.job_id,request)
     reused = response is not None
     if response is None:
+        if program_digest != source['analysis_program_sha256']:
+            raise Error('analysis_program_integrity','The original Program is unavailable for this unfinished query')
         policy = engine.profile_for_snapshot(snapshot)
         replay,deps = replay_worker_request(args,project,record,query_profile=policy)
         if replay.max_functions != 1:

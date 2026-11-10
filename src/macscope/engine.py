@@ -164,6 +164,17 @@ def saved_program_digest(root, error_code):
         raise Error(error_code, 'Saved Ghidra Program is missing or incomplete') from error
 
 
+def analyzed_program(project, record):
+    job_id = record.get('job_id')
+    if not isinstance(job_id, str) or not jobs.JOB_ID.fullmatch(job_id):
+        raise Error('analysis_program_missing', 'Active analyzed Program reference is invalid')
+    source = project.path/'jobs'/job_id/'program'
+    expected = record.get('analysis_program_sha256')
+    if not is_digest(expected) or saved_program_digest(source, 'analysis_program_integrity') != expected:
+        raise Error('analysis_program_integrity', 'Saved analyzed Program is missing or changed; rerun analyze')
+    return source
+
+
 def copy_program(source, destination, expected_digest, integrity_error):
     if source.is_symlink():
         raise Error('analysis_program_integrity', 'Saved Program directory is a symbolic link')
@@ -526,13 +537,12 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             saved_digest = saved_snapshot['identity'].get('engine', {}).get('ghidra_tree_sha256')
             if not saved_digest or saved_digest != deps.get('ghidra_tree_sha256'):
                 raise Error('query_engine_mismatch', 'Installed Ghidra differs from the saved analysis; rerun analyze', 4)
-        if not re.fullmatch(r'[a-f0-9]{32}', active.get('job_id','')):
-            raise Error('analysis_program_missing','Active analyzed Program reference is invalid')
-        source = project.path/'jobs'/active['job_id']/'program'
-        source_digest = active.get('analysis_program_sha256')
-        if (source.parent.is_symlink() or source.is_symlink() or not source.is_dir()
-                or source_digest != tree_digest(source)):
-            raise Error('analysis_program_integrity','Saved analyzed Program is missing or changed; rerun analyze')
+        if query_request is not None and (
+                query_request.get('source_program_sha256') != active.get('analysis_program_sha256')
+                or query_request.get('source_snapshot_sha256') != active.get('snapshot_sha256')):
+            raise Error('job_resume_inputs', 'The saved Program or snapshot changed before the query', 8)
+        source = analyzed_program(project, active)
+        source_digest = active['analysis_program_sha256']
     elif mode == 'analyze':
         # Fresh analysis starts from the saved no-analysis import.
         source = project.path/'engine'/image['image_id']

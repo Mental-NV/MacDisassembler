@@ -41,6 +41,14 @@ def is_digest(value):
     return isinstance(value, str) and SHA256.fullmatch(value) is not None
 
 
+def analysis_program_history(record):
+    history = record.get('previous_program_sha256', [])
+    if (not isinstance(history, list) or len(history) > 4096 or not all(is_digest(item) for item in history)
+            or len(set(history)) != len(history) or record.get('analysis_program_sha256') in history):
+        raise Error('snapshot_record', 'Invalid saved analysis Program history')
+    return history
+
+
 def validate_snapshot_functions(functions, image, analysis_id):
     ids, entries = set(), set()
     for function in functions:
@@ -303,6 +311,7 @@ class Project:
         record = json_object(row[0], 'snapshot_record', 'Invalid saved analysis record in the workspace index')
         if not is_digest(record.get('snapshot_sha256')):
             raise Error('snapshot_record', 'Saved analysis record has no valid snapshot digest')
+        analysis_program_history(record)
         data = read_regular(self.path/'snapshots'/(aid+'.json'), MAX_SNAPSHOT_BYTES)
         if hashlib.sha256(data).hexdigest() != record['snapshot_sha256']:
             raise Error('snapshot_integrity', 'Snapshot digest mismatch')

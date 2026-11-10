@@ -123,6 +123,23 @@ class QueryResumeTests(TemporaryCase):
         self.assertEqual((detail["status"], detail["publication_status"]), ("complete", "not_published"))
         self.assertEqual(self.workspace.select()["active_analysis"], self.latest)
 
+    def test_repaired_program_keeps_completed_receipts_bound_to_the_old_digest(self):
+        with patch.object(engine, "dependencies", return_value=self.deps), \
+             patch.object(engine, "run", side_effect=self.worker):
+            prior = self.resume()
+        with self.workspace.db(False) as db:
+            payload = db.execute("SELECT payload FROM analyses WHERE id=?", (self.aid,)).fetchone()[0]
+            record = json.loads(payload)
+            digest = record["analysis_program_sha256"]
+            record.update(analysis_program_sha256="6" * 64, previous_program_sha256=[digest])
+            db.execute("UPDATE analyses SET payload=? WHERE id=?", (json.dumps(record), self.aid))
+        with patch.object(engine, "run") as run:
+            replay = self.resume()
+            self.assertEqual(replay, dict(prior, data=dict(prior["data"], reused_restart=True)))
+            self.prior_path.with_name("query-result.json").unlink()
+            self.error("analysis_program_integrity", self.resume)
+            run.assert_not_called()
+
     def test_runtime_selection_is_verified_and_replayed_with_the_receipt(self):
         selection = {"runtime_va": "0x100004000", "load_slide": "0x4000", "va": self.entry,
                      "address_space": "ram", "image_id": self.image_id, "arch": "arm64"}
