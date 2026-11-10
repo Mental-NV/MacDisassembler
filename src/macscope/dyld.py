@@ -23,6 +23,18 @@ ARM64E_FORMATS = {1, 9, 12}
 AUTH_KEYS = ("IA", "IB", "DA", "DB")
 
 
+class ChainWorkBudget:
+    """Query-wide attempted node decodes; cache eviction never refunds work."""
+    def __init__(self, limit):
+        self.limit = limit
+        self.used = 0
+
+    def charge(self):
+        if self.used >= self.limit:
+            raise Error("fixup_work_limit", "Cumulative chained node decode budget exhausted", 7)
+        self.used += 1
+
+
 def import_symbol(data, payload, end, table, symbols, count, format_id, index, libraries):
     if index >= count:
         raise Error("fixup_ordinal", "Chained bind ordinal exceeds its import table")
@@ -93,7 +105,8 @@ def ordinary_pointer(value, kind, base):
     return fields, (value >> 51 & 0xFFF) * 4
 
 
-def decode_chained(data, image, parsed, extent, *, address=None, selected=None, for_engine=False, whole_page=False):
+def decode_chained(data, image, parsed, extent, *, address=None, selected=None, for_engine=False,
+                   whole_page=False, work_budget=None):
     payload,size = int(extent["slice_file_offset"],16),int(extent["size"],16)
     end = payload+size
     version,starts,table,symbols,count,format_id,symbol_format = header(data, payload, size)
@@ -155,11 +168,18 @@ def decode_chained(data, image, parsed, extent, *, address=None, selected=None, 
             first = struct.unpack_from("<H",data,page_table+page*2)[0]
             if first==0xFFFF:
                 continue
+            if first & 0x8000:
+                raise Error("fixup_pages_unsupported" if whole_page else "fixup_pages",
+                            "Unsupported multi-start chained page")
             if first>=page_size or first%stride:
-                raise Error("fixup_pages", "Unsupported multi-start or invalid chained page offset")
+                raise Error("fixup_pages", "Invalid chained page offset")
             offset = page*page_size+first
             page_end = min((page+1)*page_size,file_size)
             while True:
+                # Charge before attempting validation/decoding. Failed nodes
+                # count too, including work on pages whose rows are discarded.
+                if work_budget is not None:
+                    work_budget.charge()
                 bounded(offset,8,page_end,"Chained pointer in file-backed page")
                 if address is None and len(seen_addresses)==limit:
                     result["pointer_formats"] = sorted(formats)
@@ -220,7 +240,7 @@ def slot_segment(parsed, address):
 
 
 
-def chained_page(data, image, parsed, address):
+def chained_page(data, image, parsed, address, *, work_budget=None):
     """Validate and return a whole selected page, never an image-wide inventory.
 
     The returned half-open page_range is safe to cache only when gaps is empty
@@ -231,7 +251,8 @@ def chained_page(data, image, parsed, address):
     extents = [row for row in parsed["loader"]["linkedit"] if row["kind"]=="chained_fixups"]
     if len(extents) != 1:
         raise Error("fixup_layout", "A page lookup requires one chained fixup payload")
-    return decode_chained(data,image,parsed,extents[0],address=address,selected=selected,whole_page=True)
+    return decode_chained(data,image,parsed,extents[0],address=address,selected=selected,
+                          whole_page=True,work_budget=work_budget)
 
 
 def fixups(data, image, *, parsed=None, weak_definitions=False, address=None):

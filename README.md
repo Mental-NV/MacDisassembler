@@ -41,6 +41,11 @@ validation, per-slot mapping checks, a bounded cache and lookup budgets still
 apply. A malformed relevant page or exhausted budget produces partial coverage;
 legacy-fixup inventory limits are unchanged. Exact class-slot method queries
 remain bounded separately. These static queries do not start Ghidra or Java.
+Class discovery additionally shares a 2,048-slot, 8,192-pointer and
+262,144-chain-node work budget, including failed decodes and cache eviction
+rework. Partial output keeps verified matches, an unknown total and actionable
+diagnostics. See the [scoped investigation plan](docs/scoped-investigation-plan.md)
+for remaining acceptance gates and follow-on stages.
 
 The direct baseline runner records missing-input and missing-toolchain failures
 in its immutable run summary. It fingerprints the engine only after staging an
