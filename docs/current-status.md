@@ -57,16 +57,29 @@ decision. Reuse recorded observations for gestures already covered.
   recovered six exact Week functions from a read-only copy of the import.
   A second copy reproduced all six pseudocode outputs byte for byte.
   The installed worker keeps its owned-input policy.
-- [ ] **Validate the current CLI on a small, approved TickTick lead set.**
-  Pin the exact images and selected entry addresses. Check targeted
-  references, focused code and the private handoff, then replay the saved
-  results and exercise recovery on a disposable workspace. Keep gaps in
-  dispatch and caller coverage explicit. This requires the separately
-  scoped private-input validation.
-- [ ] **Install and verify local access after the real TickTick handoff passes.**
-  Verify the installed command with the pinned Ghidra and Java versions,
-  then check discovery and use from Taskovsky's Codex environment. Add
-  a dedicated skill only if that environment needs it.
+- [x] **Validate the current CLI on a small, approved TickTick lead set.**
+  A private launcher pinned the previously authorized 8.2.20 arm64 main
+  image and six Week entries. The current CLI imported the image and
+  captured all six functions without whole-image analysis. The private
+  handoff matched six exact rebase slots and verified a direct call
+  between two selected functions. Three focused results reported partial
+  coverage, and the handoff retained caller gaps and unresolved computed
+  calls. A retry recovered the exact query after a controlled publication
+  interruption. All six receipts replayed with Ghidra unavailable and
+  the import source set aside. The owner-only JSON and HTML reports
+  reproduced byte for byte. The renderer callsite in the
+  archived assembly falls outside the six selected linker extents.
+  The private JSON report SHA-256 is
+  `54cdf22a28704a1dab72185edf0c42d47730bca7b6017bc3667b89bfa55fe608`.
+- [x] **Install and verify local access after the real TickTick handoff passes.**
+  Installed the repository wheel from `f621343` as `macscope` 0.2.0
+  with bridge 1.14.0. Taskovsky's Codex shell found the executable on its
+  existing PATH at `~/.local/bin/macscope`. The installed command's live
+  probe verified Ghidra 12.2 and JDK 25.0.5.0.3 and matched the private
+  run's dependency digests. From the Taskovsky working directory, the
+  command completed an owned import, full analysis, disassembly and
+  fresh decompilation. It also reproduced the private report with the
+  engine unavailable. Discovery worked without a dedicated skill.
 - [x] **Decompile one exact function without whole-image analysis.**
   [`decompile --from-import`](cli.md#decompile-one-function-from-an-import)
   verifies the linker extent and each emitted instruction against the slice.
