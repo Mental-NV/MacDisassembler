@@ -99,7 +99,8 @@ import ghidra.util.StringUtilities;
 
 public class MacscopeBridge extends HeadlessScript {
     static final String SCHEMA = "macscope-bridge/1";
-    static final String VERSION = "1.14.0";
+    static final String VERSION = "1.15.0";
+    boolean focusedQuery = false;
     static final String HINT_IDENTIFIER = "[A-Za-z_][A-Za-z0-9_]{0,47}";
     static final Pattern HINT_STRUCT = Pattern.compile("(struct (" + HINT_IDENTIFIER + ")\\{([^{}]+)\\})(\\*{0,2})");
     static final Pattern HINT_FIELD = Pattern.compile("(" + HINT_IDENTIFIER + "):(.+)");
@@ -149,6 +150,7 @@ public class MacscopeBridge extends HeadlessScript {
         Path boundaries = mode.equals("analyze") && args.length == 5 ? Path.of(args[4]) : null;
         String entry = args.length >= 5 && boundaries == null ? args[4] : null;
         boolean fromImport = args.length == 6 && "--from-import".equals(args[5]);
+        focusedQuery = fromImport;
         Path typeHints = args.length == 6 && !fromImport ? Path.of(args[5]) : null;
         if (entry != null && (!mode.equals("query") || maxFunctions != 1 || !entry.matches("0x[0-9a-f]{1,16}"))) {
             throw new IllegalArgumentException("Selected decompilation requires query mode and one RAM entry");
@@ -1352,6 +1354,7 @@ public class MacscopeBridge extends HeadlessScript {
         item.addProperty("pseudocode_truncated", trunc);
         cov.add("pseudocode", facet(code == null ? 0 : 1, -1, trunc,
             status.equals("not_requested") ? null : err, status));
+        if (focusedQuery) nativeScope(f, decoded, item);
         if (decoded != null && !trunc) {
             try {
                 if (addressSpans(f, decoded, code, item, cov)) return;
@@ -1362,6 +1365,39 @@ public class MacscopeBridge extends HeadlessScript {
         } else {
             unavailableSpans(item, cov, trunc ? "Printed pseudocode is truncated" : "Pseudocode is unavailable");
         }
+    }
+
+    void nativeScope(Function function, DecompileResults decoded, JsonObject item) {
+        JsonObject scope = new JsonObject();
+        scope.addProperty("policy", "macscope-focused-native-scope/1");
+        JsonArray outside = new JsonArray();
+        java.util.HashSet<String> retained = new java.util.HashSet<>();
+        int scanned = 0, outsideOperations = 0;
+        boolean truncated = false;
+        String err = null;
+        try {
+            if (decoded == null || decoded.getHighFunction() == null)
+                throw new IllegalStateException("Native function unavailable");
+            var operations = decoded.getHighFunction().getPcodeOps();
+            while (operations.hasNext() && scanned < 100000) {
+                monitor.checkCancelled();
+                Address target = operations.next().getSeqnum().getTarget();
+                scanned++;
+                if (target.isMemoryAddress() && !function.getBody().contains(target)) {
+                    outsideOperations++;
+                    String value = address(target);
+                    if (retained.size() < 64 && retained.add(value)) outside.add(value);
+                }
+            }
+            truncated = operations.hasNext();
+        } catch (Exception error) { err = error(error); }
+        scope.addProperty("operations_scanned", scanned);
+        scope.addProperty("operations_truncated", truncated);
+        scope.addProperty("outside_body_operations", outsideOperations);
+        scope.add("outside_body_addresses", outside);
+        put(scope, "error", err);
+        scope.addProperty("status", err != null ? "unavailable" : truncated || outsideOperations > 0 ? "partial" : "complete");
+        item.add("native_scope", scope);
     }
 
     void unavailableSpans(JsonObject item, JsonObject cov, String reason) {

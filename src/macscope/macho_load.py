@@ -133,7 +133,7 @@ def uleb(data, position, end):
     raise ValueError("ULEB128 exceeds 64 bits")
 
 
-def function_starts(data, extent, text, *, selected=None):
+def function_starts(data, extent, text, *, selected=None, members=None):
     if not extent:
         return None
     if len(extent) != 1:
@@ -163,7 +163,10 @@ def function_starts(data, extent, text, *, selected=None):
             address += delta
             if address >= limit:
                 raise ValueError("Function start outside file-backed __TEXT")
-            if selected is None:
+            if members is not None:
+                if address in members:
+                    starts.append(hex(address))
+            elif selected is None:
                 if len(starts) < MAX_TABLE_ROWS:
                     starts.append(hex(address))
                 else:

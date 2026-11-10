@@ -26,7 +26,7 @@ from .macho import checked_path, read_regular
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
 JAVA = '/opt/homebrew/Cellar/openjdk@25/25.0.5.0.3/libexec/openjdk.jdk/Contents/Home'
 BRIDGE = Path(__file__).parent/'bridge'
-BRIDGE_VERSION = '1.14.0'
+BRIDGE_VERSION = '1.15.0'
 STARTUP_TIMEOUT_SECONDS = 300
 SYSTEM_EXEC = (
     '/bin/bash', '/bin/sh', '/bin/cat', '/bin/expr', '/usr/bin/env',
@@ -798,8 +798,11 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             argv += ['-readOnly', '-noanalysis']
             if from_import:
                 focus_report = job/'focused-proof.json'
+                tail_request = job/'focused-tail-calls.json'
+                write_json(tail_request, proof['tail_calls'], mode=0o400)
                 argv += ['-preScript', 'MacscopeFocus.java', str(focus_report), image['sha256'],
-                         proof['entry_va'], proof['end_va_exclusive'], proof['extent_sha256']]
+                         proof['entry_va'], proof['end_va_exclusive'], proof['extent_sha256'],
+                         str(tail_request), digest(tail_request)]
             if signature_plan is not None and signature_plan['requests']:
                 script = getattr(recovery_policy, 'SCRIPT', 'RecoverCallSignatures.java')
                 argv += ['-preScript', script, str(recovery_request), str(recovery_report),
@@ -925,7 +928,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             if result.get('validation', {}).get('headless_analysis_enabled') is not False:
                 raise Error('query_analysis', 'Focused query unexpectedly enabled autoanalysis', 10)
             try:
-                report = read_worker_object(focus_report, 4096)
+                report = read_worker_object(focus_report, 16 * 1024)
             except (ValueError, RecursionError, OSError, Error) as error:
                 raise Error('focused_worker_proof', 'Worker did not publish the selected range proof', 10) from error
             focused.verify(proof, payload, report, rows[0])

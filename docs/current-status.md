@@ -1,8 +1,7 @@
 # Current status and remaining gates
 
-Updated 10 November 2026. The specification is a staged roadmap; its historic
-pre-development wording is not a statement that the current repository still
-contains documentation only.
+Updated 10 November 2026. The specification remains a staged roadmap.
+The CLI contract and validation records describe the implemented scope.
 
 ## Current priority for TickTick and Taskovsky
 
@@ -71,6 +70,17 @@ decision. Reuse recorded observations for gestures already covered.
   archived assembly falls outside the six selected linker extents.
   The private JSON report SHA-256 is
   `54cdf22a28704a1dab72185edf0c42d47730bca7b6017bc3667b89bfa55fe608`.
+- [x] **Correct and revalidate selected focused control flow.** The new
+  source bridge 1.15.0 passed an owned, static-only ARM64 fixture containing
+  local/import tail branches, a BRK path and an unresolved register branch.
+  Three approved private Calendar queries then completed with unchanged
+  instruction bytes and body ranges. The handler used three proven tail
+  overrides; setup used one verified import tail and classified 18 BRK traps;
+  load output stayed unchanged. All three reported zero out-of-body native
+  operations. Input and saved Program digests remained unchanged, and no
+  application was executed. An owned x86_64 focused control also completed
+  with no override or scope escape. This validates selected source queries, not
+  whole-image completeness, type accuracy or an installed CLI upgrade.
 - [x] **Install and verify local access after the real TickTick handoff passes.**
   Installed the repository wheel from `f621343` as `macscope` 0.2.0
   with bridge 1.14.0. Taskovsky's Codex shell found the executable on its
@@ -593,6 +603,13 @@ collections exceed documented bounds despite successful pseudocode output.
 - [x] Freeze a [held-out switch variation](heldout-switch.md) before tuning.
 - [x] Report unresolved computed jumps as partial in cached and fresh CLI
   views. Verified both owned switch fixtures and their resolved controls.
+- [x] Add bounded byte-proven ARM64 focused tail-exit handling, explicit BRK
+  exception evidence and a native out-of-body operation guard. Tail-call
+  requests and decisions retain source/target proofs and original flow.
+  The owned static fixture covers local/import tails, traps and a genuine
+  unresolved register branch. See [the focused-query contract](cli.md#decompile-one-function-from-an-import).
+  The owned ARM64 live controls passed on macOS with Ghidra 12.2. This is not
+  a whole-image completeness claim or a change to the engine isolation gate.
 - [x] Recover the missing x86_64 O0 case blocks with a separately selected
   full Ghidra 12.2 tree containing the upstream native patch. Verified all
   calculator and held-out cases. See the

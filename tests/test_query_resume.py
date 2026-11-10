@@ -5,7 +5,7 @@ import os
 import struct
 from unittest.mock import patch
 
-from macscope import annotations, cli, direct_signatures, dispatch_returns, engine, evidence, focused, jobs, macho, storage
+from macscope import annotations, cli, direct_signatures, dispatch_returns, engine, evidence, focused, focused_tailcalls, jobs, macho, storage
 from test_core import TemporaryCase
 from test_macho import command, image as macho_image
 
@@ -270,10 +270,19 @@ class FocusedResumeTests(TemporaryCase):
         function = {'entry_va':self.entry,'name':'owned','signature':None,'pseudocode':'return;',
                     'decompile_status':'complete','body_ranges':[[self.entry,hex(int(self.entry,16)+3)]],
                     'is_external':False,'is_thunk':False,
-                    'instructions':[{'addr':self.entry,'bytes':self.code.hex(),'flow':'TERMINATOR'}], 'blocks':[],
+                    'instructions':[{'addr':self.entry,'bytes':self.code.hex(),'flow':'TERMINATOR','fallthrough':None}],
+                    'blocks':[{'min':self.entry,'max':hex(int(self.entry,16)+3),
+                               'flow':'TERMINATOR','edges_truncated':False,'dsts':[]}],
                     'xrefs_to_entry':[],'xrefs_from_sample':[],
                     'coverage':{key:{'status':'complete'} for key in ('pseudocode','instructions','body_ranges',
                                                                     'xrefs_from','xrefs_to_entry')}}
+        for key in ('instructions','body_ranges','cfg'):
+            function['coverage'][key]={'status':'complete','emitted':1,'truncated':False,'error':None}
+        function['native_scope'] = {'policy':'macscope-focused-native-scope/1','status':'complete',
+            'operations_scanned':1,'operations_truncated':False,'outside_body_operations':0,
+            'outside_body_addresses':[],'error':None}
+        function['tail_call_recovery'] = {'policy':focused_tailcalls.POLICY,
+            'request_sha256':focused_tailcalls.request_digest(self.proof['tail_calls']), 'decisions':[]}
         return {'functions':[function],'bridge_version':'test'},job
 
     def test_retry_publishes_under_original_id_and_handoff_accepts_the_producer(self):
@@ -291,6 +300,60 @@ class FocusedResumeTests(TemporaryCase):
         failed = '9'*32
         self.write_job(failed,dict(self.record,job_id=failed,resumed_from=self.original,status='failed'))
         self.error('evidence_query_mismatch',evidence.focused_query,self.workspace,self.image,self.raw,self.entry,failed)
+
+    def test_scope_unsafe_complete_receipt_is_refused_without_rewriting_it(self):
+        with patch.object(engine,'dependencies',return_value=self.deps), patch.object(engine,'run',side_effect=self.worker):
+            self.resume()
+        receipt_path=self.workspace.path/'jobs'/self.original/'query-result.json'
+        receipt=json.loads(receipt_path.read_text())
+        function=receipt['result']['data']
+        self.assertEqual(function['decompile_status'],'complete')
+        function['instructions'][0].update(flow='UNCONDITIONAL_JUMP',bytes='03000014')
+        function['blocks'][0].update(flow='UNCONDITIONAL_JUMP',dsts=[{
+            'from':self.entry,'to':hex(int(self.entry,16)+12),'flow':'UNCONDITIONAL_JUMP'}])
+        receipt['result_sha256']=storage.identity(receipt['result'])
+        producer_path,producer=jobs.get(self.workspace,self.attempt)
+        producer['focused_result_sha256']=receipt['result_sha256']
+        storage.write_json(producer_path,producer,force=True)
+        storage.write_json(receipt_path,receipt,force=True)
+        before=receipt_path.read_bytes()
+        with patch.object(engine,'run',side_effect=AssertionError('Unsafe receipt must not start a worker')):
+            self.error('query_receipt',self.resume)
+            self.error('query_receipt',evidence.focused_query,self.workspace,self.image,self.raw,self.entry,self.original)
+        self.assertEqual(receipt_path.read_bytes(),before)
+
+    def test_completed_legacy_receipt_replays_and_exports_without_new_policy(self):
+        self.proof = {key:value for key,value in self.proof.items() if key != 'tail_calls'}
+        self.proof['policy'] = 'macscope-focused-import/1'
+        self.request = jobs.focused_request(self.workspace,self.image,self.proof)
+        self.record.update(focused_import=self.proof,focused_request=self.request,status='complete')
+        self.write_job(self.original,self.record)
+        # Construct a saved v1 result without calling the current worker.
+        function = {'function_id':self.request['function_id'],'image_id':self.image_id,'arch':'arm64',
+            'slice_sha256':self.image['sha256'],'entry_va':self.entry,'engine_entry':self.entry,'address_space':'ram',
+            'is_external':False,'is_thunk':False,'names':[],'signature':None,'pseudocode':'return;',
+            'decompile_status':'complete','body_ranges':[[self.entry,hex(int(self.entry,16)+3)]],
+            'instructions':[{'addr':self.entry,'bytes':self.code.hex(),'flow':'TERMINATOR'}],
+            'address_spans':[],'facets':{},'xrefs_to_entry':[],'xrefs_from_sample':[],
+            'coverage':{key:{'status':'complete'} for key in ('pseudocode','instructions','body_ranges',
+                                                            'xrefs_from','xrefs_to_entry')},
+            'origin':{'mode':'focused_readonly_import','job_id':self.original,'extent':self.proof,**self.deps}}
+        response = cli.envelope('decompile',function)
+        jobs.publish_query(self.workspace,self.original,self.request,response)
+        with patch.object(engine,'run',side_effect=AssertionError('Legacy replay must remain offline')):
+            replay=self.resume()
+            self.assertTrue(replay['data']['reused_restart'])
+            handoff=evidence.focused_query(self.workspace,self.image,self.raw,self.entry,self.original)
+            self.assertEqual(handoff['data']['origin']['extent'],self.proof)
+            self.assertNotIn('tail_call_recovery',handoff['data'])
+
+    def test_unfinished_legacy_query_requires_a_new_capture(self):
+        proof={key:value for key,value in self.proof.items() if key != 'tail_calls'}
+        proof['policy']='macscope-focused-import/1'
+        request=jobs.focused_request(self.workspace,self.image,proof)
+        self.write_job(self.original,dict(self.record,focused_import=proof,focused_request=request))
+        with patch.object(engine,'run',side_effect=AssertionError('Do not silently change legacy policy')):
+            self.error('job_resume_policy',self.resume)
 
     def test_unverified_retry_and_mutated_artifact_never_start_a_worker(self):
         attempt = self.write_job(self.attempt,dict(self.record,job_id=self.attempt,resumed_from=self.original))

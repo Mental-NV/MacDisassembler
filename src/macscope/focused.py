@@ -2,7 +2,7 @@
 
 from hashlib import sha256
 
-from . import macho_load, metadata
+from . import focused_boundaries, focused_tailcalls, macho_load, metadata
 from .direct_signatures import arm64_direct_target
 from .dispatch_returns import direct_target
 from .errors import Error
@@ -11,17 +11,19 @@ from .pseudocode import VA, address_spans
 from .schema import validate_envelope, validate_function
 
 
-POLICY = "macscope-focused-import/1"
+POLICY = "macscope-focused-import/2"
 MAX_BYTES = 8192
 PROJECT_BACKUPS = frozenset(("image.rep/idata/~index.bak", "image.rep/idata/~journal.bak"))
 RECEIPT_FACETS = {"pseudocode", "instructions", "body_ranges", "xrefs_from", "xrefs_to_entry"}
 
 
-def select(project, image, entry):
-    return extent(metadata.verified_slice(project, image), image, entry)
+def select(project, image, entry, *, policy=POLICY):
+    return extent(metadata.verified_slice(project, image), image, entry, policy=policy)
 
 
-def extent(data, image, entry):
+def extent(data, image, entry, *, policy=POLICY):
+    if policy not in ("macscope-focused-import/1", POLICY):
+        raise Error("focused_policy", "Unsupported recorded focused-query policy", 3)
     address = metadata.hex_address(entry, "Unslid function entry")
     parsed = thin(data, include_section_linkage=True)
     loader = parsed["loader"]
@@ -56,9 +58,11 @@ def extent(data, image, entry):
     if encryption and encryption["cryptid"] and overlaps(offset, size, encryption, int(encryption["size"], 16)):
         raise Error("focused_encryption", "Selected extent overlaps encrypted bytes", 3)
     payload = data[offset:offset + size]
-    proof = {"policy": POLICY, "entry_va": hex(address), "end_va_exclusive": hex(end),
+    proof = {"policy": policy, "entry_va": hex(address), "end_va_exclusive": hex(end),
              "slice_file_offset": hex(offset), "container_file_offset": hex(offset + int(image["offset"], 16)),
              "extent_sha256": sha256(payload).hexdigest(), "length": size}
+    if policy == POLICY:
+        proof["tail_calls"] = focused_tailcalls.plan(data, image, parsed, proof, payload)
     return proof, payload
 
 
@@ -66,6 +70,10 @@ def direct_calls(arch, function):
     """Decode call targets from a focused receipt whose instruction bytes were verified."""
     decode = arm64_direct_target if arch == "arm64" else direct_target
     for row in function["instructions"]:
+        if row["flow"] == "CALL_TERMINATOR" and arch == "arm64":
+            target = focused_tailcalls.verified_target(function, row)
+            yield row, hex(target) if target is not None else None
+            continue
         if row["flow"] != "UNCONDITIONAL_CALL":
             continue
         target = decode(int(row["addr"], 16), bytes.fromhex(row["bytes"]))
@@ -126,14 +134,26 @@ def validate_result(result, proof):
                         or not start <= int(row["from"], 16) < limit):
                     raise ValueError("Focused outgoing reference starts outside the extent")
         address_spans(function, function["pseudocode"])
+        if "tail_calls" in proof:
+            verify_native_scope(function)
+            focused_tailcalls.verify(proof["tail_calls"], function.get("tail_call_recovery"), function)
+            if focused_boundaries.gaps(function, proof) and (result["status"] == "complete"
+                    or function["decompile_status"] == "complete"):
+                raise ValueError("Focused control flow is not confined to its body; capture a new query")
     except (KeyError, TypeError, ValueError) as error:
         raise Error("query_receipt", str(error), 3) from error
 
 
 def verify(proof, payload, report, function):
-    if report != {key: proof[key] for key in ("entry_va", "end_va_exclusive", "extent_sha256")}:
+    base = {key: proof[key] for key in ("entry_va", "end_va_exclusive", "extent_sha256")}
+    if "tail_calls" in proof:
+        base["tail_calls"] = report.get("tail_calls")
+    if report != base:
         raise Error("focused_worker_proof", "Worker did not confirm the exact selected range digest", 10)
     verify_instructions(proof, payload, function)
+    if "tail_calls" in proof:
+        verify_native_scope(function)
+        focused_tailcalls.verify(proof["tail_calls"], report.get("tail_calls"), function, annotate=True)
 
 
 def verify_instructions(proof, payload, function):
@@ -153,3 +173,29 @@ def verify_instructions(proof, payload, function):
                 or end > len(payload) or payload[offset:end] != raw):
             raise Error("focused_instructions", "Worker instructions disagree with the selected file bytes", 10)
         last_end = end
+
+
+def verify_native_scope(function):
+    scope = function.get("native_scope")
+    fields = {"policy", "status", "operations_scanned", "operations_truncated", "outside_body_operations",
+              "outside_body_addresses", "error"}
+    if (not isinstance(scope, dict) or set(scope) != fields
+            or scope["policy"] != "macscope-focused-native-scope/1"
+            or type(scope["operations_scanned"]) is not int or not 0 <= scope["operations_scanned"] <= 100000
+            or type(scope["operations_truncated"]) is not bool
+            or type(scope["outside_body_operations"]) is not int
+            or not 0 <= scope["outside_body_operations"] <= scope["operations_scanned"]
+            or not isinstance(scope["outside_body_addresses"], list)
+            or len(scope["outside_body_addresses"]) > min(64, scope["outside_body_operations"])
+            or (scope["error"] is not None and not isinstance(scope["error"], str))):
+        raise Error("focused_native_scope", "Worker returned an invalid native operation scope", 10)
+    status = ("unavailable" if scope["error"] is not None else
+              "partial" if scope["operations_truncated"] or scope["outside_body_operations"] else "complete")
+    seen = set()
+    for value in scope["outside_body_addresses"]:
+        if (not isinstance(value, str) or not VA.fullmatch(value) or value in seen
+                or any(int(lo, 16) <= int(value, 16) <= int(hi, 16) for lo, hi in function["body_ranges"])):
+            raise Error("focused_native_scope", "Native outside-body evidence disagrees with selected body", 10)
+        seen.add(value)
+    if scope["status"] != status or bool(seen) != bool(scope["outside_body_operations"]):
+        raise Error("focused_native_scope", "Native operation scope has an inconsistent outcome", 10)

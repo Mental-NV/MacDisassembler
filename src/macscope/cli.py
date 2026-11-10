@@ -484,7 +484,8 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
     result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'],hints=hints,
                              query_request=request,resumed_from=resumed_from,**options)
     blocks = switch_tables.reviewed_blocks(function.get('blocks', ()), result.get('switch_table_recovery'))
-    fresh = flow_evidence.review(result['functions'][0], blocks=blocks)
+    fresh = flow_evidence.review(result['functions'][0], blocks=blocks, arch=image['arch'],
+                                 instructions=function.get('instructions', ()))
     facet = fresh['coverage']['pseudocode']
     complete = facet['status'] == 'complete' and bool(fresh['pseudocode'])
     spans, span_facet = address_spans(fresh, redact(fresh['pseudocode']))
@@ -508,7 +509,7 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
         data['origin']['manual_boundaries'] = job['manual_boundaries']
     if recovery is not None:
         data['origin'][recovery[0]] = result[recovery[0]]
-    for field in ('control_flow_review', 'control_flow_gaps', 'engine_decompile_status'):
+    for field in ('control_flow_review', 'control_flow_gaps', 'control_flow_traps', 'engine_decompile_status'):
         if field in fresh:
             data[field] = fresh[field]
     diagnostics = [fresh['decompile_error']] if fresh.get('decompile_error') else []
@@ -529,8 +530,8 @@ def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_fr
     if deps is None:
         deps = engine.dependencies(args.ghidra,args.java_home,full=True)
     result, job = engine.run(project,image,'query',args,deps,entry=entry,from_import=True,resumed_from=resumed_from)
-    function = flow_evidence.review(result['functions'][0])
     proof = job['focused_import']
+    function = flow_evidence.review(result['functions'][0], arch=image['arch'], focused_extent=proof)
     request = job['focused_request']
     decoded_bytes = sum(len(row['bytes']) // 2 for row in function['instructions'])
     reasons = []
@@ -1037,7 +1038,7 @@ def resume_focused(args, project, command, record, request):
     baseline = request.get('source_program_sha256')
     if not image['imported'] or not jobs.matches_program(image,baseline,'engine_baseline_sha256'):
         raise Error('job_resume_inputs','The committed import identity is unavailable',8)
-    extent, payload = focused.select(project,image,entry)
+    extent, payload = focused.select(project,image,entry,policy=request.get("extent", {}).get("policy"))
     proof = dict(extent, program_sha256=baseline)
     if record.get('focused_import') != proof or jobs.focused_request(project,image,proof) != request:
         raise Error('job_resume_inputs','The focused request differs from its saved import or extent',8)
@@ -1046,6 +1047,8 @@ def resume_focused(args, project, command, record, request):
     if reused:
         focused.verify_instructions(extent,payload,response['data'])
     else:
+        if extent['policy'] != focused.POLICY:
+            raise Error('job_resume_policy','An unfinished legacy focused query needs a new capture under the current policy',3)
         if baseline != image['engine_baseline_sha256']:
             raise Error('baseline_integrity','The original import Program is unavailable for this unfinished query')
         replay,deps = replay_worker_request(args,project,record)
@@ -1871,7 +1874,7 @@ def execute_command(a, address_selection=None):
             cov.update(status='partial',known_total=None,truncation_reason=';'.join(gaps))
         fields = ('function_id','image_id','arch','entry_va','address_space','engine_entry','body_ranges',
                   'names','signature','is_thunk','thunk_target','is_external','decompile_status','control_flow_review',
-                  'control_flow_gaps','engine_decompile_status','body_overlap')
+                  'control_flow_gaps','control_flow_traps','engine_decompile_status','body_overlap')
         return envelope(command,[{key: f[key] for key in fields if key in f} for f in rows],aid,cov=cov)
     if a.command=='decompile' and a.all:
         return decompile_batch(a,p,snapshot,functions)
