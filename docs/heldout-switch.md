@@ -318,3 +318,46 @@ dSYMs. The input directory contains the captured symbol-bearing and stripped
 slices. The runner verifies their text and identity before any comparison.
 The measured behavior report SHA-256 is
 `a743ffead583bc0e6018fb7a21817dbbf7b746516ee525886b9adb40f2f476f8`.
+
+### Experimental fixed-width engine
+
+The installed CLI reimported the same eight frozen binaries and
+captured both profiles on the separately selected full Ghidra tree
+used for the [calculator behavior gate](callee-parameters.md#installed-cli-validation).
+Its native executable SHA-256 is
+`0630a5df99cffa2f570db15b891d95f4912cd1c414364b6ffd6f8ecb3f07533d`.
+Against the original switch-patch captures, all 128 function records
+preserved body ranges, instructions, CFGs, sampled cross-references,
+and signatures. The evaluator used the same frozen reference, UUID and
+linker mappings, declarations, sanitizers and directed and seeded domains.
+
+The 16 candidate captures passed 110 of 112 saved routine comparisons.
+All 96 helper outputs passed, including every `combine_add` and
+`combine_sub` that had previously hit signed overflow. Fourteen saved
+dispatchers passed. The two arm64 O0 baseline dispatchers still passed
+three arguments to the two-argument helpers and failed compilation.
+
+In each arm64 O0 baseline workspace, a separate query applied verified
+parameter recovery to all six callees. The evaluator linked each fresh
+dispatcher against the same six saved helper bodies. Both fresh outputs
+passed 1,452 directed and 10,000 seeded comparisons with zero mismatches.
+The queries preserved saved exports and replayed their receipts.
+
+```sh
+macscope decompile --project workspaces/heldout-arm64-o0 --address 0x100000424 \
+  --ghidra /path/to/experimental-full-ghidra --fresh \
+  --recover-callee-parameters --experimental-trusted-input --json
+```
+
+The final candidate tally is 112 of 112 routines across the 16 scopes
+when the two explicitly recovered dispatchers are counted in place of
+their saved counterparts. The tally covers 34,848 directed and 1,120,000
+seeded comparisons, with zero mismatches. The four archived stock
+controls retained their original failures and are separate from this
+candidate tally.
+
+| Report | SHA-256 |
+| --- | --- |
+| Installed candidate captures | `1954e524e95d933e79c512095a310ba3e27680f910ef8580ca173bf584045cbe` |
+| Saved behavior and archived controls | `55f70b4d3ab67441c18fc0650ff5fe2c173788beea31e23abbe9c84827cb4bbb` |
+| Two fresh arm64 dispatcher comparisons | `35fc61a0083b39dfcdc1afe80bd1ccf2a06a9ba38a4fd838e977e2d62784e38d` |

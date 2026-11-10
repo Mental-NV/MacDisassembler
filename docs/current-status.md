@@ -132,6 +132,10 @@ collections exceed documented bounds despite successful pseudocode output.
   and control captures. The [behavior check](heldout-switch.md#recovered-c-behavior)
   records signed overflow and caller arity failures separately from
   recovered control flow.
+- [x] Pass the full [held-out switch behavior matrix](heldout-switch.md#experimental-fixed-width-engine)
+  on the separately selected experimental full Ghidra engine. Saved output
+  passed 110/112 comparisons. Two verified callee-parameter queries brought
+  the total to 112/112 with zero mismatches in 1,154,848 comparisons.
 - [x] Inventory all 26 public routines across the 16 patched calculator
   captures and test unmodified comparison, history and state routines against
   the reference. See [recovered core behavior](semantics.md#recovered-core-behavior)
