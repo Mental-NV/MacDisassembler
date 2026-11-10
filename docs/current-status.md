@@ -526,6 +526,12 @@ collections exceed documented bounds despite successful pseudocode output.
   worker could not modify an earlier Program or the shared index.
   Live import, analysis, and fresh-query restarts each used a new
   job-specific policy and replayed their receipts.
+- [x] Verify the staged Program digest before launching an analysis or
+  fresh query. The installed CLI rejected an altered copy in analysis,
+  ordinary fresh decompilation and focused import decompilation on the
+  owned Calendar fixture. Each failure recorded a job before launch.
+  Clean retries and receipt replay passed in all three cases. The saved
+  input, Program and snapshot digests and cached pseudocode matched.
 - [x] Verify the [deep analysis profile](cli.md#deep-analysis-profile) with
   installed full Ghidra 12.2 on owned arm64 and x86_64 fixtures. Deep
   added three byte-checked data references per architecture, preserved

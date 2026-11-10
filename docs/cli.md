@@ -1916,7 +1916,12 @@ ancestor directories. Each worker gets a newly created writable job
 directory with its own HOME, Java settings, working directory, and
 temporary files. The launcher also uses `/dev/null`. Saved inputs,
 snapshots, the index, and previous jobs are outside the write scope.
-Program copies with symbolic links fail before a worker launches.
+Before launch, analysis and fresh queries compare the staged Program copy
+with the recorded digest of its import or analysis source. This applies
+to focused, ordinary and assisted queries. A mismatch, unreadable copy
+or symbolic link produces a failed job record before the worker launches.
+The job can be retried under its recorded request after the staging error
+is resolved.
 
 The installed canary check allowed reads of staged inputs and writes
 to the current job. It denied writes to the index, a saved snapshot, an

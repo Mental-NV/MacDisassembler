@@ -204,6 +204,7 @@ class ProfileRunnerTests(unittest.TestCase):
         self.image = {"image_id": "a" * 64, "sha256": "b" * 64, "arch": "arm64"}
         base = self.project.path / "engine" / self.image["image_id"]; base.mkdir()
         (base / "program").write_text("no-analysis imported Program")
+        self.image["engine_baseline_sha256"] = engine.tree_digest(base)
         self.deps = {"ghidra_path": str(self.root / "ghidra"), "java_home": str(self.root / "java")}
         self.seen = None
 
@@ -260,6 +261,37 @@ class ProfileRunnerTests(unittest.TestCase):
                 engine.run(self.project, self.image, "analyze", self.args(), self.deps)
         self.assertEqual(caught.exception.code, "analysis_program_integrity")
         run.assert_not_called()
+
+    def test_analysis_and_plain_query_decline_changed_program_copies(self):
+        previous = "c" * 32
+        saved = self.project.path / "jobs" / previous / "program"
+        saved.mkdir(parents=True)
+        (saved / "program").write_text("saved analyzed Program")
+        snapshot = {"identity": {"profile": "baseline/1"}}
+        record = {"job_id": previous, "analysis_program_sha256": engine.tree_digest(saved)}
+        baseline = self.project.path / "engine" / self.image["image_id"]
+        original_copy = engine.shutil.copytree
+
+        def alter_copy(source, destination, **options):
+            original_copy(source, destination, **options)
+            (destination / "program").write_text("changed Program copy")
+
+        with mock.patch.object(storage.Project, "snapshot", return_value=(snapshot, record)), \
+             mock.patch.object(engine.shutil, "copytree", side_effect=alter_copy), \
+             mock.patch.object(engine, "run_process", side_effect=AssertionError("unexpected worker launch")) as launch:
+            for mode, code in (("analyze", "baseline_integrity"), ("query", "analysis_program_integrity")):
+                with self.subTest(mode=mode):
+                    with self.assertRaises(Error) as caught:
+                        engine.run(self.project, self.image, mode, self.args(), self.deps)
+                    self.assertEqual(caught.exception.code, code)
+                    directory = self.project.path / "jobs" / caught.exception.partial["job_id"]
+                    manifest = json.loads((directory / "job.json").read_bytes())
+                    self.assertEqual(manifest["status"], "failed")
+                    self.assertNotIn("pid", manifest)
+                    self.assertFalse((directory / "launcher.log").exists())
+            launch.assert_not_called()
+        self.assertEqual(engine.tree_digest(baseline), self.image["engine_baseline_sha256"])
+        self.assertEqual(engine.tree_digest(saved), record["analysis_program_sha256"])
 
     def test_wrong_profile_worker_result_is_failed_not_published(self):
         with mock.patch.object(engine, "run_process", side_effect=self.mock_runner("baseline")):

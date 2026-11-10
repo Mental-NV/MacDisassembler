@@ -20,7 +20,7 @@ from . import callee_parameters, direct_signatures, dispatch_returns, engine_che
 from . import focused
 from .annotations import MAX_TYPE_HINTS, structure_definitions
 from .errors import Error
-from .storage import canonical, identity, write_json
+from .storage import canonical, identity, is_digest, write_json
 from .macho import read_regular
 
 GHIDRA = '/opt/homebrew/opt/ghidra/libexec'
@@ -136,6 +136,19 @@ def tree_digest(root, *, ignore=()):
         elif p.is_file():
             h.update(str(relative).encode()+b'\0'+digest(p).encode()+b'\n')
     return h.hexdigest()
+
+
+def copy_program(source, destination, expected_digest, integrity_error):
+    if source.is_symlink():
+        raise Error('analysis_program_integrity', 'Saved Program directory is a symbolic link')
+    try:
+        shutil.copytree(source, destination, symlinks=True)
+        if any(path.is_symlink() for path in destination.rglob('*')):
+            raise Error('analysis_program_integrity', 'Saved Program contains a symbolic link')
+        if tree_digest(destination) != expected_digest:
+            raise Error(integrity_error, 'Copied Program differs from the recorded source digest')
+    except OSError as error:
+        raise Error(integrity_error, 'Could not copy and verify the saved Program') from error
 
 
 def dependencies(ghidra=None, java=None, full=False):
@@ -414,11 +427,11 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             raise Error('focused_import_engine', 'Focused query requires a committed import from the selected Ghidra', 4)
         proof, payload = focused.select(project, image, entry)
         source = project.path/'engine'/image['image_id']
-        baseline_digest = image.get('engine_baseline_sha256')
-        if (not baseline_digest or source.is_symlink() or not source.is_dir()
-                or tree_digest(source) != baseline_digest):
+        source_digest = image.get('engine_baseline_sha256')
+        if (not source_digest or source.is_symlink() or not source.is_dir()
+                or tree_digest(source) != source_digest):
             raise Error('baseline_integrity', 'Saved import Program is missing or differs from its digest', 4)
-        proof = dict(proof, program_sha256=baseline_digest)
+        proof = dict(proof, program_sha256=source_digest)
         focus_request = jobs.focused_request(project,image,proof)
         if resumed_from is not None and jobs.focused_record(jobs.get(project,resumed_from)[1]) != focus_request:
             raise Error('job_resume_inputs', 'Focused retry differs from the original selected extent', 8)
@@ -433,12 +446,16 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if not re.fullmatch(r'[a-f0-9]{32}', active.get('job_id','')):
             raise Error('analysis_program_missing','Active analyzed Program reference is invalid')
         source = project.path/'jobs'/active['job_id']/'program'
+        source_digest = active.get('analysis_program_sha256')
         if (source.parent.is_symlink() or source.is_symlink() or not source.is_dir()
-                or active.get('analysis_program_sha256') != tree_digest(source)):
+                or source_digest != tree_digest(source)):
             raise Error('analysis_program_integrity','Saved analyzed Program is missing or changed; rerun analyze')
     elif mode == 'analyze':
         # Fresh analysis starts from the saved no-analysis import.
         source = project.path/'engine'/image['image_id']
+        source_digest = image.get('engine_baseline_sha256')
+        if not is_digest(source_digest):
+            raise Error('baseline_integrity', 'Saved import Program has no valid recorded digest')
     jobid = uuid.uuid4().hex
     job = project.path/'jobs'/jobid
     job.mkdir(mode=0o700)
@@ -452,16 +469,6 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     engine_dir = job/'program'
     if mode == 'import':
         engine_dir.mkdir(mode=0o700)
-    else:
-        if source.is_symlink():
-            raise Error('analysis_program_integrity', 'Saved Program directory is a symbolic link')
-        shutil.copytree(source, engine_dir, symlinks=True)
-        if any(p.is_symlink() for p in engine_dir.rglob('*')):
-            raise Error('analysis_program_integrity', 'Saved Program contains a symbolic link')
-    if (hints is not None or signature_plan is not None) and tree_digest(engine_dir) != active['analysis_program_sha256']:
-        raise Error('analysis_program_integrity', 'Copied Program differs from the saved query input')
-    if from_import and tree_digest(engine_dir) != baseline_digest:
-        raise Error('baseline_integrity', 'Copied Program differs from the saved import')
     if signature_plan is not None:
         recovery_request = job/(recovery_stem + '-request.json')
         recovery_report = job/(recovery_stem + '-result.json')
@@ -534,6 +541,15 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     if hints is not None:
         manifest.update(type_hint_view_id=identity({'source_analysis_id':image['active_analysis'],'hints':hints}),
                         type_hints_sha256=digest(request),type_hints=hints)
+    if mode != 'import':
+        integrity_error = 'baseline_integrity' if mode == 'analyze' or from_import else 'analysis_program_integrity'
+        try:
+            copy_program(source, engine_dir, source_digest, integrity_error)
+        except Error as error:
+            manifest.update(status='failed', error={'code':error.code,'message':str(error)})
+            write_json(job/'job.json',manifest)
+            error.partial = {'job_id':jobid}
+            raise
     try:
         run_process(argv, cwd=job, env=env, timeout=args.timeout, startup_timeout=args.startup_timeout,
                     log_path=job/'launcher.log', manifest_path=job/'job.json', manifest=manifest)
@@ -595,7 +611,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             except (ValueError, Error) as error:
                 raise Error('focused_worker_proof', 'Worker did not publish the selected range proof', 10) from error
             focused.verify(proof, payload, report, rows[0])
-            if (tree_digest(source) != baseline_digest or
+            if (tree_digest(source) != source_digest or
                     tree_digest(engine_dir, ignore=focused.PROJECT_BACKUPS) != program_content_digest):
                 raise Error('baseline_integrity', 'Focused query changed a saved Program database', 10)
         applied = result.get('applied_type_hints', [])
