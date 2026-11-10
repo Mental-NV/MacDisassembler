@@ -2184,7 +2184,8 @@ class CliTests(TemporaryCase):
                      'language_id': 'AARCH64:LE:64:AppleSilicon', 'compiler_spec_id': 'default',
                      'executable_sha256': image['sha256']},
                     {'job_id': 'a' * 32, 'status': 'complete', 'mode': mode,
-                     'sandbox_sha256': engine.job_sandbox_sha256(p, deps, 'a' * 32)})
+                     'sandbox_sha256': engine.job_sandbox_sha256(p, deps, 'a' * 32,
+                                                                 staged_image_id=image['image_id'])})
         argv = ['import', 'synthetic-universal.macho', '--project', str(project.path),
                 '--arch', 'all', '--experimental-trusted-input', '--json']
         with mock.patch.object(cli, 'inspect_path', return_value=(metadata, original)), \

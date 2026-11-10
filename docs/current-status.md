@@ -289,8 +289,10 @@ Engine operations are **trusted-owned-input-only experimental**, with an
 explicit opt-in. The worker denies network access, restricts user-home
 reads, and confines write paths to its own newly created job directory
 and `/dev/null`. It denies direct execution from managed input and job
-directories. The shared index, saved inputs, and earlier jobs are
-outside that write scope. Non-home reads remain broadly available.
+directories. Within the workspace, workers read their own job and, for
+imports, the exact selected slice. The shared index and earlier jobs
+are outside that scope. Non-home reads outside the workspace remain
+broadly available.
 Hard process-memory and disk quotas are unavailable. Isolation errors
 fail closed.
 
@@ -633,6 +635,9 @@ collections exceed documented bounds despite successful pseudocode output.
   in the normal worker profile. Both canaries remained readable and
   failed to launch. A prepared import and interrupted analysis recovered
   after an in-place upgrade of the test wheel.
+- [x] Restrict [worker reads inside the workspace](cli.md#worker-workspace-read-scope)
+  to the current job and selected import slice. Both owned architectures
+  passed full headless operations, and both upgrade receipts replayed offline.
 - [x] Verify [the one-shot focused capture binding](cli.md#owned-one-shot-approval-prototype)
   with a simulated issuer on both owned calculator architectures. Wrong
   scopes, edited grants, expiry and reuse produced no extra worker jobs.

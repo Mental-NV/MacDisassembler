@@ -286,7 +286,8 @@ class BundleInventoryTests(unittest.TestCase):
                       "executable_format": "Mac OS X Mach-O", "language_id": language,
                       "compiler_spec_id": compiler, "executable_sha256": imported["sha256"]}
             return result, {"job_id": job_id, "status": "complete", "mode": mode,
-                            "sandbox_sha256": engine.job_sandbox_sha256(workspace, dependencies, job_id)}
+                            "sandbox_sha256": engine.job_sandbox_sha256(
+                                workspace, dependencies, job_id, staged_image_id=imported["image_id"])}
 
         with patch.object(engine, "dependencies", return_value={"ghidra_path": "/engine", "java_home": "/java"}), \
              patch.object(engine, "run", side_effect=worker) as run:

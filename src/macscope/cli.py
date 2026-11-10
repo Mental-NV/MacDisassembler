@@ -956,8 +956,10 @@ def replay_worker_request(args, project, record, *, query_profile=None):
             or engine.worker_limits(replay,replay.max_functions) != budgets):
         raise Error('job_resume_policy','The recorded profile or worker limits differ from the supported policy',3)
     deps = engine.dependencies(args.ghidra,args.java_home,full=True)
+    staged_image_id = record.get('image_id') if mode == 'import' else None
     if (deps != record.get('dependencies')
-            or not engine.job_sandbox_matches(project, deps, record.get('job_id'), record.get('sandbox_sha256'))):
+            or not engine.job_sandbox_matches(project, deps, record.get('job_id'), record.get('sandbox_sha256'),
+                                              staged_image_id=staged_image_id)):
         raise Error('job_resume_engine','Restart requires the recorded engine and JDK and a recognized worker policy',4)
     return replay,deps
 

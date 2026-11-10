@@ -230,7 +230,20 @@ def workspace_exec_rule(project):
     return '(deny process-exec ' + ' '.join(f'(subpath {path})' for path in paths) + ')\n'
 
 
-def profile(project, dependencies, *, write_root):
+def workspace_read_rule(project, dependencies, write_root, staged_image_id):
+    literal = lambda p: json.dumps(str(p), ensure_ascii=False)
+    runtime = (BRIDGE.resolve(), Path(dependencies['ghidra_path']), Path(dependencies['java_home']))
+    roots = [write_root, *(p for p in runtime if p != project.path and p.is_relative_to(project.path))]
+    excluded = [f'(require-not (subpath {literal(path)}))' for path in roots]
+    if staged_image_id is not None:
+        if not is_digest(staged_image_id):
+            raise Error('worker_isolation_scope', 'Invalid staged input identity', 3)
+        staged = project.path/'inputs'/(staged_image_id+'.macho')
+        excluded.append(f'(require-not (literal {literal(staged)}))')
+    return f'(deny file-read-data (require-all (subpath {literal(project.path)}) {" ".join(excluded)}))\n'
+
+
+def profile(project, dependencies, *, write_root, staged_image_id=None):
     # Seatbelt strings are JSON quoted, never shell interpolated.
     reads = [str(project.path), str(BRIDGE.resolve()), dependencies['ghidra_path'], dependencies['java_home']]
     ancestors = sorted({str(p) for p in project.path.parents} | {str(p) for p in BRIDGE.resolve().parents})
@@ -243,26 +256,30 @@ def profile(project, dependencies, *, write_root):
             '(deny file-read-data (require-all (subpath "/Users") '+exclusions+'))\n'
             '(deny file-write* (require-all (require-not (subpath '+writable+')) '
             '(require-not (literal "/dev/null"))))\n'
-            + workspace_exec_rule(project))
+            + workspace_exec_rule(project)
+            + workspace_read_rule(project, dependencies, write_root, staged_image_id))
 
 
 
-def job_profile(project, dependencies, job_id):
+def job_directory(project, job_id):
     if not isinstance(job_id, str) or not jobs.JOB_ID.fullmatch(job_id):
         raise Error('job_manifest', 'Invalid worker job identifier')
-    job = project.path/'jobs'/job_id
-    return profile(project, dependencies, write_root=job)
+    return project.path/'jobs'/job_id
 
 
-def job_sandbox_sha256(project, dependencies, job_id):
-    return hashlib.sha256(job_profile(project, dependencies, job_id).encode()).hexdigest()
+def job_sandbox_sha256(project, dependencies, job_id, *, staged_image_id=None):
+    rendered = profile(project, dependencies, write_root=job_directory(project, job_id),
+                       staged_image_id=staged_image_id)
+    return hashlib.sha256(rendered.encode()).hexdigest()
 
 
-def job_sandbox_matches(project, dependencies, job_id, recorded):
-    current = job_profile(project, dependencies, job_id)
-    # Recognize the previous profile for recovery. New launches use the current one.
-    previous = current.removesuffix(workspace_exec_rule(project))
-    return any(hashlib.sha256(policy.encode()).hexdigest() == recorded for policy in (current, previous))
+def job_sandbox_matches(project, dependencies, job_id, recorded, *, staged_image_id=None):
+    job = job_directory(project, job_id)
+    current = profile(project, dependencies, write_root=job, staged_image_id=staged_image_id)
+    # Recognize the recorded historical profiles without launching a worker under them.
+    previous = current.removesuffix(workspace_read_rule(project, dependencies, job, staged_image_id))
+    original = previous.removesuffix(workspace_exec_rule(project))
+    return any(hashlib.sha256(policy.encode()).hexdigest() == recorded for policy in (current, previous, original))
 
 
 def worker_exited(proc):
@@ -591,7 +608,8 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     worker_home.mkdir(mode=0o700)
     outfile = job/'bridge.json'
     sandbox = job/'sandbox.sb'
-    sandbox.write_text(profile(project, deps, write_root=job), encoding="utf-8")
+    staged_image_id = image['image_id'] if mode == 'import' else None
+    sandbox.write_text(profile(project, deps, write_root=job, staged_image_id=staged_image_id), encoding="utf-8")
     g, j = Path(deps['ghidra_path']), Path(deps['java_home'])
     engine_dir = job/'program'
     if mode == 'import':

@@ -29,7 +29,8 @@ class ImportResumeTests(TemporaryCase):
                 self.args("import", "owned", "--timeout", "75", "--heap-mib", "768"), 1000,
             ),
             "dependencies": self.deps,
-            "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, self.prior),
+            "sandbox_sha256": engine.job_sandbox_sha256(self.workspace, self.deps, self.prior,
+                                                        staged_image_id=self.image["image_id"]),
         }
         storage.write_json(self.prior_path, self.record)
 
@@ -39,10 +40,19 @@ class ImportResumeTests(TemporaryCase):
     def resume(self, job_id=None):
         return cli.execute(self.args("jobs", "resume", job_id or self.prior, "--experimental-trusted-input"))
 
+    def test_import_policy_binds_the_selected_staged_slice(self):
+        saved = self.record["sandbox_sha256"]
+        with patch.object(engine, "dependencies", return_value=self.deps):
+            args = self.args("jobs", "resume", self.prior, "--experimental-trusted-input")
+            cli.replay_worker_request(args, self.workspace, self.record)
+            other = dict(self.record, image_id="b" * 64, sandbox_sha256=saved)
+            self.error("job_resume_engine", cli.replay_worker_request, args, self.workspace, other)
+
     def worker(self, *args, **kwargs):
         synthetic_program(self.source, b"owned prepared Program")
         job = dict(self.record, job_id=self.producer, status="complete", resumed_from=self.prior,
-                   sandbox_sha256=engine.job_sandbox_sha256(self.workspace, self.deps, self.producer))
+                   sandbox_sha256=engine.job_sandbox_sha256(self.workspace, self.deps, self.producer,
+                                                           staged_image_id=self.image["image_id"]))
         storage.write_json(self.source.parent / "job.json", job)
         self.assertEqual(kwargs["import_request"], self.record["import_request"])
         self.assertEqual(kwargs["resumed_from"], self.prior)
@@ -189,7 +199,8 @@ class ImportResumeTests(TemporaryCase):
                      "compiler_spec_id": "default", "executable_sha256": image["sha256"]},
                     {"job_id": self.producer, "status": "complete", "mode": mode, "image_id": image["image_id"],
                      "import_request": import_request, "limits": engine.worker_limits(args, args.max_functions),
-                     "dependencies": deps, "sandbox_sha256": engine.job_sandbox_sha256(project, deps, self.producer)})
+                     "dependencies": deps, "sandbox_sha256": engine.job_sandbox_sha256(
+                         project, deps, self.producer, staged_image_id=image["image_id"])})
 
         with patch.object(engine, "dependencies", return_value=self.deps), \
              patch.object(engine, "run", side_effect=worker) as run:

@@ -222,7 +222,8 @@ def import_slice(project, image, original, args, deps, *, resumed_from=None, rep
                 or evidence["executable_sha256"] != image["sha256"]
                 or (prior is not None and (not isinstance(prior, str) or not jobs.JOB_ID.fullmatch(prior) or prior == job_id))):
             raise Error("import_journal", "Invalid prepared import provenance")
-        if not engine.job_sandbox_matches(project, deps, job_id, journal.get("sandbox_sha256")):
+        if not engine.job_sandbox_matches(project, deps, job_id, journal.get("sandbox_sha256"),
+                                          staged_image_id=image["image_id"]):
             raise Error("import_baseline_conflict", "The prepared import has a different isolation policy", 8)
         if resumed_from is not None and resumed_from not in (job_id, prior):
             raise Error("import_baseline_conflict", "The prepared import belongs to a different attempt", 8)

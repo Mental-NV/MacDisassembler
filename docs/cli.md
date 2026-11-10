@@ -1470,9 +1470,10 @@ The restart verifies the stored immutable artifact and selected slice. It
 preserves the recorded worker limits and, for analysis, uses the pristine
 import Program and recorded profile. Select the same Ghidra and JDK used by
 the original job, including any explicit `--ghidra` or `--java-home` paths.
-The CLI also verifies the recorded isolation policy. It accepts the
-previous profile for recovery when the workspace, job and dependency
-paths still match. A new worker always launches with the current profile.
+The CLI also verifies the recorded isolation policy. It recognizes the
+earlier built-in profiles for recovery when the workspace, job and
+dependency paths still match. A new worker launches with the current
+profile. New import profiles bind the selected staged slice.
 
 For a partial import batch, use the `failed_job_id` in the error's partial
 results to restart that slice. The workspace's artifact copy is sufficient
@@ -2381,6 +2382,28 @@ import without launching a worker and restarted an older interrupted
 analysis with the new policy. Both receipts replayed offline. The
 validation report SHA-256 is
 `99b21a119760e5efb1748e2233564d09ce2390f7b5ec191888a05f414b7de39d`.
+
+### Worker workspace read scope
+
+An import worker can read its job and exactly one immutable staged
+`.macho` slice. Analysis and query workers read the Program copy in their
+own job. The worker profile denies file-content reads of sibling jobs,
+other staged slices, the full artifact copy and the workspace index.
+The pinned runtime and bridge retain read access. The existing restriction
+on unrelated home data applies separately, and other non-home paths
+outside the workspace remain broadly readable.
+
+The temporary wheel passed import, analysis, fresh queries and focused
+queries on owned arm64 and x86_64 calculator tools. The import and query
+policies made the expected decisions on seven read controls each. Both
+blocked the index, sibling job, unrelated slice and full artifact. Both
+could still read the separate non-home file outside the workspace.
+An in-place upgrade finished a prepared import without a new worker,
+restarted an interrupted analysis under the new policy, and replayed
+both receipts offline. The one-shot capture research also passed its
+two owned runs with the updated worker interface. The validation report
+SHA-256 is
+`7beca2edd42d0a9652b7d24eb64108b0facda9fb3595f9aec3bfc2b70735c97d`.
 
 ### Owned one-shot approval prototype
 
