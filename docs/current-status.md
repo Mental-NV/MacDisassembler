@@ -98,6 +98,10 @@ collections exceed documented bounds despite successful pseudocode output.
   from a bounded image capture. All 32 owned thin address queries matched
   exact Ghidra queries and reproduced on universal slices. The installed
   CLI preserved unresolved computed targets and reported the capture cap.
+- [x] [Compare committed exports](cli.md#comparing-committed-exports) by
+  metadata, functions, and pseudocode. Owned arm64 and x86_64 pairs
+  verified changed code, renamed and added entries, ambiguous bodies,
+  stripped matching, metadata-only differences, and thin/universal parity.
 - [x] Store user labels and function/instruction comments with reversible
   revisions, search and separate opt-in export.
 - [x] Round-trip full annotation history and accepted return-type hints

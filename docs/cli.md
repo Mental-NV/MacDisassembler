@@ -684,6 +684,47 @@ exports can still contain sensitive recovered code/strings; never publish
 them by default. Logs are bounded per job but retained until the owner removes
 the workspace; no automatic retention or deletion task is installed.
 
+## Comparing committed exports
+
+```sh
+macscope diff old.json new.json --scope functions --json
+macscope diff old.json new.json --scope pseudocode --limit 50 --json
+macscope diff old.json new.json --scope metadata --json
+```
+
+Both inputs are single JSON envelopes from `macscope export --json`.
+The comparison records their export, analysis, artifact and slice identities
+and runs without opening a worker or workspace. `--cursor` binds to both
+ordered input file digests and the comparison scope.
+
+`metadata` compares the image layout, loader records and saved Ghidra
+imports, exports, symbols and strings. It shows short values directly and
+summarizes larger collections by size and digest. `functions` reports
+changed attributes, the count of differing decoded instruction offsets
+and the first difference. `pseudocode` compares the saved printed text,
+with content digests and the first differing line. Both function scopes
+require the same architecture.
+
+For the same slice bytes, matching memory entries use their recorded
+address. Across builds, a unique qualified engine name or a unique complete
+instruction fingerprint can suggest a pair. The result labels those pairs
+as candidates and records which evidence supports them. Conflicting or
+non-unique candidates retain bounded samples of alternatives. An unmatched
+row shows an observation for which the comparison found no pair. Incomplete
+facets and ambiguous matches return partial coverage. Results describe
+saved evidence and printed text.
+
+The installed CLI checked owned arm64 and x86_64 pairs with a changed
+constant, a changed branch, a renamed function, an added function and
+duplicate bodies. LLVM and DWARF verified the body fingerprints. Both
+symbol-bearing pairs reported the constant and branch changes, paired
+the rename by complete bytes and left the duplicate bodies ambiguous.
+Both stripped pairs still matched the renamed bytes and left the changed
+routines unmatched. An `LC_RPATH` change appeared in metadata while all
+decoded instructions matched. The thin and universal comparisons paired
+all eight checked entries by same-slice address. The validation report
+SHA-256 is `a35f371455cded1cf8f96c73672a5e3e975f816bf8e239d8c259371bc55dca2d`.
+
 ## Experimental binary-derived parameter inference
 
 Baseline remains the default. To request Ghidra's generic whole-program
@@ -890,7 +931,7 @@ internal failure, 130 interrupt. A bounded collection page can have partial
 coverage while the page request itself exits0; use `next_cursor`.
 
 Remaining capabilities include richer Objective-C and Swift views,
-compound type hints, HTML exports, binary diffs and manual function
+compound type hints, HTML exports and manual function
 corrections. Additional release requirements include stronger isolation,
 hard RSS/disk quotas, schema migrations, signed packaging, x86_64 host
 workers and expanded fuzzing. The [progress checklist](current-status.md)

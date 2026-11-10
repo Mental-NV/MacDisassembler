@@ -14,7 +14,7 @@ from .errors import Error
 from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
-from . import address_xrefs, annotation_transfer, annotations, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
+from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
 from .schema import validate_envelope, validate_function
 
 
@@ -191,6 +191,10 @@ def parser():
         if action=='set':s.add_argument('--return-type',required=True)
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl'))
     s.add_argument('--include-annotations',action='store_true')
+    s=sub.add_parser('diff');common(s);pagination(s)
+    s.add_argument('left',help='Left committed JSON export')
+    s.add_argument('right',help='Right committed JSON export')
+    s.add_argument('--scope',choices=('metadata','functions','pseudocode'),required=True)
     return p
 
 
@@ -880,6 +884,14 @@ def execute(a):
     command=a.command+(' '+a.action if hasattr(a,'action') else '')
     if a.command=='version':
         return envelope(command,{'cli_version':__version__,'schema_version':SCHEMA_VERSION,'bridge_version':'1.5.0','backend':'full Ghidra headless','required_engine':'12.2','required_jdk':'25.0.5.0.3','python':sys.version.split()[0],'runtime_dependencies':[],'dependency_status':'not probed; use doctor'})
+    if a.command=='diff':
+        data,rows,binding = binary_diff.compare(a.left,a.right,a.scope)
+        records,cov = page(rows,a,binding,binary_diff.POLICY,{},order='export-diff/v1')
+        cov['scope'] = 'observed export differences'
+        if data['gaps']:
+            reasons = [*data['gaps'],*(['page_limit'] if cov['next_cursor'] else [])]
+            cov.update(status='partial',truncation_reason=';'.join(reasons))
+        return envelope(command,dict(data,records=records),status='partial' if data['gaps'] else 'complete',cov=cov)
     if a.command=='doctor':
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest)
         deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'forwarded_return_recovery':forwarded_returns.POLICY,'switch_table_recovery':switch_tables.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':False,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
