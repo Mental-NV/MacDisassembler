@@ -11,7 +11,7 @@ import struct
 from xml.parsers.expat import ExpatError
 from pathlib import Path
 from .errors import Error
-from .macho_load import bounded, details
+from .macho_load import ENCRYPTION_COMMANDS, bounded, details, encryption_region
 
 MAX_INPUT = 256 * 1024 * 1024
 MAX_COMMANDS = 8192
@@ -119,7 +119,7 @@ def thin(data, *, allow_arm64e=False, include_section_linkage=False):
     bounded(32, cmdbytes, len(data), 'Load commands')
     cursor, end = 32, 32 + cmdbytes
     segments, sections, commands, command_records = [], [], [], []
-    warnings, uuid = [], None
+    warnings, uuid, encryption = [], None, None
     for _ in range(ncmds):
         bounded(cursor, 8, end, 'Load command header')
         cmd, size = struct.unpack_from('<2I', data, cursor)
@@ -128,13 +128,13 @@ def thin(data, *, allow_arm64e=False, include_section_linkage=False):
         bounded(cursor, size, end, 'Load command')
         commands.append(hex(cmd))
         command_records.append((cmd,cursor,size))
-        if cmd in (0x21, 0x2c):
-            if size < (24 if cmd == 0x2c else 20):
-                raise Error('encryption_bounds', 'Truncated encryption command')
-            cryptoff, cryptsize, cryptid = struct.unpack_from('<3I', data, cursor + 8)
-            bounded(cryptoff, cryptsize, len(data), 'Encrypted region')
-            if cryptid:
-                raise Error('encrypted', 'Encrypted Mach-O is unsupported; no decryption is attempted', 3)
+        if cmd in ENCRYPTION_COMMANDS:
+            if encryption is not None:
+                raise Error('encryption_bounds', 'Duplicate encryption load command')
+            encryption = encryption_region(data, cmd, cursor, size)
+            if encryption["cryptid"]:
+                raise Error('encrypted', 'Encrypted Mach-O is unsupported', 3,
+                            partial={'arch': arch, 'encryption': encryption})
         if cmd == 0x1b:
             if size < 24:
                 raise Error('uuid_bounds', 'Truncated UUID command')
@@ -169,19 +169,24 @@ def thin(data, *, allow_arm64e=False, include_section_linkage=False):
         cursor += size
     if cursor != end:
         raise Error('command_size', 'Load-command count and byte size disagree')
+    loader = details(data,command_records,segments,arch)
+    if encryption is not None:
+        loader['encryption'] = encryption
     return {'arch': arch, 'cpu_type': cpu, 'cpu_subtype': subtype, 'file_type': filetype,
             'flags': hex(flags), 'uuid': uuid, 'segments': segments, 'sections': sections,
             'load_commands': commands, 'warnings': warnings,
-            'loader': details(data,command_records,segments,arch)}
+            'loader': loader}
 
 
-def with_entry_container_offset(image):
-    entry = image["loader"].get("entry_point")
-    if entry is None:
-        return image
-    offset = entry["slice_file_offset"]
-    location = hex(int(image["offset"], 16) + int(offset, 16)) if offset is not None else None
-    return dict(image, loader=dict(image["loader"], entry_point=dict(entry, container_file_offset=location)))
+def with_loader_container_offsets(image):
+    loader = image["loader"]
+    locations = {}
+    for key in ("entry_point", "encryption"):
+        if (record := loader.get(key)) is not None:
+            offset = record["slice_file_offset"]
+            location = hex(int(image["offset"], 16) + int(offset, 16)) if offset is not None else None
+            locations[key] = dict(record, container_file_offset=location)
+    return dict(image, loader=dict(loader, **locations)) if locations else image
 
 
 def inspect_bytes(data, *, allow_arm64e=False):
@@ -217,7 +222,7 @@ def inspect_bytes(data, *, allow_arm64e=False):
             slices.append(dict(meta, offset=hex(off), size=hex(size), sha256=hashlib.sha256(data[off:off+size]).hexdigest()))
     else:
         slices.append(dict(thin(data, allow_arm64e=allow_arm64e), offset='0x0', size=hex(len(data)), sha256=digest))
-    slices = [with_entry_container_offset(s) for s in slices]
+    slices = [with_loader_container_offsets(s) for s in slices]
     for s in slices:
         s['image_id'] = hashlib.sha256((digest+':'+str(s['cpu_type'])+':'+str(s['cpu_subtype'])+':'+s['offset']+':'+s['size']+':'+s['sha256']).encode()).hexdigest()
     limitations = ['Bounded preflight is not authoritative Ghidra loading.',

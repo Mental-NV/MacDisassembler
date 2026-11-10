@@ -383,8 +383,9 @@ arm64e. An all-slices import requires every slice to support engine import.
 `headers`, `segments`, and `sections` query imported Mach-O metadata and
 work before analysis. Older imports can recover the added header and segment
 fields from their digest-verified slice. The `loader` record includes
-process entry information, the preferred image base, dylib paths and versions, rpaths,
-symbol table ranges, linkedit payload ranges, function starts, and
+process entry and deployment information, the preferred image base, dylib
+paths and versions, rpaths, symbol table ranges, linkedit payload ranges,
+function starts, and
 data-in-code entries. An incomplete decoded table makes the header result
 partial. Dyld stream, export trie, chained fixup and signature ranges are
 recorded as extents.
@@ -414,6 +415,32 @@ entry bytes. The trial also covered unsupported and malformed legacy
 commands and read-only header recovery from an older workspace. The
 validation report SHA-256 is
 `9d5c21b57be14cfa8b9254451d5b8a02e62ef6aaac556e4ec9e5734a5ce453b1`.
+
+### Mach-O deployment and encryption declarations
+
+`inspect` and `headers` report `LC_BUILD_VERSION` and legacy
+`LC_VERSION_MIN_*` declarations under `loader.deployment`. The list
+preserves command order, the declared platform, minimum OS and SDK
+versions, and any build tool IDs and versions. Unknown numeric platform
+and tool IDs retain their values. Legacy commands describe the platform
+family. `LC_SOURCE_VERSION` includes the five-part source version and its
+raw word. These fields describe the build declarations. [Apple Mach-O load commands](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h)
+
+`loader.encryption` records the range declared by an encryption command
+with `cryptid` zero. It includes the slice and container file offsets.
+A nonzero `cryptid` returns `encrypted` during preflight with the
+declared slice extent in the error. Find declared signature extents under
+`loader.linkedit`.
+
+The installed CLI matched Apple `otool` on two modern universal slices
+and a legacy x86_64 executable built from the
+[owned entry fixture](../analysis/heldout_legacy_entry.S). The modern
+fixtures used `-Wl,-source_version,1.2.3.4.5`, the arm64 slice used
+`-Wl,-encryptable`, and the legacy slice targeted macOS 10.13.
+The declaration records matched the saved full-Ghidra exports.
+A copy marked with a nonzero `cryptid` was rejected before any Ghidra
+job or input copy was created. The report SHA-256 is
+`6c662c5bc32224b166c34b7ea8916a77ab91a4681c1e9ad8e9e04b6423bbe5f9`.
 
 ### Mach-O symbol declarations and indirect slots
 

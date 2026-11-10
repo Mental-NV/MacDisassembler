@@ -136,6 +136,11 @@ collections exceed documented bounds despite successful pseudocode output.
   all four entry locations and full headless Ghidra matched the function
   entries and bytes. Older imported headers recovered the fields from
   their verified slice.
+- [x] Verify [deployment and encryption declarations](cli.md#mach-o-deployment-and-encryption-declarations)
+  against Apple tooling on owned arm64 and x86_64 binaries. Modern and
+  legacy versions, build tools, source versions and the declared
+  encryption extent matched. A nonzero encryption ID rejected the
+  derived control before a Ghidra job was created.
 - [x] Decode ordinary 64-bit chained bind and rebase pointers from immutable
   slices. The 16 owned inputs matched Apple tool output for 3,890 fixups.
 - [x] Decode ordinary pointer operations in legacy dyld streams. Four

@@ -3,7 +3,8 @@ import hashlib
 import re
 
 from .errors import Error
-from .macho import read_regular, thin, with_entry_container_offset
+from .macho import read_regular, thin, with_loader_container_offsets
+from .macho_load import DEPLOYMENT_COMMANDS, ENCRYPTION_COMMANDS
 
 
 PREFLIGHT_LISTS = ("segments", "sections")
@@ -14,6 +15,11 @@ HEADER_FIELDS = (
     "warnings", "loader_evidence", "bundle_image", "loader",
 )
 VA = re.compile(r"0x[0-9a-fA-F]{1,16}")
+ADDITIONAL_LOADER_FIELDS = {
+    "deployment": {hex(command) for command in DEPLOYMENT_COMMANDS},
+    "source_version": {"0x2a"},
+    "encryption": {hex(command) for command in ENCRYPTION_COMMANDS},
+}
 
 
 def verified_slice(project, image):
@@ -24,11 +30,14 @@ def verified_slice(project, image):
 
 
 def headers(project, image):
-    entry = image.get("loader", {}).get("entry_point") or {}
-    has_entry = any(cmd in image.get("load_commands", ()) for cmd in ("0x80000028", "0x5"))
-    if "loader" not in image or "flags" not in image or (has_entry and "status" not in entry):
+    loader = image.get("loader", {})
+    commands = set(image.get("load_commands", ()))
+    entry = loader.get("entry_point") or {}
+    old_entry = bool(commands & {"0x80000028", "0x5"}) and "status" not in entry
+    missing = any(key not in loader and commands & ids for key, ids in ADDITIONAL_LOADER_FIELDS.items())
+    if "loader" not in image or "flags" not in image or old_entry or missing:
         image = dict(image, **thin(verified_slice(project,image)))
-    image = with_entry_container_offset(image)
+    image = with_loader_container_offsets(image)
     return {key: image[key] for key in HEADER_FIELDS if key in image}
 
 

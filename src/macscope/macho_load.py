@@ -13,6 +13,22 @@ MAX_TABLE_ROWS = 10000
 MAX_START_TABLE_BYTES = 1024 * 1024
 THREAD_ENTRY = {"arm64": (6, 68, 32), "x86_64": (4, 42, 16)}
 MAX_THREAD_STATES = 32
+LEGACY_DEPLOYMENT = {0x24: ("LC_VERSION_MIN_MACOSX", "macos"), 0x25: ("LC_VERSION_MIN_IPHONEOS", "ios"),
+                     0x2f: ("LC_VERSION_MIN_TVOS", "tvos"), 0x30: ("LC_VERSION_MIN_WATCHOS", "watchos")}
+DEPLOYMENT_COMMANDS = (*LEGACY_DEPLOYMENT, 0x32)
+ENCRYPTION_COMMANDS = {0x21: "LC_ENCRYPTION_INFO", 0x2c: "LC_ENCRYPTION_INFO_64"}
+PLATFORMS = {
+    1: "macos", 2: "ios", 3: "tvos", 4: "watchos", 5: "bridgeos", 6: "maccatalyst",
+    7: "ios-simulator", 8: "tvos-simulator", 9: "watchos-simulator", 10: "driverkit",
+    11: "visionos", 12: "visionos-simulator", 13: "firmware", 14: "sepos",
+    15: "macos-exclavecore", 16: "macos-exclavekit", 17: "ios-exclavecore", 18: "ios-exclavekit",
+    19: "tvos-exclavecore", 20: "tvos-exclavekit", 21: "watchos-exclavecore", 22: "watchos-exclavekit",
+    23: "visionos-exclavecore", 24: "visionos-exclavekit",
+}
+TOOLS = {1: "clang", 2: "swift", 3: "ld", 4: "lld", 1024: "metal", 1025: "airlld",
+         1026: "airnt", 1027: "airnt-plugin", 1028: "airpack", 1031: "gpuarchiver", 1032: "metal-framework"}
+MAX_DEPLOYMENT_COMMANDS = 16
+MAX_BUILD_TOOLS = 128
 
 
 def bounded(off, size, total, label):
@@ -32,6 +48,46 @@ def command_string(data, start, size, offset, minimum):
 
 def version(value):
     return f"{value >> 16}.{(value >> 8) & 255}.{value & 255}"
+
+
+def deployment(data, command, cursor, size):
+    if command in LEGACY_DEPLOYMENT:
+        if size != 16:
+            raise Error("deployment_bounds", "Invalid legacy minimum-version command size")
+        minimum, sdk = struct.unpack_from("<II", data, cursor + 8)
+        name, platform = LEGACY_DEPLOYMENT[command]
+        return {"command": name, "platform": platform, "platform_id": None,
+                "minimum_os": version(minimum), "sdk": version(sdk), "tools": []}
+    if size < 24:
+        raise Error("deployment_bounds", "Truncated LC_BUILD_VERSION header")
+    platform, minimum, sdk, count = struct.unpack_from("<4I", data, cursor + 8)
+    if size != 24 + count * 8:
+        raise Error("deployment_bounds", "LC_BUILD_VERSION tool count disagrees with command size")
+    if count > MAX_BUILD_TOOLS:
+        raise Error("deployment_limit", "LC_BUILD_VERSION tool count exceeds its limit", 7)
+    tools = []
+    for at in range(cursor + 24, cursor + size, 8):
+        tool, build = struct.unpack_from("<II", data, at)
+        tools.append({"tool_id": tool, "name": TOOLS.get(tool), "version": version(build)})
+    return {"command": "LC_BUILD_VERSION", "platform": PLATFORMS.get(platform), "platform_id": platform,
+            "minimum_os": version(minimum), "sdk": version(sdk), "tools": tools}
+
+
+def source_version(data, cursor, size):
+    if size != 16:
+        raise Error("source_version_bounds", "Invalid LC_SOURCE_VERSION command size")
+    value, = struct.unpack_from("<Q", data, cursor + 8)
+    parts = [value >> 40, *((value >> shift) & 0x3ff for shift in (30, 20, 10, 0))]
+    return {"command": "LC_SOURCE_VERSION", "version": ".".join(map(str, parts)), "raw": hex(value)}
+
+
+def encryption_region(data, command, cursor, size):
+    if (command == 0x2c and size != 24) or (command == 0x21 and size < 20):
+        raise Error("encryption_bounds", "Invalid encryption command size")
+    offset, length, cryptid = struct.unpack_from("<3I", data, cursor + 8)
+    bounded(offset, length, len(data), "Encrypted region")
+    return {"command": ENCRYPTION_COMMANDS[command], "cryptid": cryptid,
+            "slice_file_offset": hex(offset), "size": hex(length)}
 
 
 def dylib(data, command, cursor, size):
@@ -187,6 +243,15 @@ def details(data, commands, segments, arch):
                 raise Error("entry_command", "Multiple Mach-O process entry commands")
             metadata["entry_point"] = (main_entry(data, cursor, size, text, segments) if cmd == 0x80000028
                                        else thread_entry(data, cursor, size, arch, text, segments))
+        elif cmd in DEPLOYMENT_COMMANDS:
+            records = metadata.setdefault("deployment", [])
+            if len(records) == MAX_DEPLOYMENT_COMMANDS:
+                raise Error("deployment_limit", "Deployment command count exceeds its limit", 7)
+            records.append(deployment(data, cmd, cursor, size))
+        elif cmd == 0x2a:
+            if "source_version" in metadata:
+                raise Error("source_version_bounds", "Duplicate LC_SOURCE_VERSION command")
+            metadata["source_version"] = source_version(data, cursor, size)
         elif cmd in DYLIBS:
             metadata["dylibs"].append(dylib(data,cmd,cursor,size))
         elif cmd == 0x8000001C:

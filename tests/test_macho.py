@@ -188,13 +188,54 @@ class ThinMachOTests(ErrorAssertions):
     def test_encryption_commands_reject_protected_data(self):
         for kind in (0x21, 0x2C):
             with self.subTest(kind=kind):
-                encrypted = command(kind, struct.pack("<4I", 0, 0, 1, 0))
-                self.assert_error("encrypted", macho.thin, image(commands=[encrypted]), exit_code=3)
-                plain = command(kind, struct.pack("<4I", 0, 0, 0, 0))
-                self.assertEqual([hex(kind)], macho.thin(image(commands=[plain]))["load_commands"])
+                encrypted = command(kind, struct.pack("<4I", 56, 4, 1, 0))
+                with self.assertRaises(Error) as caught:
+                    macho.thin(image(commands=[encrypted], payload=bytes(4)))
+                self.assertEqual((caught.exception.code, caught.exception.exit_code), ("encrypted", 3))
+                self.assertEqual(caught.exception.partial["encryption"]["cryptid"], 1)
+                self.assertEqual(caught.exception.partial["encryption"]["slice_file_offset"], "0x38")
+                plain = command(kind, struct.pack("<4I", 56, 4, 0, 0))
+                binary = image(commands=[plain], payload=bytes(4))
+                self.assertEqual([hex(kind)], macho.thin(binary)["load_commands"])
+                fat = macho.inspect_bytes(universal([binary, image(cpu=X86_64)]))["slices"][0]
+                declaration = fat["loader"]["encryption"]
+                self.assertEqual(declaration["cryptid"], 0)
+                self.assertEqual(int(declaration["container_file_offset"], 16), int(fat["offset"], 16)+56)
                 self.assert_error("encryption_bounds", macho.thin, image(commands=[command(kind)]))
                 invalid = command(kind, struct.pack("<4I", 10000, 1, 0, 0))
                 self.assert_error("macho_bounds", macho.thin, image(commands=[invalid]))
+                self.assert_error("encryption_bounds", macho.thin, image(commands=[plain, plain]))
+        self.assert_error("encryption_bounds", macho.thin,
+                          image(commands=[command(0x2c, bytes(24))]))
+
+    def test_deployment_and_source_versions_preserve_multiple_declarations(self):
+        modern = command(0x32, struct.pack("<8I", 1, 0x0d0203, 0x0f0000, 2, 3, 0x010203, 99, 0x020000))
+        other = command(0x32, struct.pack("<4I", 99, 0x0e0000, 0, 0))
+        legacy = command(0x25, struct.pack("<II", 0x0a0000, 0x0a0100))
+        source = 1 << 40 | 2 << 30 | 3 << 20 | 4 << 10 | 5
+        meta = macho.thin(image(commands=[modern, other, legacy, command(0x2a, struct.pack("<Q", source))]))
+        first, second, third = meta["loader"]["deployment"]
+        self.assertEqual((first["platform"], first["minimum_os"], first["sdk"]), ("macos", "13.2.3", "15.0.0"))
+        self.assertEqual(first["tools"], [{"tool_id": 3, "name": "ld", "version": "1.2.3"},
+                                          {"tool_id": 99, "name": None, "version": "2.0.0"}])
+        self.assertIsNone(second["platform"])
+        self.assertEqual(second["platform_id"], 99)
+        self.assertEqual((third["command"], third["platform"], third["platform_id"]),
+                         ("LC_VERSION_MIN_IPHONEOS", "ios", None))
+        self.assertEqual(meta["loader"]["source_version"]["version"], "1.2.3.4.5")
+        self.assertEqual(meta["loader"]["source_version"]["raw"], hex(source))
+
+    def test_deployment_sizes_and_tool_limits_fail_with_typed_errors(self):
+        for bad in (command(0x32), command(0x32, struct.pack("<4I", 1, 0, 0, 1)),
+                    command(0x32, struct.pack("<4I", 1, 0, 0, 0) + bytes(8)), command(0x24)):
+            self.assert_error("deployment_bounds", macho.thin, image(commands=[bad]))
+        tool_count = 129
+        many = command(0x32, struct.pack("<4I", 1, 0, 0, tool_count) + bytes(8 * tool_count))
+        self.assert_error("deployment_limit", macho.thin, image(commands=[many]), exit_code=7)
+        legacy = command(0x24, bytes(8))
+        self.assert_error("deployment_limit", macho.thin, image(commands=[legacy] * 17), exit_code=7)
+        source = command(0x2a, bytes(8))
+        self.assert_error("source_version_bounds", macho.thin, image(commands=[source, source]))
 
     def test_valid_segment_and_section(self):
         result = macho.thin(segment_image())
