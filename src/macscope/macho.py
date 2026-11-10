@@ -102,7 +102,7 @@ def resolve_input(path):
     return binary, warnings
 
 
-def thin(data, *, allow_arm64e=False):
+def thin(data, *, allow_arm64e=False, include_section_linkage=False):
     if len(data) < 32 or data[:4] != b'\xcf\xfa\xed\xfe':
         raise Error('unsupported_format', 'Only little-endian 64-bit Mach-O images are supported', 3)
     _, cpu, subtype, filetype, ncmds, cmdbytes, flags, reserved = struct.unpack_from('<8I', data)
@@ -162,7 +162,10 @@ def thin(data, *, allow_arm64e=False):
                 if addr + sz > 2**64 or addr < va or addr + sz > va + vmsize or align > 63:
                     raise Error('section_bounds', 'Invalid section virtual range')
                 bounded(reloff, nreloc * 8, len(data), 'Relocations')
-                sections.append({'name': sn.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'segment': sg.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'va': hex(addr), 'size': hex(sz), 'file_offset': None if zero else hex(fo), 'protections': prot})
+                section = {'name': sn.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'segment': sg.split(b'\0')[0].decode('utf-8', 'backslashreplace'), 'va': hex(addr), 'size': hex(sz), 'file_offset': None if zero else hex(fo), 'protections': prot}
+                if include_section_linkage:
+                    section.update(flags=hex(sf), reserved1=r1, reserved2=r2)
+                sections.append(section)
         cursor += size
     if cursor != end:
         raise Error('command_size', 'Load-command count and byte size disagree')

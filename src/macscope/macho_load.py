@@ -147,16 +147,16 @@ def details(data, commands, segments):
                 bounded(offset,length,len(data),"Dyld "+kind)
                 metadata["dyld_streams"].append({"kind": kind,"slice_file_offset": hex(offset),"size": hex(length)})
         elif cmd == 2:
-            if size < 24:
-                raise Error("symtab_bounds", "Truncated symbol table command")
+            if size != 24 or "symbol_table" in metadata:
+                raise Error("symtab_bounds", "Invalid or duplicate LC_SYMTAB command")
             offset,count,strings,length = struct.unpack_from("<4I",data,cursor+8)
             bounded(offset,count*16,len(data),"Symbol table")
             bounded(strings,length,len(data),"String table")
             metadata["symbol_table"] = {"slice_file_offset": hex(offset), "count": count,
                                         "strings_offset": hex(strings), "strings_size": hex(length)}
         elif cmd == 0xB:
-            if size != 80:
-                raise Error("dysymtab_bounds", "Invalid dynamic symbol table command size")
+            if size != 80 or "indirect_symbol_table" in metadata:
+                raise Error("dysymtab_bounds", "Invalid or duplicate LC_DYSYMTAB command")
             offset,count = struct.unpack_from("<2I",data,cursor+56)
             bounded(offset,count*4,len(data),"Indirect symbol table")
             metadata["indirect_symbol_table"] = {"slice_file_offset": hex(offset), "count": count}

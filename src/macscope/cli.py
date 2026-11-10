@@ -16,7 +16,7 @@ from .macho import inspect_bytes, inspect_path, read_regular
 from .pseudocode import address_spans
 from .storage import MAX_SNAPSHOT_BYTES, Project, atomic, canonical, identity, write_json
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import html_export, string_evidence
+from . import html_export, macho_symbols, string_evidence
 from .schema import validate_envelope, validate_function
 
 
@@ -125,6 +125,8 @@ def parser():
         s=sub.add_parser(c);project(s);common(s);pagination(s)
         if c=='exports':
             s.add_argument('--source',choices=('ghidra','dyld'),default='ghidra')
+        if c=='symbols':
+            s.add_argument('--source',choices=('ghidra','macho','indirect'),default='ghidra')
         if c=='strings':
             s.add_argument('--contains')
             s.add_argument('--min-length',type=int,default=0)
@@ -785,6 +787,21 @@ def dyld_exports(args, project, image):
     return envelope('exports', data, status='partial' if gaps else 'complete', cov=cov)
 
 
+def file_symbols(args, project, image):
+    data = metadata.verified_slice(project, image)
+    records, gaps = macho_symbols.inventory(data, args.source, int(image['offset'],16))
+    origin = 'macho_symtab' if args.source == 'macho' else 'macho_indirect_symbol_table'
+    records = [dict(row,image_id=image['image_id'],arch=image['arch'],origin=origin) for row in records
+               if args.name_contains is None or args.name_contains in (row['name'] or '')]
+    rows, cov = page(records,args,image['image_id'],project.project_id,
+                     {'source':args.source,'name_contains':args.name_contains},order='macho-symbol-index/v1')
+    cov['scope'] = 'selected image Mach-O '+('symbol declarations' if args.source == 'macho' else 'indirect symbol slots')
+    if gaps:
+        reasons = [*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
+        cov.update(status='partial',known_total=None,truncation_reason=';'.join(reasons))
+    return envelope('symbols',rows,status='partial' if gaps else 'complete',cov=cov,diagnostics=gaps)
+
+
 def fixup_collection(args, image, data, binding, *, parsed=None, artifact=None):
     info,records,gaps = dyld.fixups(data,image,parsed=parsed)
     records = [row for row in records if args.kind == 'all' or row['kind'] == args.kind]
@@ -1042,6 +1059,8 @@ def execute(a):
         return metadata_collection(a,p,image)
     if a.command == 'exports' and a.source == 'dyld':
         return dyld_exports(a,p,image)
+    if a.command == 'symbols' and a.source != 'ghidra':
+        return file_symbols(a,p,image)
     snapshot,record=p.snapshot(image)
     if a.command in metadata.ENGINE_LISTS:
         return metadata_collection(a,p,image,snapshot)

@@ -111,6 +111,7 @@ macscope headers --project workspaces/calculator --json
 macscope sections --project workspaces/calculator --name-contains text --json
 macscope imports --project workspaces/calculator --json
 macscope exports --source dyld --project workspaces/calculator --json
+macscope symbols --source indirect --project workspaces/calculator --json
 macscope strings --project workspaces/calculator --encoding ascii --min-length 8 --json
 macscope fixups --project workspaces/calculator --kind bind --json
 macscope objc methods --project workspaces/calculator --name-contains press --json
@@ -343,6 +344,40 @@ symbol table ranges, linkedit payload ranges, function starts, and
 data-in-code entries. An incomplete decoded table makes the header result
 partial. Dyld stream, export trie, chained fixup and signature ranges are
 recorded as extents.
+
+### Mach-O symbol declarations and indirect slots
+
+`symbols --source macho` reads the declared `LC_SYMTAB` entries in index
+order from the digest-verified slice. It retains the raw name bytes, type,
+description, and value. Section definitions include their declared VAs
+and file coordinates when they lie inside the declared file-backed
+section. Undefined names, common sizes, absolute values and alias
+names remain separate kinds of evidence. [Apple symbol table definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/nlist.h)
+
+`symbols --source indirect` maps `LC_DYSYMTAB` entries to stub and pointer
+slots using their section type, starting index and stride. A row
+identifies the slot's location, the raw table word, and the declared
+symbol or local/absolute marker. Slot VAs locate the stubs or pointers.
+Runtime targets require separate binding evidence. [Apple load command definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h) [LLVM indirect-symbol decoder](https://github.com/llvm/llvm-project/blob/main/llvm/tools/llvm-objdump/MachODump.cpp)
+
+Both sources work before analysis and support `--name-contains`, `--limit`,
+and `--cursor`. Each source reads up to 10,000 records with a 4,096-byte
+per-name limit and a 2 MiB aggregate name budget. Coverage reports absent
+tables, unmapped indirect entries and limits. Invalid names, indices,
+section spans and strides return typed errors. The default
+`--source ghidra` queries symbols in the saved Program snapshot.
+
+The installed CLI matched 28 declarations and 18 indirect slots against
+Apple `nm`, `otool`, and LLVM on owned arm64 and x86_64 slices. The test
+used the [consumer](../analysis/heldout_symbol_consumer.c) and
+[provider](../analysis/heldout_symbol_provider.c) fixtures with the
+default linker and with `-Wl,-no_fixup_chains`. It checked universal-file
+coordinates, six- and twelve-byte stubs, eight-byte pointer slots and
+source-bound cursors. The legacy variants returned identical file-backed
+records after full headless analysis. The report SHA-256 is
+`f30df15634fa6bde4427e57242d06dbc75471cd26578ff87fca87c9aeed0e851`.
+
+### Dyld exports and fixups
 
 `exports --source dyld` reads declared exports directly from the
 digest-verified slice, including before analysis. It accepts modern

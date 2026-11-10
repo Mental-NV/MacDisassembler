@@ -274,6 +274,10 @@ class ThinMachOTests(ErrorAssertions):
         valid = command(2, struct.pack("<4I", 56, 1, 72, 4))
         self.assertEqual(["0x2"], macho.thin(image(commands=[valid], payload=b"\0" * 20))["load_commands"])
         self.assert_error("symtab_bounds", macho.thin, image(commands=[command(2)]))
+        empty = command(2, bytes(16))
+        dysymtab = command(0xB, bytes(72))
+        self.assert_error("symtab_bounds", macho.thin, image(commands=[empty, empty]))
+        self.assert_error("dysymtab_bounds", macho.thin, image(commands=[dysymtab, dysymtab]))
         for fields in ((61, 1, 72, 4), (56, 0xFFFFFFFF, 72, 4),
                        (56, 1, 73, 4), (56, 1, 72, 0xFFFFFFFF)):
             with self.subTest(fields=fields):
