@@ -119,6 +119,10 @@ collections exceed documented bounds despite successful pseudocode output.
   pages and cursors matched the previous wheel.
 - [x] Traverse saved call references with depth/edge bounds and explicit
   unresolved targets.
+- [x] Withhold [ambiguous callers](cli.md#implemented-commands) at shared
+  callsite addresses. Derived controls on owned arm64 and x86_64 snapshots
+  preserved the recorded targets and stopped traversal in both directions.
+  Five thousand seeded maps matched exhaustive address checks.
 - [x] Query [references at arbitrary addresses](cli.md#implemented-commands)
   from a bounded image capture. All 32 owned thin address queries matched
   exact Ghidra queries and reproduced on universal slices. The installed

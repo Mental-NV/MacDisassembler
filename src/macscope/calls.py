@@ -1,6 +1,6 @@
 """Bounded traversal of recorded call evidence in one image."""
 from collections import deque
-from . import address_xrefs
+from . import address_xrefs, body_ownership
 
 DIRECT_CALLS = {"UNCONDITIONAL_CALL", "CONDITIONAL_CALL"}
 
@@ -26,6 +26,9 @@ def graph(snapshot, root, direction, depth, max_edges):
     expanded = 0
     edges = {}
     gaps = set()
+    shared, review_truncated = body_ownership.shared_ranges(functions)
+    if review_truncated:
+        gaps.add("function_body_review_limit")
     engine = snapshot["engine"]
     references = address_xrefs.FunctionReferences(engine)
     computed_complete = address_xrefs.complete(engine, address_xrefs.COMPUTED)
@@ -64,6 +67,14 @@ def graph(snapshot, root, direction, depth, max_edges):
                     caller = owners.get(site)
                 else:
                     caller = fid if owners.get(site, None if recovered else fid) == fid else None
+                ownership = None
+                if shared and body_ownership.contains(shared, site):
+                    caller = None
+                    ownership = "overlapping_function_bodies"
+                    gaps.add("ambiguous_callsite_ownership")
+                elif review_truncated:
+                    caller = None
+                    ownership = "body_review_incomplete"
                 direct = (ref_type in DIRECT_CALLS and site not in computed_sites
                           and (not recovered or site in owners or computed_complete))
                 callee = entries.get(target) if direct else None
@@ -87,6 +98,8 @@ def graph(snapshot, root, direction, depth, max_edges):
                     "resolution": resolution, "evidence": "reference" if target is not None else "instruction",
                     "reference_source": ref.get("source"), "operand_index": ref.get("operand_index"),
                 }
+                if ownership:
+                    edges[edge_key]["caller_ownership"] = ownership
                 neighbor = caller if incoming else callee
                 if resolution == "direct" and neighbor not in discovered:
                     discovered[neighbor] = distance + 1

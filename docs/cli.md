@@ -364,10 +364,23 @@ is both directions at depth 1. The graph reports the instruction address,
 reported target and resolution on each edge. It preserves indirect calls and
 inferred target hints without traversing them. Incoming references with
 ambiguous or unavailable instruction ownership retain an unresolved caller.
+In either direction, a callsite claimed by multiple saved function bodies
+retains its reference and target evidence. The caller stays unresolved,
+`caller_ownership` reports `overlapping_function_bodies`, and traversal
+stops at that edge. This check covers every shared address in the bounded
+body review. If the review reaches its limit, caller ownership remains
+unavailable and coverage is partial.
 Depth defines the requested scope. A reached `--max-edges` bound (default 500,
 maximum 2000) or incomplete scanned facets produces partial coverage. Call
 traversal uses the same recovery for capped reference samples. It follows
 direct edges only when the saved evidence supports the instruction and target.
+
+Five thousand seeded controls matched an exhaustive shared-address check.
+On two owned Ghidra snapshots, a derived second claim over an Apple-verified
+callsite made the caller unresolved in both directions. The reference,
+target, and neighboring direct edges remained available. Ordinary graphs
+matched the previous wheel. The validation report SHA-256 is
+`cfe03d6cc5af85585363c56a44233fc948911c87c57abf036e7609b2842c25ce`.
 
 ## User labels and comments
 

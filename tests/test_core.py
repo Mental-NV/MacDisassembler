@@ -28,7 +28,7 @@ import zipfile
 # Direct invocation and unittest discovery both work without installing a wheel.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from macscope import SCHEMA_VERSION
-from macscope import cli, doctor_probe, engine, engine_checks, jobs, macho, schema, search, storage
+from macscope import body_ownership, cli, doctor_probe, engine, engine_checks, jobs, macho, schema, search, storage
 from macscope.errors import Error
 
 
@@ -1025,6 +1025,46 @@ class CliTests(TemporaryCase):
         self.assertEqual(edge['callee_function_id'], second['function_id'])
         self.assertIsNone(edge['caller_function_id'])
         self.assertEqual(edge['resolution'], 'unresolved_caller')
+
+    def test_calls_withhold_ownership_at_any_shared_address_even_with_one_saved_instruction(self):
+        snapshot = self.call_snapshot()
+        first, second, third = snapshot['functions']
+        shared = '0x100000008'
+        clear = '0x10000000c'
+        first['body_ranges'].append([shared, '0x10000000f'])
+        third['body_ranges'].extend([first['body_ranges'][0], [shared, '0x10000000b']])
+        ambiguous = {**first['xrefs_from_sample'][0], 'from':shared}
+        direct = {**ambiguous, 'from':clear, 'to':third['entry_va']}
+        first['instructions'] = [{'addr':row['from'],'flow':'UNCONDITIONAL_CALL'} for row in (ambiguous,direct)]
+        first['xrefs_from_sample'] = [ambiguous,direct]
+        second['xrefs_to_entry'] = [ambiguous]
+        third['xrefs_to_entry'] = [direct]
+        with mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})):
+            incoming = cli.execute(self.args('calls','--function-id',second['function_id'],'--direction','callers'))
+            outgoing = cli.execute(self.args('calls','--function-id',first['function_id'],'--direction','callees'))
+        edge, = incoming['data']['edges']
+        self.assertEqual(edge['callsite'],shared)
+        self.assertEqual(edge['callee_function_id'],second['function_id'])
+        self.assertIsNone(edge['caller_function_id'])
+        self.assertEqual(edge['caller_ownership'],'overlapping_function_bodies')
+        self.assertEqual(edge['resolution'],'unresolved_caller')
+        self.assertEqual(incoming['coverage']['truncation_reason'],'ambiguous_callsite_ownership')
+        self.assertEqual(len(incoming['data']['nodes']),1)
+        self.assertEqual(outgoing['data']['edges'][0],edge)
+        self.assertEqual(outgoing['data']['edges'][1]['resolution'],'direct')
+        self.assertEqual([n['function_id'] for n in outgoing['data']['nodes']],
+                         [first['function_id'],third['function_id']])
+
+    def test_calls_withhold_ownership_when_the_body_review_reaches_its_limit(self):
+        snapshot = self.call_snapshot()
+        with (mock.patch.object(storage.Project, 'snapshot', return_value=(snapshot, {})),
+              mock.patch.object(body_ownership, 'MAX_RANGES', 1)):
+            result = cli.execute(self.args('calls','--function-id','function-0','--direction','callees'))
+        edge, = result['data']['edges']
+        self.assertIsNone(edge['caller_function_id'])
+        self.assertEqual(edge['caller_ownership'],'body_review_incomplete')
+        self.assertEqual(len(result['data']['nodes']),1)
+        self.assertEqual(result['coverage']['truncation_reason'],'function_body_review_limit')
 
     def test_calls_uses_recovered_references_and_keeps_computed_targets_unresolved(self):
         snapshot = self.call_snapshot()

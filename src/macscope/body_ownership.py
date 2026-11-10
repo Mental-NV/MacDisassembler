@@ -1,4 +1,6 @@
 """Bounded review of shared virtual ranges in saved function bodies."""
+from bisect import bisect_right
+
 from .metadata import VA
 
 
@@ -27,19 +29,14 @@ def intervals(functions, start, end):
     return spans, False
 
 
-def find(functions, start=0, end=2**64):
-    spans, truncated = intervals(functions, start, end)
-    witnesses = {}
+def intersections(spans):
     leader = alternate = None
-    # Track the farthest ends for two distinct owners. The earliest
-    # intersection with another owner suffices to mark each affected function.
+    # Any prior span overlapping this start covers a prefix of the new span.
+    # The farthest end from another owner covers that entire shared prefix.
     for first, last, entry in sorted(spans):
         previous = leader if leader and leader[2] != entry else alternate
         if previous and previous[1] >= first:
-            other = previous[2]
-            shared = (first, min(last, previous[1]))
-            witnesses.setdefault(entry, (other, *shared))
-            witnesses.setdefault(other, (entry, *shared))
+            yield entry, previous[2], first, min(last, previous[1])
         span = (first, last, entry)
         if leader is None or last > leader[1]:
             if leader and leader[2] != entry:
@@ -47,7 +44,35 @@ def find(functions, start=0, end=2**64):
             leader = span
         elif leader[2] != entry and (alternate is None or last > alternate[1]):
             alternate = span
+
+
+def find(functions, start=0, end=2**64):
+    spans, truncated = intervals(functions, start, end)
+    witnesses = {}
+    for entry, other, first, last in intersections(spans):
+        witnesses.setdefault(entry, (other, first, last))
+        witnesses.setdefault(other, (entry, first, last))
     return witnesses, truncated
+
+
+def shared_ranges(functions):
+    spans, truncated = intervals(functions, 0, 2**64)
+    shared = []
+    for _, _, first, last in intersections(spans):
+        if shared and first <= shared[-1][1] + 1:
+            previous, end = shared[-1]
+            shared[-1] = (previous, max(end, last))
+        else:
+            shared.append((first, last))
+    return shared, truncated
+
+
+def contains(ranges, address):
+    if not isinstance(address, str) or not VA.fullmatch(address):
+        return False
+    point = int(address, 16)
+    index = bisect_right(ranges, (point, 2**64)) - 1
+    return index >= 0 and point <= ranges[index][1]
 
 
 def report(functions, witnesses, truncated):
