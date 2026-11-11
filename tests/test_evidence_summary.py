@@ -80,7 +80,7 @@ class SummaryTests(unittest.TestCase):
 
     def test_cli_partial_text_retains_exit_six(self):
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'report.txt'
+            output = Path(directory).resolve() / 'report.txt'
             with patch.object(cli, 'execute', return_value=result([lead('a', 'partial')])), \
                  patch.object(cli, 'protect_output'):
                 code = cli.main(['evidence', '--project', directory, '--leads', 'unused.json',

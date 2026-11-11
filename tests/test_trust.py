@@ -64,7 +64,7 @@ class TrustTests(unittest.TestCase):
             result = cli.envelope('evidence', {'leads':[{'status':'unresolved','reason':'missing_writer','gaps':['indirect_target']}]},
                                   status='partial', cov=cli.coverage(partial=True, reason='lead_evidence_incomplete'))
             with tempfile.TemporaryDirectory() as root:
-                output = Path(root)/'result'
+                output = Path(root).resolve()/'result'
                 args = argparse.Namespace(command='evidence',format=fmt,output=str(output),force=False)
                 with patch.object(cli,'parser') as parser, patch.object(cli,'execute',return_value=result), patch.object(cli,'protect_output'):
                     parser.return_value.parse_args.return_value = args
