@@ -1,10 +1,12 @@
 # Scoped investigation follow-up plan
 
-Reconciled through main `7e221748a77622f589b307dfd2f6cbe3adc9bd4a`
-(PR36). This supersedes the earlier F4-only status, not the historical acceptance
-requirements retained below. See [practical readiness status](practical-readiness-status.md)
-for a concise merged-capability and validation ledger. Bounded implementation is
-not completion of all original product or attribution goals.
+Reconciled through main `c1883d3cb98e5a84c0b70a714a8b81033e126b58`
+(PR48), after a completed scoped consumer trial. This update records generic
+product feedback only, not private investigation artifacts or runtime conclusions.
+Historical acceptance requirements remain below. The earlier
+[practical readiness ledger](practical-readiness-status.md) describes its recorded
+checkpoint; the current reconciliation and next priorities here supersede its
+older forward-looking priorities, not its historical validation claims.
 
 ## Current reconciliation
 
@@ -29,36 +31,112 @@ computed writer operands. These are implemented, not merely planned. The
 Historical validation paragraphs in individual slice specifications describe
 that slice's checkpoint; they do not override later capabilities recorded here.
 
-## Next priorities and open gates
+## Current practical checkpoint
 
-1. **Keep the original purpose visible.** Full Ghidra headless remains the
-   decompiler. Recent instruction projections provide bounded evidence around
-   selected functions; they are not a replacement lifter/decompiler or a claim
-   of general Swift recovery. Judge future work against useful address-linked
-   pseudocode, metadata and investigation handoffs in the [original specification](specification.md).
-2. **Integrate only with evidence.** The alternative owned callback currently has
-   a verified two-hop route and a conditional computed-store proof, separate from
-   assignment/invocation composition. Before combining them, specify outer source
-   extent requirements, scoped register relations across edges, and arithmetic
-   operand/guard obligations. Do not relabel an unknown outer extent or invent
-   transitive substitutions to make a candidate pass. Runtime and memory-identity
-   assumptions remain explicit even if static integration succeeds.
-3. **Validate practical usefulness separately.** The owned positive and negative
-   receipt gates have passed within their declared static scopes. A renewed
-   consumer trial is still needed for the latest improvements. It requires a
-   separately authorized scoped session; do not automatically restart a consumer
-   agent, install a system CLI or execute an inspected application. Keep private
-   evidence outside the repository and record generic feedback only.
-4. **Recheck current compatibility when needed.** F5c closes its native test-path
-   regression at the recorded version. The latest full suite was run in the cloud
-   and installed-wheel native-receipt replay, not a new full Mac suite. A fresh
-   host/engine compatibility check and measured fresh-versus-replay latency are
-   separate gates; do not infer either from unit counts or cached replay.
-5. **Preserve deferrals.** Whole-image analysis, arbitrary runtime dispatch,
-   general source reconstruction, new backends, Linux-first work and continuous
-   installation maintenance are not follow-up priorities. Selected-address batch
-   optimization remains under its [separate proposal](bounded-focused-batch-proposal.md).
-   A blocked gate must not halt independent authorized improvements.
+Since PR36, [five-role composition](five-role-callback-route.md) added bounded,
+conditional static composition, with explicit source-boundary and register-route
+obligations. The old "before combining" priority is therefore superseded, not a
+request to implement it again. Runtime identity, persistence, aliasing and actual
+execution remain unknown.
+
+Selected-method presentation now includes a [dossier](selected-method-dossier.md),
+[recorded token/address preview](pseudocode-token-preview.md),
+[addressed pseudocode](addressed-pseudocode.md), conservative
+[small-scalar declaration context](objc-small-scalar-context.md), and corrected
+[focused-query source labels](dossier-source-provenance.md). PR48 adds
+[receipt-bound reference navigation](focused-receipt-xrefs.md). Incoming references
+remain explicitly partial and cannot establish a global caller inventory.
+
+The completed scoped consumer trial supplied three usability findings: selected
+links still need compact cross-receipt navigation and ready-to-run saved-reference
+commands; an initial 40-line code preview can hide decisive evidence farther down;
+and import-only success needs wording distinct from failure to obtain analysis.
+These are observed presentation/workflow gaps, not evidence that omitted callers
+are absent or that pseudocode proves runtime behavior. No generalized speed or
+accuracy claim follows from this trial. No private artifacts are included here.
+
+## Next priorities and measurable acceptance
+
+Each item below is **planned, not implemented or validated by this plan change**.
+Full Ghidra headless remains the decompiler; these are bounded investigation and
+presentation improvements, not a new decompiler or whole-image analysis mandate.
+
+### P0 — Compact selected cross-receipt links and replay commands
+
+Prepare a slice specification for an opt-in compact view of direct recorded links
+between explicitly selected, verified receipts. Bind each edge to source receipt,
+site, raw reference type and exact destination entry/image where established.
+Unresolved targets stay unresolved; no automatic graph traversal or inferred
+indirect target. Do not reinterpret a local incoming facet as global coverage.
+Offer correctly quoted, ready-to-run `xrefs --query-job` commands only when the
+project, job and exact entry are known and verified. Commands are suggestions,
+never automatically executed, and must not start new engine jobs.
+
+Acceptance before merge:
+- Owned positive, cross-image, missing/stale receipt, wrong entry, unresolved
+  target, cycle and partial incoming fixtures. Do not join solely by numeric
+  address across images; preserve original raw references and coverage.
+- At most 20 selected receipts, 100 displayed links and 32 KiB/200 lines; emit
+  explicit omitted counts. Specify deterministic ordering and truncation in the
+  implementation spec before coding. Retain full evidence through existing views.
+- Execute generated commands against an owned portable project from a working
+  directory outside the checkout, including paths with spaces and quote characters.
+  Assert expected receipt selection, exit/status and unchanged project hashes.
+- Repeated replay is byte-identical with engine unavailable. Existing JSON,
+  ordinary output defaults and partial exits remain unchanged unless an explicit
+  additive/versioned contract is reviewed.
+
+### P1 — Bounded pseudocode window around recorded token/address
+
+Specify an opt-in window anchored to an exact recorded token or instruction-address
+mapping. Use existing recorded UTF-16 span rules, not guessed line ownership or
+semantic matching. Show selected line numbers, mapping source and omitted context;
+multiple mapped spans must remain ambiguous rather than silently picking one.
+A missing/stale mapping yields a clear unavailable result, not a fabricated match.
+
+Acceptance before merge:
+- Owned fixture with a decisive mapped span beyond line 40, repeated addresses,
+  multiple spans, non-BMP text, boundary/invalid spans, empty code and missing maps.
+- A documented maximum of 40 displayed code lines and 16 KiB per selected window;
+  define anchor priority, context allocation and truncation before implementation.
+  Oversized lines are visibly truncated without splitting a recorded coordinate
+  into a misleading new mapping. Preserve the raw code and spans unchanged.
+- Installed offline replay exposes the beyond-line-40 anchor, preserves line
+  numbers and partial coverage, creates no jobs and passes a blinded owned-fixture
+  reader check. This verifies evidence access, not pseudocode semantic accuracy.
+
+### P1 — Distinguish import-only success from missing whole-image analysis
+
+For a valid import-only workflow with no committed analysis snapshot, say
+"No whole-image analysis recorded". Report import status, focused query status
+and overall evidence coverage independently. Do not replace actual failed,
+corrupt, stale or unavailable analysis diagnostics with reassuring wording.
+
+Acceptance before merge:
+- Owned cases for successful import without analysis, complete/partial focused
+  query, no query, committed analysis, failed analysis and invalid snapshot.
+- Successful import is not labelled an analysis failure; missing snapshot is not
+  labelled a complete graph. Preserve error codes, JSON contracts and exit 6 when
+  the evidence remains partial. Verify installed text output and regressions.
+
+### Remaining gates and deferrals
+
+Run specification review, implementation review, full primary/relevant analysis
+suites and installed-package replay per slice, then reconcile the integrated tree.
+Record fresh native capture, native full-suite results, offline replay and live
+consumer feedback separately; none implies the others. Current main integration
+passed 924 primary and 115 analysis tests in the cloud plus installed owned native
+receipt replay. This is not a fresh full Mac suite, live execution or CI claim.
+
+The completed consumer trial closes the old "renewed trial needed" action for its
+actual scope only. A later scoped trial should check the three acceptance outcomes
+after implementation, with permission for any needed live application inspection.
+Do not automatically restart a stopped consumer agent or install a system CLI.
+Whole-image analysis, arbitrary runtime dispatch, general source reconstruction,
+new backends, Linux-first work and continuous installation maintenance remain
+deferred. Selected-address batch work retains its
+[separate proposal](bounded-focused-batch-proposal.md). Report a blocker and
+continue independent authorized improvements rather than stopping the plan.
 
 ## Historical F5 acceptance requirements
 
@@ -166,8 +244,9 @@ slices. If blocked, record the reason and continue an independent task.
 
 Owned native conditional-positive and negative receipt gates are now recorded
 as passed within their bounded contracts. They do not prove an attributed
-application-state writer or general consumer usefulness. The next consumer trial
-is a separate authorized step, not an automatic agent restart. Do not call the
+application-state writer or general consumer usefulness. Any next consumer trial
+is a separate scoped step, not an automatic agent restart; the completed trial
+and its new priorities are recorded above. Do not call the
 final goal complete until its declared coverage and attribution obligations are
 met; useful partial tooling remains explicitly partial.
 
