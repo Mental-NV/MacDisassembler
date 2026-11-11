@@ -110,3 +110,11 @@ No generated executable ran and no framework or SDK header was imported.
 
 These checks establish compiler-emitted syntax for owned examples, not layout,
 runtime equivalence, broad compiler compatibility or third-party app accuracy.
+
+## Decoder v2 opaque pointees
+
+The v1 unknown-type restriction above remains the replay rule for v1 reports.
+New v2 output can preserve an immediate `^?` as a pointer to an explicitly unknown
+pointee, without a callable signature. Bare `?` and qualified unknown pointees
+remain unsupported. See [the bounded policy](objc-opaque-pointee.md); no engine
+signature or pseudocode is changed.
