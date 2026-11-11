@@ -41,6 +41,12 @@ class Parser(argparse.ArgumentParser):
         raise Error('usage', message, 2)
 
 
+def window_options(parser):
+    anchor = parser.add_mutually_exclusive_group()
+    anchor.add_argument('--window-token-start', type=int, help='Exact recorded UTF-16 token start for --format window')
+    anchor.add_argument('--window-address', help='Unslid recorded token address for --format window')
+
+
 def parser():
     p = Parser(prog='macscope', description='Local Mach-O evidence CLI. Engine commands are experimental for explicitly trusted inputs only.')
     p.add_argument('--version', action='version', version='macscope '+__version__)
@@ -126,12 +132,13 @@ def parser():
                    help='Check saved import and analysis Program digests without starting Ghidra')
     s=sub.add_parser('jobs');ss=s.add_subparsers(dest='action',required=True)
     for action in ('list','show','cancel','resume'):
-        s=ss.add_parser(action);s.add_argument('--project',required=True);common(s,('text','json','jsonl','addressed') if action=='resume' else ('text','json','jsonl'))
+        s=ss.add_parser(action);s.add_argument('--project',required=True);common(s,('text','json','jsonl','addressed','window') if action=='resume' else ('text','json','jsonl'))
         if action=='list':
             pagination(s)
         else:
             s.add_argument('job_id')
         if action=='resume':
+            window_options(s)
             s.add_argument('--trust-input','--experimental-trusted-input',dest='experimental_trusted_input',action='store_true',help='Confirm trust for this invocation; native processing is not a hostile-input sandbox')
             s.add_argument('--ghidra')
             s.add_argument('--java-home')
@@ -179,7 +186,8 @@ def parser():
         if c=='show':selector(s)
         else:s.add_argument('--name-contains');pagination(s)
     for c in ('disasm','decompile','xrefs','cfg'):
-        s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl','addressed') if c=='decompile' else ('text','json','jsonl'))
+        s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl','addressed','window') if c=='decompile' else ('text','json','jsonl'))
+        if c=='decompile': window_options(s)
         selections=selector(s,all_option=c=='decompile')
         if c=='disasm':
             budgets(s)
@@ -1556,6 +1564,17 @@ def verify_doctor_worker(deps):
 
 
 def execute(a):
+    token_start = getattr(a, 'window_token_start', None)
+    window_address = getattr(a, 'window_address', None)
+    window = getattr(a, 'format', None) == 'window'
+    if (token_start is not None and window_address is not None) or window != (token_start is not None or window_address is not None):
+        raise Error('window_anchor', '--format window requires exactly one window anchor; anchors require that format', 2)
+    if window and getattr(a, 'all', False):
+        raise Error('window_anchor', 'Window format requires one selected function, not --all', 2)
+    if token_start is not None and token_start < 0:
+        raise Error('window_anchor', 'Window token start must be a nonnegative UTF-16 offset', 2)
+    if window_address is not None and not re.fullmatch(r'0x[0-9a-f]{1,16}', window_address):
+        raise Error('window_anchor', 'Window address must be an unslid lowercase hexadecimal address', 2)
     selection = metadata.runtime_selection(getattr(a,'runtime_address',None),getattr(a,'load_slide',None))
     if selection is None:
         return execute_command(a)
@@ -2105,7 +2124,10 @@ def render_jsonl(result):
         yield b'\n'
 
 
-def render(result,fmt):
+def render(result,fmt, *, token_start=None, window_address=None):
+    if fmt=='window':
+        from . import pseudocode_window
+        return pseudocode_window.render(result,token_start=token_start,address=window_address)
     if fmt=='addressed':
         from . import addressed_pseudocode
         return addressed_pseudocode.render(result)
@@ -2156,7 +2178,7 @@ def main(argv=None):
         validate_envelope(result)
         code=6 if result['status']=='partial' else 0
         fmt='json' if result.get('error') else getattr(args,'format','json')
-        chunks=render_jsonl(result) if fmt=='jsonl' else (render(result,fmt),)
+        chunks=render_jsonl(result) if fmt=='jsonl' else (render(result,fmt,token_start=getattr(args,'window_token_start',None),window_address=getattr(args,'window_address',None)),)
         if getattr(args,'output',None):
             destination=Path(os.path.abspath(args.output))
             protect_output(args,destination)
