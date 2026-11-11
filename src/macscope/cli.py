@@ -126,7 +126,7 @@ def parser():
                    help='Check saved import and analysis Program digests without starting Ghidra')
     s=sub.add_parser('jobs');ss=s.add_subparsers(dest='action',required=True)
     for action in ('list','show','cancel','resume'):
-        s=ss.add_parser(action);s.add_argument('--project',required=True);common(s)
+        s=ss.add_parser(action);s.add_argument('--project',required=True);common(s,('text','json','jsonl','addressed') if action=='resume' else ('text','json','jsonl'))
         if action=='list':
             pagination(s)
         else:
@@ -179,7 +179,7 @@ def parser():
         if c=='show':selector(s)
         else:s.add_argument('--name-contains');pagination(s)
     for c in ('disasm','decompile','xrefs','cfg'):
-        s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl'))
+        s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl','addressed') if c=='decompile' else ('text','json','jsonl'))
         selections=selector(s,all_option=c=='decompile')
         if c=='disasm':
             budgets(s)
@@ -2086,6 +2086,9 @@ def render_jsonl(result):
 
 
 def render(result,fmt):
+    if fmt=='addressed':
+        from . import addressed_pseudocode
+        return addressed_pseudocode.render(result)
     if fmt=='dossier':
         from . import method_dossier
         return method_dossier.render(result)
