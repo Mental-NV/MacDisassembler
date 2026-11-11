@@ -111,6 +111,32 @@ class ImportDisasmTests(TemporaryCase):
         path.write_text('{}')
         self.error('disasm_receipt_identity',subject.replay,self.project_,self.image,proof,payload,job)
 
+    def test_callback_projection_preserves_fresh_receipt_and_offline_replay(self):
+        from types import SimpleNamespace
+        proof,payload=self.selection()
+        job='d'*32
+        (self.project_.path/'jobs'/job).mkdir()
+        manifest={'job_id':job,'status':'complete','mode':'query','disasm_request':subject.binding(self.project_,self.image,proof)}
+        args=SimpleNamespace(receipt=None,callback_evidence=True,ghidra=None,java_home=None)
+        deps={'ghidra_version':'owned','ghidra_tree_sha256':'e'*64,'bridge_sha256':'f'*64}
+        with patch.object(cli.metadata,'verified_slice',return_value=self.raw), \
+             patch.object(subject,'selection',return_value=(proof,payload)), \
+             patch.object(subject.engine,'dependencies',return_value=deps), \
+             patch.object(subject,'run',return_value=({'instructions':self.rows,'gaps':[]},manifest)):
+            fresh=cli.imported_disassembly(args,self.project_,self.image,0x1100,0x1108)
+        path=self.project_.path/'jobs'/job/'disasm-result.json'
+        before=path.read_bytes()
+        self.assertNotIn(b'callback_evidence',before)
+        self.assertIn('callback_evidence',fresh['data'])
+        args.receipt=job
+        with patch.object(cli.metadata,'verified_slice',return_value=self.raw), \
+             patch.object(subject,'selection',return_value=(proof,payload)), \
+             patch.object(subject.engine,'dependencies',side_effect=AssertionError('offline')), \
+             patch.object(subject,'run',side_effect=AssertionError('offline')):
+            replay=cli.imported_disassembly(args,self.project_,self.image,0x1100,0x1108)
+        self.assertEqual(fresh,replay)
+        self.assertEqual(before,path.read_bytes())
+
     def test_parser_requires_explicit_range_for_import_mode(self):
         for words in (['--address','0x1100','--from-import'],['--range','0x1100:0x1108','--receipt','b'*32]):
             args=cli.parser().parse_args(['disasm','--project',str(self.project_.path),*words])
