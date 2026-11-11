@@ -280,7 +280,7 @@ def parser():
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl','html'))
     s.add_argument('--include-annotations',action='store_true')
     s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed evidence')
-    common(s,('json','html','text','compact'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
+    common(s,('json','html','text','compact','dossier'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s.add_argument('--link-focused',action='store_true',help='Verify direct calls between selected focused receipts')
     s.add_argument('--objc-types',action='store_true',help='Attach exact Objective-C declarations and conditional ABI register roles')
@@ -2083,6 +2083,9 @@ def render_jsonl(result):
 
 
 def render(result,fmt):
+    if fmt=='dossier':
+        from . import method_dossier
+        return method_dossier.render(result)
     if fmt=='compact':
         from . import compact_handoff
         return compact_handoff.render(result)
