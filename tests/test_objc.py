@@ -37,6 +37,17 @@ def fixture(*, relative=False, invalid_selector=False, other_flags=0):
     return bytes(data)
 
 
+def owned_empty_ivar_fixture(encoding=b"\0\0"):
+    data = bytearray(property_fixture())
+    struct.pack_into("<Q",data,0x3B0,BASE+0x600)
+    struct.pack_into("<II",data,0x600,32,1)
+    struct.pack_into("<3Q2I",data,0x608,BASE+0x680,BASE+0x790,BASE+0x7A0,2,4)
+    struct.pack_into("<i",data,0x680,12)
+    data[0x790:0x796] = b"owned\0"
+    data[0x7A0:0x7A0+len(encoding)] = encoding
+    return data
+
+
 def property_fixture(*, image_flags=0x40, image_version=0, protocol_size=96, bad_property=False):
     sections = [(b"__objc_classlist",0x300), (b"__objc_catlist",0x308),
                 (b"__objc_protolist",0x310), (b"__objc_imageinfo",0x318)]
@@ -384,7 +395,7 @@ class ObjCMetadataTests(unittest.TestCase):
         data[32+size:32+size+len(overlapping)] = overlapping
         struct.pack_into("<II",data,16,count+1,size+len(overlapping))
         data = bytes(data)
-        view = objc.ObjCImage(data,{"offset":"0x0"},objc.thin(data),scoped=True)
+        view = objc.ObjCImage(data,{"offset":"0x0"},macho.thin(data),scoped=True)
         with self.assertRaises(ValueError):
             view.target(BASE+bias+0x420)
         self.assertEqual(view.target(BASE+bias+0x300),BASE+bias+0x400)
@@ -679,6 +690,66 @@ class ObjCMetadataTests(unittest.TestCase):
             rows,gaps = objc.inventory(property_fixture(bad_property=True),{"offset":"0x0"},"properties")
         self.assertFalse(rows)
         self.assertEqual(gaps,["invalid_property_record","property_limit"])
+
+    def test_verified_empty_ivar_retains_independent_evidence(self):
+        good, gaps = objc.inventory(bytes(owned_empty_ivar_fixture(b"i\0")),{"offset":"0x0"},"ivars")
+        self.assertEqual(gaps,[])
+        self.assertNotIn("encoding_evidence",good[0])
+        data=bytes(owned_empty_ivar_fixture()); diagnostics=[]
+        rows,gaps=objc.selected_ivars(data,{"offset":"0x0"},BASE+0x300,diagnostics=diagnostics)
+        self.assertEqual(gaps,["ivar_type_unavailable"])
+        row,=rows
+        self.assertEqual((row["name"],row["type_encoding"],row["declared_offset_bytes"]),("owned","",12))
+        expected=dict(good[0],type_encoding="",class_slot=hex(BASE+0x300),encoding_evidence={
+            "status":"unavailable","reason_code":"empty_recorded_encoding",
+            "pointer_va":hex(BASE+0x618),"storage_va":hex(BASE+0x7A0),"bytes":"00",
+            "scope":"recorded_metadata_not_inferred_type"})
+        self.assertEqual(row,expected)
+        self.assertTrue(any("row retained with unknown type" in d for d in diagnostics))
+        view=objc.ObjCImage(data,{"offset":"0x0"},macho.thin(data))
+        with self.assertRaises(ValueError): view.view.string(BASE+0x7A0)
+
+    def test_empty_ivar_negative_and_offset_controls(self):
+        for kind in ["null_type","unmapped","unterminated","empty_name","missing_name","alignment"]:
+            data=owned_empty_ivar_fixture()
+            if kind=="null_type": struct.pack_into("<Q",data,0x618,0)
+            if kind=="unmapped": struct.pack_into("<Q",data,0x618,BASE+0x900)
+            if kind=="unterminated": data[0x7A0:]=b"x"*(len(data)-0x7A0)
+            if kind=="empty_name": data[0x790]=0
+            if kind=="missing_name": struct.pack_into("<Q",data,0x610,0)
+            if kind=="alignment": struct.pack_into("<I",data,0x620,32)
+            with self.subTest(kind=kind):
+                rows,gaps=objc.inventory(bytes(data),{"offset":"0x0"},"ivars")
+                self.assertEqual(rows,[]); self.assertIn("invalid_ivar_record",gaps)
+        data=owned_empty_ivar_fixture(); struct.pack_into("<Q",data,0x608,BASE+0x900)
+        rows,gaps=objc.inventory(bytes(data),{"offset":"0x0"},"ivars")
+        self.assertEqual(gaps,["ivar_offset_unavailable","ivar_type_unavailable"])
+        self.assertEqual(rows[0]["offset_storage_va"],hex(BASE+0x900))
+        self.assertIsNone(rows[0]["declared_offset_bytes"])
+        data=owned_empty_ivar_fixture(); struct.pack_into("<Q",data,0x618,BASE+0x8FF)
+        rows,gaps=objc.inventory(bytes(data),{"offset":"0x0"},"ivars")
+        self.assertEqual(len(rows),1); self.assertEqual(gaps,["ivar_type_unavailable"])
+
+    def test_empty_ivar_pointer_mapping_and_size_rejections(self):
+        data=bytes(owned_empty_ivar_fixture())
+        ambiguous=overlapping_zero_fill(data,BASE+0x7A0)
+        rows,gaps=objc.inventory(ambiguous,{"offset":"0x0"},"ivars")
+        self.assertEqual(rows,[]); self.assertIn("invalid_ivar_record",gaps)
+        original=objc.ObjCImage.target
+        def external(view, site, *args, **kwargs):
+            if site==BASE+0x618:
+                raise objc.ResolutionFailure("external_class_pointer","owned external control")
+            return original(view,site,*args,**kwargs)
+        with patch.object(objc.ObjCImage,"target",external):
+            rows,gaps=objc.inventory(data,{"offset":"0x0"},"ivars")
+        self.assertEqual(rows,[]); self.assertIn("invalid_ivar_record",gaps)
+        oversized=owned_empty_ivar_fixture()
+        oversized.extend(bytes(0x2000-len(oversized)))
+        struct.pack_into("<Q",oversized,64,0x2000)
+        struct.pack_into("<Q",oversized,80,0x2000)
+        oversized[0x7A0:0x7A0+4098]=b"x"*4097+b"\0"
+        rows,gaps=objc.inventory(bytes(oversized),{"offset":"0x0"},"ivars")
+        self.assertEqual(rows,[]); self.assertIn("invalid_ivar_record",gaps)
 
     def test_ivar_offset_width_alignment_and_unavailable_storage(self):
         data = bytearray(property_fixture())
