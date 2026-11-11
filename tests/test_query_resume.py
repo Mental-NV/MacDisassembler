@@ -323,7 +323,7 @@ class FocusedResumeTests(TemporaryCase):
         self.assertEqual(receipt_path.read_bytes(),before)
 
     def test_completed_legacy_receipt_replays_and_exports_without_new_policy(self):
-        self.proof = {key:value for key,value in self.proof.items() if key != 'tail_calls'}
+        self.proof = {key:value for key,value in self.proof.items() if key not in ('tail_calls','flow_gap_classification')}
         self.proof['policy'] = 'macscope-focused-import/1'
         self.request = jobs.focused_request(self.workspace,self.image,self.proof)
         self.record.update(focused_import=self.proof,focused_request=self.request,status='complete')
@@ -348,7 +348,7 @@ class FocusedResumeTests(TemporaryCase):
             self.assertNotIn('tail_call_recovery',handoff['data'])
 
     def test_unfinished_legacy_query_requires_a_new_capture(self):
-        proof={key:value for key,value in self.proof.items() if key != 'tail_calls'}
+        proof={key:value for key,value in self.proof.items() if key not in ('tail_calls','flow_gap_classification')}
         proof['policy']='macscope-focused-import/1'
         request=jobs.focused_request(self.workspace,self.image,proof)
         self.write_job(self.original,dict(self.record,focused_import=proof,focused_request=request))

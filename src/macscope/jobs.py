@@ -5,7 +5,7 @@ import os
 import re
 import stat
 
-from . import focused, worker_lifecycle
+from . import focused, saved_flow_gap_evidence, worker_lifecycle
 from .errors import Error
 from .macho import read_regular
 from .storage import MAX_SNAPSHOT_BYTES, atomic, canonical, check_json_nesting, identity, is_digest, strict_json, write_json
@@ -352,7 +352,7 @@ def matches_program(source, digest, current_key):
 
 
 def query_request(project, image, function, source, revision, hints, *, signature_recovery=None,
-                  address_selection=None):
+                  address_selection=None, flow_gap_policy=None):
     program_sha256 = source.get("analysis_program_sha256")
     if not isinstance(program_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", program_sha256):
         raise Error("analysis_program_integrity", "Saved analyzed Program identity is missing; rerun analyze")
@@ -376,6 +376,10 @@ def query_request(project, image, function, source, revision, hints, *, signatur
         request[key] = recovery
     if address_selection is not None:
         request["address_selection"] = address_selection
+    if flow_gap_policy is not None:
+        if flow_gap_policy != saved_flow_gap_evidence.POLICY or "switch_table_recovery" in request:
+            raise Error("query_receipt", "Unsupported analyzed flow evidence request policy")
+        request["flow_gap_policy"] = flow_gap_policy
     return request
 
 
@@ -455,6 +459,8 @@ def query_receipt(project, job_id, request):
                     for key in ("ghidra_version", "ghidra_tree_sha256", "bridge_sha256"))):
             raise Error("query_receipt", "Focused result differs from its imported Program or worker")
         focused.validate_result(result, request["extent"])
+    else:
+        saved_flow_gap_evidence.validate_result(project, result, request)
     return result
 
 
@@ -462,6 +468,8 @@ def publish_query(project, job_id, request, result):
     path = project.path / "jobs" / job_id / "query-result.json"
     if request.get("schema") == FOCUSED_REQUEST:
         focused.validate_result(result, request["extent"])
+    else:
+        saved_flow_gap_evidence.validate_result(project, result, request)
     try:
         receipt = {"schema": QUERY_RECEIPT, "request_sha256": identity(request),
                    "result_sha256": identity(result), "result": result}

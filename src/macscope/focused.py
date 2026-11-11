@@ -2,7 +2,7 @@
 
 from hashlib import sha256
 
-from . import focused_boundaries, focused_tailcalls, macho_load, metadata
+from . import flow_gap_classification, flow_gap_evidence, focused_boundaries, focused_tailcalls, macho_load, metadata
 from .direct_signatures import arm64_direct_target
 from .dispatch_returns import direct_target
 from .errors import Error
@@ -11,7 +11,8 @@ from .pseudocode import VA, address_spans
 from .schema import validate_envelope, validate_function
 
 
-POLICY = "macscope-focused-import/2"
+POLICY = "macscope-focused-import/3"
+RESUMABLE_POLICIES = frozenset(("macscope-focused-import/2", POLICY))
 MAX_BYTES = 8192
 PROJECT_BACKUPS = frozenset(("image.rep/idata/~index.bak", "image.rep/idata/~journal.bak"))
 RECEIPT_FACETS = {"pseudocode", "instructions", "body_ranges", "xrefs_from", "xrefs_to_entry"}
@@ -22,7 +23,7 @@ def select(project, image, entry, *, policy=POLICY):
 
 
 def extent(data, image, entry, *, policy=POLICY):
-    if policy not in ("macscope-focused-import/1", POLICY):
+    if policy not in ("macscope-focused-import/1", *RESUMABLE_POLICIES):
         raise Error("focused_policy", "Unsupported recorded focused-query policy", 3)
     address = metadata.hex_address(entry, "Unslid function entry")
     parsed = thin(data, include_section_linkage=True)
@@ -61,8 +62,10 @@ def extent(data, image, entry, *, policy=POLICY):
     proof = {"policy": policy, "entry_va": hex(address), "end_va_exclusive": hex(end),
              "slice_file_offset": hex(offset), "container_file_offset": hex(offset + int(image["offset"], 16)),
              "extent_sha256": sha256(payload).hexdigest(), "length": size}
-    if policy == POLICY:
+    if policy in RESUMABLE_POLICIES:
         proof["tail_calls"] = focused_tailcalls.plan(data, image, parsed, proof, payload)
+    if policy == POLICY:
+        proof["flow_gap_classification"] = flow_gap_classification.plan(data, image, parsed, proof, payload)
     return proof, payload
 
 
@@ -140,6 +143,10 @@ def validate_result(result, proof):
             if focused_boundaries.gaps(function, proof) and (result["status"] == "complete"
                     or function["decompile_status"] == "complete"):
                 raise ValueError("Focused control flow is not confined to its body; capture a new query")
+        flow_gap_evidence.validate(function, proof)
+        if any(isinstance(gap, dict) and "evidence" in gap for gap in function.get("control_flow_gaps", ())):
+            if result["status"] != "partial":
+                raise ValueError("Control-flow gap evidence requires a partial result")
     except (KeyError, TypeError, ValueError) as error:
         raise Error("query_receipt", str(error), 3) from error
 

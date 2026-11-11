@@ -1414,6 +1414,17 @@ class CliTests(TemporaryCase):
         deps.assert_not_called()
 
     def test_fresh_decompile_keeps_selected_snapshot_and_labels_new_evidence(self):
+        # New fresh requests pin durable flow sources even for a no-gap result.
+        # Give this legacy display fixture a real selected identity and slice.
+        self.snapshot, source = synthetic_snapshot(self.workspace, 'e' * 64, slice_bytes=b'owned source slice')
+        self.snapshot['functions'][2]['function_id'] = storage.identity(['owned', 'selected'])
+        payload = storage.canonical(self.snapshot) + b'\n'
+        storage.atomic(self.workspace.path / 'snapshots' / (self.snapshot['analysis_id'] + '.json'),
+                       payload, force=True, mode=0o400)
+        source['snapshot_sha256'] = hashlib.sha256(payload).hexdigest()
+        with self.workspace.db(False) as db:
+            db.execute('UPDATE analyses SET payload=? WHERE id=?',
+                       (json.dumps(source), self.snapshot['analysis_id']))
         record = {'pseudocode': 'char *f() { return "/Users/local/private"; }',
                   'decompile_status': 'complete', 'pseudocode_truncated': False,
                   'coverage': {'pseudocode': {'status': 'complete'}}}

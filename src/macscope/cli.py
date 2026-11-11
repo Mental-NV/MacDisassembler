@@ -19,7 +19,7 @@ from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, a
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
                       program_history, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
-from . import body_ownership, engine_checks, evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
+from . import body_ownership, engine_checks, evidence, flow_gap_evidence, saved_flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -478,8 +478,12 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
     if deps is None:
         deps = engine.dependencies(args.ghidra,args.java_home,full=True)
     recovery = engine.signature_request(signature_plan) if signature_plan is not None else None
+    gap_policy = None if recovery and recovery[0] == 'switch_table_recovery' else saved_flow_gap_evidence.POLICY
+    if resumed_from is not None:
+        original = jobs.restart_request(jobs.get(project,resumed_from)[1])
+        gap_policy = (original or {}).get('flow_gap_policy')
     request = jobs.query_request(project,image,function,source,revision,hints,signature_recovery=recovery,
-                                 address_selection=address_selection)
+                                 address_selection=address_selection,flow_gap_policy=gap_policy)
     options = {} if signature_plan is None else {'signature_plan': signature_plan}
     result, job = engine.run(project,image,'query',args,deps,entry=function['entry_va'],hints=hints,
                              query_request=request,resumed_from=resumed_from,**options)
@@ -509,7 +513,7 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
         data['origin']['manual_boundaries'] = job['manual_boundaries']
     if recovery is not None:
         data['origin'][recovery[0]] = result[recovery[0]]
-    for field in ('control_flow_review', 'control_flow_gaps', 'control_flow_traps', 'engine_decompile_status'):
+    for field in ('control_flow_review', 'control_flow_gaps', 'control_flow_traps', 'engine_decompile_status', 'native_scope'):
         if field in fresh:
             data[field] = fresh[field]
     diagnostics = [fresh['decompile_error']] if fresh.get('decompile_error') else []
@@ -520,8 +524,14 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
                         redact(diagnostics))
     if address_selection is not None:
         response['address_selection'] = address_selection
+    assisted = 'switch_table_recovery' in data['origin']
+    if not assisted:
+        response = flow_evidence.query_view(response,function)
+        raw_snapshot, _ = project.snapshot(image)
+        response = saved_flow_gap_evidence.annotate_query(project,image,raw_snapshot,source,response,request)
     with jobs.result_publication('query',job['job_id'],resumed_from):
-        return jobs.publish_query(project,resumed_from or job['job_id'],request,response)
+        response = jobs.publish_query(project,resumed_from or job['job_id'],request,response)
+    return flow_evidence.query_view(response,function) if assisted else response
 
 
 def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_from=None):
@@ -552,6 +562,7 @@ def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_fr
                         **{key:deps[key] for key in ('ghidra_version','ghidra_tree_sha256','bridge_sha256')}})
     for key in ('xrefs_to_entry','xrefs_from_sample'):
         data[key] = sorted(data[key],key=canonical)
+    data = flow_gap_evidence.annotate(data)
     diagnostics = [function['decompile_error']] if function.get('decompile_error') else []
     response = envelope('decompile',redact(data),status='partial' if reasons else 'complete',
                         cov=coverage('one selected linker extent from the saved import',1,1,bool(reasons),
@@ -1047,7 +1058,7 @@ def resume_focused(args, project, command, record, request):
     if reused:
         focused.verify_instructions(extent,payload,response['data'])
     else:
-        if extent['policy'] != focused.POLICY:
+        if extent['policy'] not in focused.RESUMABLE_POLICIES:
             raise Error('job_resume_policy','An unfinished legacy focused query needs a new capture under the current policy',3)
         if baseline != image['engine_baseline_sha256']:
             raise Error('baseline_integrity','The original import Program is unavailable for this unfinished query')
@@ -1104,7 +1115,7 @@ def resume_query(args, project, command, record, request):
         raise Error('job_resume_inputs','The fresh query Program does not belong to the saved analysis',8)
     request_source = dict(source,analysis_program_sha256=program_digest)
     if (jobs.query_request(project,image,function,request_source,revision,hints,signature_recovery=recovery,
-                           address_selection=address_selection) != request
+                           address_selection=address_selection,flow_gap_policy=request.get('flow_gap_policy')) != request
             or record.get('type_hint_view_id') != request['type_hint_view_id']
             or record.get('type_hints') != hints
             or any(record.get(key) != request.get(key) for key in jobs.SIGNATURE_RECOVERY_FIELDS)):
@@ -1123,7 +1134,8 @@ def resume_query(args, project, command, record, request):
         response = fresh_decompile(replay,project,image,function,source,revision,hints,
                                    deps=deps,resumed_from=args.job_id,signature_plan=signature_plan,
                                    address_selection=address_selection)
-    response = flow_evidence.query_view(response,function)
+    if reused and saved_flow_gap_evidence.SOURCE_FIELD not in response['data']:
+        response = flow_evidence.query_view(response,function)
     data = response['data']
     reused = reused or data['origin']['job_id'] == args.job_id
     return dict(response,command=command,data=dict(data,resumed_from=args.job_id,reused_restart=reused))
@@ -1839,6 +1851,7 @@ def execute_command(a, address_selection=None):
         total = len(transfer['revisions'])
         return envelope(command,transfer,aid,cov=coverage('portable image annotation history',total,total))
     a = resolve_selector(a,p,image,snapshot)
+    raw_snapshot = snapshot
     snapshot = flow_evidence.snapshot_view(snapshot)
     functions = snapshot['functions']
     if a.command == 'export' and not a.include_annotations:
@@ -1902,6 +1915,8 @@ def execute_command(a, address_selection=None):
     if a.command=='decompile' and a.all:
         return decompile_batch(a,p,snapshot,functions)
     f=select_function(functions,a)
+    if not fresh and a.command in ('functions','decompile','disasm','cfg'):
+        f=saved_flow_gap_evidence.annotate_selected(p,image,raw_snapshot,record,f)
     if a.command=='xrefs':
         return function_xrefs(a,p,snapshot,f)
     if fresh:
@@ -1909,8 +1924,8 @@ def execute_command(a, address_selection=None):
         policy = next((policy for enabled, policy in ((recover_switch, switch_tables), (recover_forwarded, forwarded_returns), (recover_parameters, callee_parameters),
                       (recover_scalar, scalar_signatures), (recover_direct, direct_signatures), (recover_dispatch, dispatch_returns)) if enabled), None)
         plan = policy.request(metadata.verified_slice(p,image),image,f,functions) if policy else None
-        return flow_evidence.query_view(fresh_decompile(a,p,image,f,record,revision,hints,signature_plan=plan,
-                                                       address_selection=address_selection),f)
+        return fresh_decompile(a,p,image,f,record,revision,hints,signature_plan=plan,
+                               address_selection=address_selection)
     if a.command=='calls':
         data,gaps=calls.graph(dict(snapshot,functions=functions),f,a.direction,a.depth,a.max_edges)
         count=len(data['edges'])
