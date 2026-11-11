@@ -2,7 +2,7 @@
 from collections import Counter
 import hashlib
 
-from . import binary_diff, evidence
+from . import binary_diff, evidence, objc_type_evidence
 from .errors import Error
 from .macho import read_regular
 from .metadata import VA
@@ -11,7 +11,7 @@ from .storage import canonical, identity, is_digest, strict_json
 
 
 POLICY = "macscope-handoff-diff/1"
-MAX_INPUT = evidence.MAX_LEADS * evidence.MAX_LEAD_BYTES + evidence.MAX_MANIFEST_BYTES
+MAX_INPUT = evidence.MAX_LEADS * (evidence.MAX_LEAD_BYTES + objc_type_evidence.MAX_SIDECAR_BYTES) + evidence.MAX_MANIFEST_BYTES
 
 
 def role(pin):
@@ -200,6 +200,7 @@ def read_handoff(path, side):
                 raise ValueError("Invalid handoff image pin")
             images[image["image_id"]] = image
         facts = {}
+        type_sidecars = objc_type_evidence.validate(data)
         for row in data["leads"]:
             lead = row["lead"]
             observed = row["function"] is not None
@@ -220,6 +221,13 @@ def read_handoff(path, side):
                     or not isinstance(row["gaps"], list) or any(not isinstance(gap, str) for gap in row["gaps"])):
                 raise ValueError("Invalid handoff lead")
             facts[lead["id"]] = lead_facts(row, images)
+            if lead["id"] in type_sidecars:
+                sidecar = type_sidecars[lead["id"]]
+                complete_types = (sidecar["status"] == "associated"
+                                  and sidecar["abi_projection"]["status"] == "projected")
+                facts[lead["id"]]["facets"]["objc_types"] = measured(
+                    objc_type_evidence.observations(sidecar), complete_types)
+                facts[lead["id"]]["provenance"]["objc_type_binding"] = sidecar["binding"]
         descriptor = {"export_sha256": hashlib.sha256(raw).hexdigest(), "manifest_sha256": data["manifest_sha256"],
                       "status": envelope["status"], "lead_count": len(facts)}
     except (Error, AttributeError, ValueError, KeyError, TypeError, RecursionError) as error:

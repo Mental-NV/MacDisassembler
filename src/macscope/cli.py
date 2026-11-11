@@ -21,7 +21,7 @@ from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, a
                       program_history, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, objc_types, scalar_signatures, search, swift_symbols, switch_tables
 from . import import_disasm, callback_evidence, callback_links, callback_composition, callback_twohop
-from . import body_ownership, engine_checks, evidence, flow_gap_evidence, saved_flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
+from . import body_ownership, engine_checks, evidence, flow_gap_evidence, saved_flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, objc_type_evidence, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
 STATUS_SNAPSHOT_LIMIT = 8
@@ -283,6 +283,7 @@ def parser():
     common(s,('json','html','text','compact'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s.add_argument('--link-focused',action='store_true',help='Verify direct calls between selected focused receipts')
+    s.add_argument('--objc-types',action='store_true',help='Attach exact Objective-C declarations and conditional ABI register roles')
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left JSON export or evidence handoff')
     s.add_argument('right',help='Right JSON export or evidence handoff')
@@ -1813,7 +1814,8 @@ def execute_command(a, address_selection=None):
         return file_fixups(a)
     p=Project(a.project)
     if a.command == 'evidence':
-        report = redact(evidence.export(p,evidence.load(a.leads),link_imports=a.link_imports,link_focused=a.link_focused))
+        report = objc_type_evidence.redact_report(evidence.export(p,evidence.load(a.leads),link_imports=a.link_imports,
+                                                  link_focused=a.link_focused,objc_types=a.objc_types),redact)
         count = len(report['leads'])
         partial = any(row['status'] != 'resolved' for row in report['leads'])
         return envelope(command,report,status='partial' if partial else 'complete',
