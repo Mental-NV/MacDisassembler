@@ -1,12 +1,53 @@
 # Scoped investigation follow-up plan
 
-Reconciled through main `c1883d3cb98e5a84c0b70a714a8b81033e126b58`
-(PR48), after a completed scoped consumer trial. This update records generic
-product feedback only, not private investigation artifacts or runtime conclusions.
-Historical acceptance requirements remain below. The earlier
-[practical readiness ledger](practical-readiness-status.md) describes its recorded
-checkpoint; the current reconciliation and next priorities here supersede its
-older forward-looking priorities, not its historical validation claims.
+Reconciled after PR58 (main `62ded8bc71379cbd6175c6228736d47bce9a0376`).
+This document records generic product requirements and validation limits, not
+private application artifacts or runtime conclusions. Historical acceptance
+requirements remain below; completed work is not a request to implement it again.
+
+## Next evidence-backed step
+
+The three previously prioritized consumer usability improvements are implemented:
+[selected reference links](selected-reference-links.md),
+[pseudocode windows](pseudocode-window.md), and
+[import-only status wording](import-analysis-wording.md). Subsequent work includes
+[explicit receipt selection](explicit-receipt-evidence.md), conservative
+[send register origins](objc-send-register-origins.md), and
+[opaque Objective-C pointees](objc-opaque-pointee.md).
+Their linked validation records remain authoritative for their bounded scopes.
+
+The [owned stateful-loop assessment](owned-stateful-method-assessment.md) recovered
+useful guards, iteration, writes and uncertainty without establishing a new
+pseudocode semantic defect. Its concrete `^?` declaration-decoding gap is addressed.
+The [return annotation experiment](objc-return-feasibility.md) was rejected: a
+plausible result could be fabricated and argument visibility degraded. Do not
+revive signature injection or manufacture another narrow instruction feature
+without a reproducible investigation need.
+
+Next perform an integrated, consumer-style **offline replay** of one existing,
+authorized Calendar receipt selection through the current installed-in-isolation
+CLI. First verify the saved project, slice identities, selected receipt integrity
+and precise question. Use existing dossier, reference links, token windows and
+metadata where evidence permits. Record whether the question is answered,
+partially supported or unresolved; distinguish navigation friction, missing
+saved evidence and genuinely unsupported analysis. Preserve indirect-target,
+receiver, side-effect and runtime-behavior unknowns. Missing saved inputs block
+that replay, not justification to invent a receipt or silently capture new code.
+
+Acceptance: exact receipts and CLI revision pinned; hash all project files, including
+existing locks, before first replay and record any transfer/setup changes separately;
+deterministic repeated output with engine unavailable; unchanged project bytes and
+no new jobs; preserved partial exit/status semantics; explicit question/evidence/
+unknown table; independently reviewed generic improvement recommendation. Keep
+private artifacts and application-specific findings out of the public repository.
+This is not live consumer feedback, new native capture, application execution or
+a fresh full Mac regression gate. Do not restart Taskovsky or change its installed
+CLI for this step. A further product change requires a concrete reproduced gap.
+
+Batch startup amortization remains a separate deferred feasibility proposal;
+broader Swift recovery, arbitrary dispatch and source-equivalence remain outside
+this step. The strategic limitation is evidence of practical usefulness on the
+current real workflow, not a demonstrated need for another decoder feature.
 
 ## Current reconciliation
 
@@ -55,9 +96,11 @@ These are observed presentation/workflow gaps, not evidence that omitted callers
 are absent or that pseudocode proves runtime behavior. No generalized speed or
 accuracy claim follows from this trial. No private artifacts are included here.
 
-## Next priorities and measurable acceptance
+## Historical consumer priorities and measurable acceptance
 
-Each item below is **planned, not implemented or validated by this plan change**.
+All three slices below are now implemented; their original acceptance requirements
+are retained for audit. Read the linked validation records above for actual gates,
+not this historical wording as a current implementation queue.
 Full Ghidra headless remains the decompiler; these are bounded investigation and
 presentation improvements, not a new decompiler or whole-image analysis mandate.
 
@@ -124,9 +167,10 @@ Acceptance before merge:
 Run specification review, implementation review, full primary/relevant analysis
 suites and installed-package replay per slice, then reconcile the integrated tree.
 Record fresh native capture, native full-suite results, offline replay and live
-consumer feedback separately; none implies the others. Current main integration
+consumer feedback separately; none implies the others. The historical PR48 integration
 passed 924 primary and 115 analysis tests in the cloud plus installed owned native
-receipt replay. This is not a fresh full Mac suite, live execution or CI claim.
+receipt replay. PR58's runtime checkpoint passed 969 primary and 115 analysis
+tests in the cloud and isolated installed-package owned-receipt replay. This is not a fresh full Mac suite, live execution or CI claim.
 
 The completed consumer trial closes the old "renewed trial needed" action for its
 actual scope only. A later scoped trial should check the three acceptance outcomes
