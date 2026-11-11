@@ -1,6 +1,6 @@
 # Scoped investigation follow-up plan
 
-Reconciled after PR58 (main `62ded8bc71379cbd6175c6228736d47bce9a0376`).
+Reconciled after PR63 (main `7771e8fc2d707e4d2cb7c1d82a08d4fa0b97255d`).
 This document records generic product requirements and validation limits, not
 private application artifacts or runtime conclusions. Historical acceptance
 requirements remain below; completed work is not a request to implement it again.
@@ -24,30 +24,65 @@ plausible result could be fabricated and argument visibility degraded. Do not
 revive signature injection or manufacture another narrow instruction feature
 without a reproducible investigation need.
 
-Next perform an integrated, consumer-style **offline replay** of one existing,
-authorized Calendar receipt selection through the current installed-in-isolation
-CLI. First verify the saved project, slice identities, selected receipt integrity
-and precise question. Use existing dossier, reference links, token windows and
-metadata where evidence permits. Record whether the question is answered,
-partially supported or unresolved; distinguish navigation friction, missing
-saved evidence and genuinely unsupported analysis. Preserve indirect-target,
-receiver, side-effect and runtime-behavior unknowns. Missing saved inputs block
-that replay, not justification to invent a receipt or silently capture new code.
+### Completed offline consumer comparisons
 
-Acceptance: exact receipts and CLI revision pinned; hash all project files, including
-existing locks, before first replay and record any transfer/setup changes separately;
-deterministic repeated output with engine unavailable; unchanged project bytes and
-no new jobs; preserved partial exit/status semantics; explicit question/evidence/
-unknown table; independently reviewed generic improvement recommendation. Keep
-private artifacts and application-specific findings out of the public repository.
-This is not live consumer feedback, new native capture, application execution or
-a fresh full Mac regression gate. Do not restart Taskovsky or change its installed
-CLI for this step. A further product change requires a concrete reproduced gap.
+The saved Calendar replay completed with pinned input hashes, repeated identical
+output, engine unavailable, no new jobs and unchanged saved project files. Its
+concrete navigation friction led to bounded ambiguous-token candidate previews;
+those do not select a token automatically or change raw pseudocode.
 
-Batch startup amortization remains a separate deferred feasibility proposal;
-broader Swift recovery, arbitrary dispatch and source-equivalence remain outside
-this step. The strategic limitation is evidence of practical usefulness on the
-current real workflow, not a demonstrated need for another decoder feature.
+The [owned Swift assessment](owned-swift-value-assessment.md) then identified two
+call-boundary information omissions. [Register relationships](focused-register-relations.md)
+now expose unchanged call inputs and opaque post-call context forwarding. Explicit
+bit-test fallthrough connects the latter only under a recorded guard and normal-return
+hypotheses. Neither change repairs Ghidra's inferred prototype or proves a runtime
+indirect target. The earlier recommendation to investigate that mechanism is no
+longer an unimplemented proposal.
+
+An independent output reader confirmed the added provenance remains static and
+conditional, while the original UI-attribution question stays unanswered. The
+comparison was not blinded to earlier history. It also noted verbose register
+inventories; that is usability feedback, not evidence to widen analysis semantics.
+
+A further comparison replayed the two existing authorized Calendar selections
+with this relationship view. The original question remained: establish a direct
+transfer, inspect conditional effects, and determine whether attribution to live
+UI state is justified. Default and opt-in bit-path modes each ran twice on both
+selections: eight invocations, all exit6, identical repeats and unchanged project
+hashes/job inventory. The isolated wheel matched the PR63 implementation; engine
+and Java locations were unavailable. No application-specific contents are recorded
+here. This was offline comparison, not a timed user study, live consumer feedback,
+fresh native capture or full Mac regression run.
+
+| Question | Outcome and limit |
+| --- | --- |
+| Selected direct transfer | Already supported by saved references/bytes; the new view adds register provenance at the boundary. |
+| Context supplied to a subsequent indirect call | Additional opaque post-call register forwarding is visible under normal-return/AAPCS64 assumptions. No typed context, concrete destination or application receiver is recovered. |
+| Later conditional effects and live UI attribution | Still unresolved by this prefix: it stops at the indirect invocation. Raw pseudocode remains separately inspectable; the relationship view does not prove the rest of the function or UI reachability. |
+
+The bit-test option adds no reach for these two selected prefixes: they stop at a
+direct-transfer boundary and an indirect-invocation boundary, respectively, not an
+unsupported bit-test. Adding another branch opcode or assuming the indirect call
+returns would not resolve the actual target/context evidence gap.
+
+### Next decision gate
+
+Do not add a product feature solely because an indirect target remains unknown.
+First select one concrete investigation question and establish whether existing
+saved evidence can identify the missing context/target, or whether new scoped
+static capture or a live behavior check is required. Use that evidence to create
+an owned reproducer and independent negative controls before implementing any
+new semantics. An explicit unresolved result is preferable to manufacturing a
+callee signature, applying a suggestive name or skipping a call boundary.
+
+For this frozen investigation question, the remaining blocker is evidence
+connecting static conditional facts to the application's actual use, not missing
+pseudocode generation: selected-function
+pseudocode already works within its recorded coverage. A future authorized
+consumer session can test whether the added call evidence helps a current task;
+this plan does not restart Taskovsky or install the CLI. Broader Swift recovery,
+arbitrary dispatch, source-equivalence and batch startup optimization remain
+separate deferred work. Preserve private evidence outside the public repository.
 
 ## Current reconciliation
 
