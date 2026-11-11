@@ -1,7 +1,7 @@
 """One explicit saved-receipt link; never discover or execute dynamic targets."""
 import copy
 
-from . import callback_evidence, focused, import_disasm, jobs, metadata
+from . import callback_evidence, destination_effects, focused, import_disasm, jobs, metadata
 from .errors import Error
 
 POLICY = 'macscope-callback-receipt-link/1'
@@ -35,14 +35,17 @@ def attach(project, image, raw, response, job_id, *, abi=None, provenance=False)
                  if site['kind'] in ('direct_branch', 'direct_call') and site['target_va'] == hex(start)]
     if len(transfers) != 1:
         link['reason'] = 'selected_direct_destination_not_proven'
+        link['destination_effects'] = destination_effects.project(raw, link)
         return result
     try:
         extent, _ = focused.extent(raw, image, hex(start), policy='macscope-focused-import/1')
     except Error as exc:
         link.update(reason='destination_linker_extent_unavailable', extent_error=exc.code)
+        link['destination_effects'] = destination_effects.project(raw, link)
         return result
     if end > int(extent['end_va_exclusive'], 16):
         link['reason'] = 'destination_selection_exceeds_linker_extent'
+        link['destination_effects'] = destination_effects.project(raw, link)
         return result
     link.update(status='verified_direct_entry_link', transfer=transfers[0], destination_extent=extent)
     if abi or provenance:
@@ -72,4 +75,5 @@ def attach(project, image, raw, response, job_id, *, abi=None, provenance=False)
                 'source_call_conditions': list(transfers[0].get('conditional_on_calls', [])),
                 'destination_call_conditions': list(site.get('conditional_on_calls', []))})
         link['store_relations'] = relations
+    link['destination_effects'] = destination_effects.project(raw, link)
     return result
