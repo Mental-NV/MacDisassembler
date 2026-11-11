@@ -564,7 +564,9 @@ class ObjCImage:
                         field_reason = "missing_type_pointer"
                         raise ValueError("Ivar type encoding is missing")
                     field, field_va, field_reason = "type_encoding", None, "invalid_string"
-                    type_encoding = self.view.string(encoding)
+                    encoding_offset, _, _ = self.view.mapping(encoding,1)
+                    empty_encoding = self.view.data[encoding_offset:encoding_offset+1] == b"\0"
+                    type_encoding = "" if empty_encoding else self.view.string(encoding)
                     anonymous = not name and type_encoding.startswith("b") and type_encoding[1:].isdecimal()
                     if not name and not anonymous:
                         field, field_va, field_reason = "name_pointer", record+8, "missing_name_pointer"
@@ -580,6 +582,15 @@ class ObjCImage:
                                  "record_va":hex(record), "name_va":hex(name) if name else None, "type_encoding_va":hex(encoding),
                                  "alignment_raw":hex(alignment), "alignment_bytes":8 if alignment==0xffffffff else 1<<alignment,
                                  "size_bytes":size, "origin":"objc_ivar_list", **self.ivar_offset(record,anonymous=anonymous)})
+                    if empty_encoding:
+                        rows[-1]["encoding_evidence"] = {
+                            "status":"unavailable", "reason_code":"empty_recorded_encoding",
+                            "pointer_va":hex(record+16), "storage_va":hex(encoding), "bytes":"00",
+                            "scope":"recorded_metadata_not_inferred_type"}
+                        self.gaps.add("ivar_type_unavailable")
+                        self.ivar_diagnostic("empty_recorded_encoding",index=index,record=record,
+                                             required="nonempty type encoding; row retained with unknown type",
+                                             field="type_encoding",field_va=encoding)
                     if rows[-1]["offset_status"] in {"unavailable","external_bind"}:
                         self.ivar_diagnostic(rows[-1]["offset_evidence"]["reason_code"],index=index,record=record,
                                              required="verified local nonnegative int32 offset; row retained",

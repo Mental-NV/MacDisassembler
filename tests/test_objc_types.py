@@ -1,5 +1,6 @@
 """Owned type grammar and opt-in CLI presentation; no native engine required."""
 import json
+import io
 import random
 import struct
 import unittest
@@ -214,6 +215,27 @@ class DecoderCliTests(TemporaryCase):
         second = self.query(project,'methods','--decode-types','--cursor',cursor)
         self.assertEqual(len(second['data']),1)
         self.assertIsNone(second['coverage']['next_cursor'])
+
+    def test_empty_ivar_decode_filter_keeps_partial(self):
+        from test_objc import owned_empty_ivar_fixture
+        project=self.stage(bytes(owned_empty_ivar_fixture()))
+        for args in [[],['--class-slot',hex(BASE+0x300)],['--name-contains','owned']]:
+            result=self.query(project,'ivars','--decode-types',*args)
+            validate_envelope(result)
+            row,=result['data']
+            self.assertEqual(row['type_encoding'],'')
+            self.assertEqual(row['decoded_types']['status'],'invalid')
+            self.assertEqual(row['decoded_types']['diagnostics'],['empty_or_nontext_encoding'])
+            self.assertEqual(result['status'],'partial')
+            self.assertIn('ivar_type_unavailable',result['coverage']['truncation_reason'])
+        class Output:
+            buffer=io.BytesIO()
+        output=Output()
+        with patch('sys.stdout',output), patch.object(engine,'dependencies',side_effect=AssertionError('engine forbidden')):
+            code=cli.main(['objc','ivars','--project',str(project.path),'--class-slot',hex(BASE+0x300),
+                           '--decode-types','--name-contains','owned','--json'])
+        self.assertEqual(code,6)
+        self.assertEqual(json.loads(output.buffer.getvalue())['status'],'partial')
 
     def test_ivar_decoding_preserves_recorded_offsets(self):
         data = bytearray(property_fixture())
