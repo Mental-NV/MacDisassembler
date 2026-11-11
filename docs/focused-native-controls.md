@@ -40,9 +40,10 @@ inference, signature commit or pseudocode export.
 Snapshot every bounded code unit/function and both actual selected byte ranges.
 An ordinary initialized-memory read failure remains fatal. If the live Memory
 API positively identifies a code unit as wholly contained in an uninitialized
-block, record that explicit initialization state and block/range provenance
+non-mapped block, record that explicit initialization state and block/range provenance
 instead of inventing zero bytes or omitting the unit. Unknown, mixed, missing or
-cross-block coverage fails closed. Host validation must bind each such marker to
+cross-block or mapped-block coverage fails closed. `isInitialized() == false`
+alone is insufficient: mapped blocks can report false while partially initialized. Host validation must bind each such marker to
 its recorded uninitialized block and contained unit range. Caller/callee memory
 rows still require real initialized bytes matching their immutable extent hashes.
 Equal uninitialized markers prove equal reported initialization/range state, not
