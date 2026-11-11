@@ -290,7 +290,8 @@ def parser():
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl','html'))
     s.add_argument('--include-annotations',action='store_true')
     s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed evidence')
-    common(s,('json','html','text','compact','dossier'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
+    common(s,('json','html','text','compact','dossier','links'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
+    s.add_argument('--reference-links',action='store_true',help='Attach compact selected saved-receipt reference links and safe xrefs hints')
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s.add_argument('--link-focused',action='store_true',help='Verify direct calls between selected focused receipts')
     s.add_argument('--objc-types',action='store_true',help='Attach exact Objective-C declarations and conditional ABI register roles')
@@ -1844,8 +1845,11 @@ def execute_command(a, address_selection=None):
     if a.command == 'evidence':
         report = objc_type_evidence.redact_report(evidence.export(p,evidence.load(a.leads),link_imports=a.link_imports,
                                                   link_focused=a.link_focused,objc_types=a.objc_types),redact)
+        if a.reference_links or a.format == 'links':
+            from . import selected_reference_links
+            report['selected_reference_links']=selected_reference_links.build(p,report)
         count = len(report['leads'])
-        partial = any(row['status'] != 'resolved' for row in report['leads'])
+        partial = any(row['status'] != 'resolved' for row in report['leads']) or 'selected_reference_links' in report
         return envelope(command,report,status='partial' if partial else 'complete',
                         cov=coverage('reviewer-selected evidence leads',count,count,partial,
                                      reason='lead_evidence_incomplete' if partial else None))
@@ -2128,6 +2132,9 @@ def render(result,fmt, *, token_start=None, window_address=None):
     if fmt=='window':
         from . import pseudocode_window
         return pseudocode_window.render(result,token_start=token_start,address=window_address)
+    if fmt=='links':
+        from . import selected_reference_links
+        return selected_reference_links.render(result)
     if fmt=='addressed':
         from . import addressed_pseudocode
         return addressed_pseudocode.render(result)
