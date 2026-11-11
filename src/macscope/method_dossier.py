@@ -50,6 +50,18 @@ class LeadView:
         return '\n'.join(self.lines) + '\n'
 
 
+def focused_function_source(function, query, pin):
+    """Recognize recorded focused payload placement; receipt checks belong upstream."""
+    origin = function.get('origin')
+    return (isinstance(query, dict) and query.get('status') in ('complete', 'partial')
+            and isinstance(origin, dict) and origin.get('mode') == 'focused_readonly_import'
+            and isinstance(origin.get('job_id'), str) and bool(origin['job_id'])
+            and query.get('origin') == origin
+            and isinstance(origin.get('extent'), dict)
+            and bool(pin.get('import_program_sha256'))
+            and origin['extent'].get('program_sha256') == pin['import_program_sha256'])
+
+
 def lead_view(row, pin, types):
     view = LeadView()
     f = view.field
@@ -69,15 +81,20 @@ def lead_view(row, pin, types):
     view.line(f"Function {f(function.get('function_id'))}; entry {f(function.get('entry_va'))}")
     query = row.get('query')
     code = query if isinstance(query, dict) and 'pseudocode' in query else function
-    source = 'selected saved query' if code is query else 'saved function'
+    focused_source = code is function and focused_function_source(function, query, pin)
+    source = ('selected saved query' if code is query else
+              'selected import-focused query (function payload)' if focused_source else
+              'saved function' if pin.get('analysis_id') else 'recorded function payload (query relationship unestablished)')
     view.line(f"Pseudocode source: {source}; decompile status: {f(code.get('decompile_status'))}")
-    view.line("Recorded function signature: " + f(function.get('signature')))
+    view.line("Recorded function signature metadata: " + f(function.get('signature')))
+    view.line('Signature metadata may differ from pseudocode-inferred arguments; neither is reconciled or a verified source declaration.')
     view.line("Recorded pseudocode truncation: " + f(code.get('pseudocode_truncated')))
     view.line(f"Source job: {f((code.get('origin') or {}).get('job_id'))}; query status: {f((query or {}).get('status'))}")
-    if isinstance(query, dict) and code is function:
-        view.line('Selected query has no pseudocode; displayed fallback is the saved function, not a successful query.')
+    if isinstance(query, dict) and code is function and not focused_source:
+        view.line('No inline query pseudocode or matching focused-query provenance; function payload is not established as this query output.')
     if types is None:
-        view.line('Declaration context not requested/available. Add --objc-types for exact metadata binding.')
+        view.line('Declaration context not requested/available.' +
+                  (' Add --objc-types for exact metadata binding.' if lead.get('kind') == 'objc_selector' else ''))
     else:
         view.line(f"Declaration context: {f(types['status'])}; reason {f(types['reason'])}")
         view.line('Recorded type encoding: ' + f((types.get('declaration') or {}).get('type_encoding')))
@@ -120,7 +137,8 @@ def lead_view(row, pin, types):
     view.items('Code lines', lines, 40, lambda i, x: f'{i + 1}: ' + f(x))
     if not lines:
         view.line('Pseudocode unavailable: ' + f(code.get('decompile_error')))
-    view.line('Instruction/reference samples below come from the saved function, not the query pseudocode.')
+    view.line('Instruction/reference samples below come from the selected import-focused function payload.' if focused_source else
+              'Instruction/reference samples below come from the saved function, not the query pseudocode.')
     view.items('Instructions', function.get('instructions') or [], 8,
                lambda i, x: f(x.get('addr')) + ' ' + f(x.get('bytes')) + ' ' + f(x.get('text') or x.get('mnemonic')))
     for direction in ('to', 'from'):
