@@ -1,6 +1,9 @@
 # Bounded callback composition (F4b)
 
-Composition policy 2 adds [explicit split-load and invocation-path opt-ins](split-invocation-obligations.md).
+Composition policy 3 adds [bounded explicit writer-call obligations](writer-call-obligations.md),
+without upgrading application attribution or runtime claims. Writer indirect
+invocations remain gaps, retaining earlier store facts.
+Policy 2 adds [explicit split-load and invocation-path opt-ins](split-invocation-obligations.md).
 The paired-only contract below remains the default; the native whole-chain limit
 remains until all its roles satisfy their obligations.
 

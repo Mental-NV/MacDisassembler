@@ -189,6 +189,7 @@ def parser():
             s.add_argument('--callback-provenance',action='store_true',help='Track symbolic input registers without preserving values across calls')
             s.add_argument('--callback-abi',choices=('aapcs64',),help='Explicit conditional call-preservation hypothesis; requires --callback-evidence')
             s.add_argument('--callback-context-register',choices=[f'x{i}' for i in (*range(8),*range(19,30))],help='Explicit machine-register pin for split context loads; requires composition receipts')
+            s.add_argument('--callback-writer-call-obligations',action='store_true',help='Bounded writer-call hypotheses; requires composition and explicit AAPCS64')
             s.add_argument('--callback-invocation-fallthrough',action='store_true',help='Record invocation CBZ/CBNZ fallthrough obligations; requires composition receipts')
             s.add_argument('--callback-assignment-receipt',help='Saved paired callback assignment receipt for conditional composition')
             s.add_argument('--callback-invocation-receipt',help='Saved paired callback invocation receipt for conditional composition')
@@ -565,7 +566,8 @@ def imported_disassembly(args, project, image, start, end):
             if not (assignment and invocation and target and args.receipt and (abi or provenance)):
                 raise Error('callback_scope','Composition requires assignment, invocation, thunk and writer receipts plus provenance',2)
             response = callback_composition.attach(project,image,raw_slice,response,assignment,invocation,abi=abi,provenance=provenance,
-                context_register=getattr(args,'callback_context_register',None),invocation_fallthrough=getattr(args,'callback_invocation_fallthrough',False))
+                context_register=getattr(args,'callback_context_register',None),invocation_fallthrough=getattr(args,'callback_invocation_fallthrough',False),
+                writer_calls=getattr(args,'callback_writer_call_obligations',False))
         return response
     if args.receipt:
         response = import_disasm.replay(project,image,proof,payload,args.receipt)
@@ -1656,6 +1658,8 @@ def execute_command(a, address_selection=None):
     import_disassembly = a.command == 'disasm' and a.from_import
     if a.command == 'disasm' and (a.receipt or import_disassembly) and (not import_disassembly or va_range is None):
         raise Error('disasm_scope','Import disassembly and receipt replay require --from-import --range START:END',2)
+    if a.command == 'disasm' and a.callback_writer_call_obligations and not (a.callback_assignment_receipt and a.callback_invocation_receipt and a.callback_abi == 'aapcs64'):
+        raise Error('callback_scope','Writer-call obligations require composition receipts and explicit AAPCS64',2)
     if a.command == 'disasm' and (a.callback_context_register or a.callback_invocation_fallthrough) and not (a.callback_assignment_receipt and a.callback_invocation_receipt):
         raise Error('callback_scope','Invocation context/path options require composition receipts',2)
     if a.command == 'disasm' and (a.callback_assignment_receipt or a.callback_invocation_receipt) and not (a.callback_assignment_receipt and a.callback_invocation_receipt and a.receipt and a.callback_target_receipt and a.callback_evidence and (a.callback_provenance or a.callback_abi)):

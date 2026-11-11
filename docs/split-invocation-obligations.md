@@ -1,6 +1,8 @@
 # F5e: split-load invocation and conditional fallthrough obligations
 
-Spec-first, callback policy 6 / composition policy 2. Default paired invocation
+Spec-first, callback policy 6 / composition policy 2. A later, separately gated
+[writer-call contract](writer-call-obligations.md) addresses the native writer-role
+barrier; without that opt-in the writer limitation described below still holds. Default paired invocation
 matching and existing barriers are unchanged. New composition-only flags:
 
 - `--callback-context-register x20` pins the **analyst-selected machine register**
