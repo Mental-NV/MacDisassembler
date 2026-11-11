@@ -415,7 +415,8 @@ class ObjCImage:
             except ValueError:
                 self.gaps.add("invalid_property_protocol")
 
-    def ivar_diagnostic(self, reason, *, index=None, record=None, required, count=None):
+    def ivar_diagnostic(self, reason, *, index=None, record=None, required, count=None,
+                        field=None, field_reason=None, field_va=None):
         if count is not None:
             self.ivar_unvisited_count += count
         if len(self.ivar_diagnostics) >= MAX_IVAR_DIAGNOSTICS:
@@ -423,6 +424,10 @@ class ObjCImage:
             return
         location = f"class_va={self.ivar_owner or 'unknown'} index={index if index is not None else 'unknown'} record_va={hex(record) if record is not None else 'unknown'}"
         suffix = f" declared_unvisited_count={count}" if count is not None else ""
+        if field is not None:
+            suffix += (f" field={field} field_reason_code={field_reason or reason}"
+                       f" field_va={hex(field_va) if field_va is not None else 'unknown'}"
+                       f" field_mapping={'verified' if field_va is not None else 'unknown'}")
         self.ivar_diagnostics.append(f"Ivar diagnostic: {reason}; {location}; missing={required}.{suffix}")
 
     def export_ivar_diagnostics(self, diagnostics):
@@ -500,12 +505,14 @@ class ObjCImage:
         result = {"declared_offset_bytes":None,"offset_storage_va":None,"offset_status":"unavailable",
                   "offset_pointer_va":hex(site),
                   "offset_evidence":{"status":"missing","required":"verified local offset pointer and file-backed nonnegative int32 value"}}
+        field, field_va = "offset_pointer", site
         try:
             # Resolve lazily scoped fixups before inspecting an external bind.
             binding = self.relocation(site)
             if binding.get("kind") == "bind":
                 self.gaps.add("ivar_offset_unavailable")
-                result["offset_evidence"]["reason_code"] = "external_binding"
+                result["offset_evidence"].update(reason_code="external_binding",field=field,
+                                                field_va=hex(field_va),field_mapping="verified")
                 return dict(result,offset_status="external_bind",offset_symbol=binding["symbol"],
                             offset_library=binding["library"])
             address = self.target(site)
@@ -515,7 +522,9 @@ class ObjCImage:
                                 offset_evidence={"status":"not_recorded","reason":"anonymous_bitfield"})
                 raise ResolutionFailure("missing_offset_pointer","Ivar offset storage is missing")
             result["offset_storage_va"] = hex(address)
+            field, field_va = "offset_storage", None
             value, = self.view.unpack("<i",address)
+            field, field_va = "offset_value", address
             if value < 0:
                 raise ResolutionFailure("negative_offset","Negative initial ivar offset")
             return dict(result,declared_offset_bytes=value,offset_status="recorded",
@@ -526,6 +535,8 @@ class ObjCImage:
         except ValueError as error:
             result["offset_evidence"]["reason"] = str(error)
             result["offset_evidence"]["reason_code"] = self.ivar_failure(error,"unavailable_offset")
+            result["offset_evidence"].update(field=field,field_va=hex(field_va) if field_va is not None else None,
+                                            field_mapping="verified" if field_va is not None else "unknown")
             self.gaps.add("ivar_offset_unavailable")
             return result
 
@@ -541,31 +552,44 @@ class ObjCImage:
                     self.view.mapping(record,32)
                 except ValueError as error:
                     self.ivar_diagnostic(self.ivar_failure(error,"unavailable_record_bytes"),index=index,
-                                         required="unambiguous file-backed complete record")
+                                         required="unambiguous file-backed complete record",field="record")
                     self.gaps.add("unavailable_ivar_record_bytes")
                     continue
                 try:
-                    name, encoding = self.target(record+8), self.target(record+16)
+                    field, field_va, field_reason = "name_pointer", record+8, "invalid_pointer"
+                    name = self.target(record+8)
+                    field, field_va = "type_pointer", record+16
+                    encoding = self.target(record+16)
                     if not encoding:
+                        field_reason = "missing_type_pointer"
                         raise ValueError("Ivar type encoding is missing")
+                    field, field_va, field_reason = "type_encoding", None, "invalid_string"
                     type_encoding = self.view.string(encoding)
                     anonymous = not name and type_encoding.startswith("b") and type_encoding[1:].isdecimal()
                     if not name and not anonymous:
+                        field, field_va, field_reason = "name_pointer", record+8, "missing_name_pointer"
                         raise ValueError("Ivar name is missing")
+                    field, field_va, field_reason = "alignment", record+24, "invalid_alignment"
                     alignment,size = self.view.unpack("<II",record+24)
                     if alignment > 31 and alignment != 0xffffffff:
                         raise ValueError("Invalid ivar alignment")
-                    rows.append({"name":self.view.string(name) if name else None, "type_encoding":type_encoding,
+                    field, field_va, field_reason = "name_string", None, "invalid_string"
+                    name_text = self.view.string(name) if name else None
+                    rows.append({"name":name_text, "type_encoding":type_encoding,
                                  "class_name":owner["name"], "class_va":owner["class_va"], "address_space":"ram",
                                  "record_va":hex(record), "name_va":hex(name) if name else None, "type_encoding_va":hex(encoding),
                                  "alignment_raw":hex(alignment), "alignment_bytes":8 if alignment==0xffffffff else 1<<alignment,
                                  "size_bytes":size, "origin":"objc_ivar_list", **self.ivar_offset(record,anonymous=anonymous)})
                     if rows[-1]["offset_status"] in {"unavailable","external_bind"}:
                         self.ivar_diagnostic(rows[-1]["offset_evidence"]["reason_code"],index=index,record=record,
-                                             required="verified local nonnegative int32 offset; row retained")
+                                             required="verified local nonnegative int32 offset; row retained",
+                                             field=rows[-1]["offset_evidence"]["field"],
+                                             field_va=(int(rows[-1]["offset_evidence"]["field_va"],16)
+                                                       if rows[-1]["offset_evidence"]["field_va"] is not None else None))
                 except ValueError as error:
                     self.ivar_diagnostic(self.ivar_failure(error,"invalid_record"),index=index,record=record,
-                                         required="valid local name, type encoding and alignment")
+                                         required="valid local name, type encoding and alignment",field=field,
+                                         field_reason=self.ivar_failure(error,field_reason),field_va=field_va)
                     self.gaps.add("invalid_ivar_record")
             remaining -= len(visited)
             if len(visited) < len(records):
