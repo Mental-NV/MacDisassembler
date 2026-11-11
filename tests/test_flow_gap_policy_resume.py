@@ -1,4 +1,4 @@
-"""Current-policy receipts and immutable v2 replay using owned saved slices."""
+"""Current-policy receipts and immutable v2/v3 replay using owned saved slices."""
 import copy
 import json
 from unittest.mock import patch
@@ -8,8 +8,8 @@ import test_flow_gap_evidence
 
 
 class CurrentPolicyReceiptTests(test_flow_gap_evidence.GapReceiptTests):
-    def test_default_v3_request_and_v2_gap_policy_are_bound(self):
-        self.assertEqual(self.proof['policy'], 'macscope-focused-import/3')
+    def test_default_v4_request_and_v2_gap_policy_are_bound(self):
+        self.assertEqual(self.proof['policy'], 'macscope-focused-import/4')
         self.assertEqual(self.proof['flow_gap_classification']['policy'], flow_gap_classification.POLICY)
         result = self.capture()
         self.assertEqual(result['data']['origin']['extent'], self.proof)
@@ -17,7 +17,7 @@ class CurrentPolicyReceiptTests(test_flow_gap_evidence.GapReceiptTests):
                          'macscope-control-flow-gap-evidence/2')
         self.assertEqual(self.request['extent'], self.proof)
 
-    def test_v3_raw_gaps_and_evidence_cannot_be_removed_or_fabricated_after_rehash(self):
+    def test_current_raw_gaps_and_evidence_cannot_be_removed_or_fabricated_after_rehash(self):
         self.capture()
         path = self.workspace.path / 'jobs' / self.original / 'query-result.json'
         original = json.loads(path.read_bytes())
@@ -33,7 +33,7 @@ class CurrentPolicyReceiptTests(test_flow_gap_evidence.GapReceiptTests):
             with self.subTest(name=name):
                 self.assert_rejected_after_rehash(original, mutate)
 
-    def test_v3_forged_classification_and_request_proof_fail_production_receipts(self):
+    def test_current_forged_classification_and_request_proof_fail_production_receipts(self):
         self.capture()
         path = self.workspace.path / 'jobs' / self.original / 'query-result.json'
         original = json.loads(path.read_bytes())
@@ -80,3 +80,21 @@ class CurrentPolicyReceiptTests(test_flow_gap_evidence.GapReceiptTests):
             replay = self.resume()
         self.assertEqual(replay['data']['control_flow_gaps'], result['data']['control_flow_gaps'])
         self.assertEqual(path.read_bytes(), before)
+
+    def test_unfinished_v3_keeps_exact_v3_proof_during_capture_and_replay(self):
+        proof, _ = focused.select(self.workspace,self.image,self.entry,policy='macscope-focused-import/3')
+        self.proof=dict(proof,program_sha256=self.image['engine_baseline_sha256'])
+        self.request=jobs.focused_request(self.workspace,self.image,self.proof)
+        self.record.update(focused_import=self.proof,focused_request=self.request)
+        self.write_job(self.original,self.record)
+        result=self.capture()
+        self.assertEqual(result['data']['origin']['extent'],self.proof)
+        self.assertEqual(result['data']['origin']['extent']['policy'],'macscope-focused-import/3')
+        self.assertEqual(result['data']['control_flow_gaps'][0]['evidence']['policy'],flow_gap_evidence.POLICY)
+        path=self.workspace.path/'jobs'/self.original/'query-result.json';before=path.read_bytes()
+        with patch.object(engine,'run',side_effect=AssertionError('No v3 worker relaunch')), \
+                patch.object(engine,'dependencies',side_effect=AssertionError('No engine probe')):
+            replay=self.resume()
+        self.assertEqual(replay['data']['origin']['extent'],self.proof)
+        self.assertEqual(replay['data']['control_flow_gaps'],result['data']['control_flow_gaps'])
+        self.assertEqual(path.read_bytes(),before)
