@@ -9,6 +9,7 @@ import java.util.HexFormat;
 import java.util.Set;
 import java.util.TreeSet;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import ghidra.program.model.listing.Instruction;
@@ -19,6 +20,7 @@ import ghidra.program.model.pcode.SequenceNumber;
 import ghidra.program.model.pcode.Varnode;
 
 public class OwnedNativeControls extends OwnedScopedParameters {
+    static final Gson JSON=new GsonBuilder().serializeNulls().create();
     static final String CONTROL="macscope-owned-native-controls/1";
     static final String OWNED="53345f8f9ae61fb42d41136fdf1d1733c9bdd7bf6410bbe676ebb03a09e5eaa0";
     int commitCalls;
@@ -45,13 +47,33 @@ public class OwnedNativeControls extends OwnedScopedParameters {
         while(units.hasNext()) {
             monitor.checkCancelled(); if(++count>100000) throw new IllegalStateException("Snapshot listing limit");
             var u=units.next();
-            String r="unit:"+u.getMinAddress()+":"+u.getMaxAddress()+":"+u.getLength()+":"+
-                u.getClass().getName()+":"+HexFormat.of().formatHex(u.getBytes());
-            if(u instanceof Instruction i) {
-                r+=":"+i.getFlowType()+":"+i.getFlowOverride()+":"+i.getFallThrough();
-                for(var target:i.getFlows())r+=":"+target;
+            var block=currentProgram.getMemory().getBlock(u.getMinAddress());
+            if(block==null || block.isMapped() || !block.contains(u.getMaxAddress()) ||
+               currentProgram.getMemory().getBlock(u.getMaxAddress())!=block)
+                throw new IllegalStateException("Unknown, mapped or cross-block code unit");
+            JsonObject bd=new JsonObject();bd.addProperty("name",block.getName());
+            bd.addProperty("start", "0x"+Long.toHexString(block.getStart().getOffset()));
+            bd.addProperty("end", "0x"+Long.toHexString(block.getEnd().getOffset()));
+            bd.addProperty("initialized",block.isInitialized());bd.addProperty("mapped",block.isMapped());
+            records.add("block:"+JSON.toJson(bd));
+            JsonObject row=new JsonObject();
+            row.addProperty("start","0x"+Long.toHexString(u.getMinAddress().getOffset()));
+            row.addProperty("end","0x"+Long.toHexString(u.getMaxAddress().getOffset()));
+            row.addProperty("length",u.getLength());row.addProperty("kind",u.getClass().getName());row.add("block",bd);
+            if(u.getLength()<1 || u.getLength()>4*1024*1024)throw new IllegalStateException("Code unit byte limit");
+            if(block.isInitialized()) {
+                byte[] bytes=u.getBytes();
+                if(bytes.length!=u.getLength())throw new IllegalStateException("Incomplete initialized unit bytes");
+                row.addProperty("byte_state","read");row.addProperty("bytes",HexFormat.of().formatHex(bytes));
+            } else {
+                row.addProperty("byte_state","uninitialized");row.add("bytes",com.google.gson.JsonNull.INSTANCE);
             }
-            records.add(r);
+            String flow="";
+            if(u instanceof Instruction i) {
+                flow=i.getFlowType()+":"+i.getFlowOverride()+":"+i.getFallThrough();
+                for(var target:i.getFlows())flow+=":"+target;
+            }
+            row.addProperty("flow",flow);records.add("unit:"+JSON.toJson(row));
         }
         var functions=currentProgram.getFunctionManager().getFunctions(true); count=0;
         while(functions.hasNext()) {
@@ -73,12 +95,11 @@ public class OwnedNativeControls extends OwnedScopedParameters {
                !hash(bytes).equals(text(p,"extent_sha256"))) throw new IllegalStateException("Control memory differs");
             records.add("memory:"+name+":"+text(p,"entry_va")+":"+HexFormat.of().formatHex(bytes));
         }
-        String result=new Gson().toJson(records);
+        String result=JSON.toJson(records);
         if(result.getBytes(StandardCharsets.UTF_8).length>4*1024*1024)throw new IllegalStateException("Snapshot byte limit");
         return result;
     }
-    @Override public void run() throws Exception {
-        String[] args=getScriptArgs();
+    JsonObject initializeControl(String[] args) throws Exception {
         if(args.length!=3||!args[2].equals("25")||isHeadlessAnalysisEnabled()||!"12.2".equals(getGhidraVersion())||
            !OWNED.equals(currentProgram.getExecutableSHA256())||!ARM.equals(currentProgram.getLanguageID().getIdAsString()))
             throw new IllegalStateException("Fixed owned control only");
@@ -97,7 +118,14 @@ public class OwnedNativeControls extends OwnedScopedParameters {
             throw new IllegalStateException("Control request identity differs");
         String kind=text(spec,"control");
         if(!Set.of("prep_digest","prep_rollback","ast_scope").contains(kind))throw new IllegalStateException("Control kind");
-        String before,after,refusal;boolean present=false,absent=false;int positives=0;
+        return spec;
+    }
+
+    @Override public void run() throws Exception {
+        String[] args=getScriptArgs();JsonObject spec=initializeControl(args);
+        Path request=Path.of(args[0]),dir=request.getParent();
+        String kind=text(spec,"control");
+        String before,refusal;boolean present=false,absent=false;int positives=0;
         if(kind.equals("ast_scope")) {
             // Prepared-only asserted above before superclass can consider recovery.
             super.run();timeout=25;
@@ -123,7 +151,6 @@ public class OwnedNativeControls extends OwnedScopedParameters {
             try {checkNative(high);throw new IllegalStateException("Scope guard unexpectedly accepted injection");}
             catch(IllegalStateException e) {if(!refusal.equals(e.getMessage()))throw e;}
             if(checks.size()!=positives)throw new IllegalStateException("Rejected graph appended successful check");
-            after=snapshot();
             // No graph processing, redecompilation or export follows this point.
         } else {
             before=snapshot();JsonObject caller=trial.getAsJsonObject("caller");
@@ -138,16 +165,13 @@ public class OwnedNativeControls extends OwnedScopedParameters {
                 throw new IllegalStateException("Preparation unexpectedly succeeded");
             } catch(IllegalStateException e) {if(!refusal.equals(e.getMessage()))throw e;}
             absent=!Files.exists(report);if(!absent)throw new IllegalStateException("Preparation reported success");
-            after=snapshot();
         }
-        if(!before.equals(after)||commitCalls!=0)throw new IllegalStateException("Control mutated selected observable state");
-        JsonObject snapshots=new JsonObject();snapshots.addProperty("before",before);snapshots.addProperty("after",after);
-        Files.writeString(dir.resolve("control-snapshots.json"),new Gson().toJson(snapshots),StandardOpenOption.CREATE_NEW);
+        if(commitCalls!=0)throw new IllegalStateException("Control attempted commit");
         JsonObject out=new JsonObject();out.addProperty("schema",CONTROL);out.addProperty("control",kind);
         out.addProperty("image_sha256",OWNED);out.addProperty("request_sha256",text(spec,"request_sha256"));
-        out.add("caller",trial.get("caller"));out.add("callee",trial.get("callee"));out.addProperty("status","expected_refusal");
+        out.add("caller",trial.get("caller"));out.add("callee",trial.get("callee"));out.addProperty("status","refusal_observed");
         out.addProperty("refusal",refusal);out.addProperty("before_sha256",hash(before.getBytes(StandardCharsets.UTF_8)));
-        out.addProperty("after_sha256",hash(after.getBytes(StandardCharsets.UTF_8)));out.addProperty("commit_calls",commitCalls);
+        out.addProperty("commit_calls",commitCalls);
         out.addProperty("inference_attempted",false);out.addProperty("preparation_report_absent",absent);
         out.addProperty("positive_scope_checks",positives);out.add("positive_scope_evidence",checks);out.addProperty("rejected_scope_check_appended",false);
         out.addProperty("injected_operation_present",present);
@@ -157,6 +181,11 @@ public class OwnedNativeControls extends OwnedScopedParameters {
         JsonObject runtime=new JsonObject();runtime.addProperty("home",System.getProperty("java.home"));
         runtime.addProperty("version",System.getProperty("java.runtime.version"));runtime.addProperty("arch",System.getProperty("os.arch"));
         out.add("java_runtime",runtime);
-        Files.writeString(output,new Gson().toJson(out),StandardOpenOption.CREATE_NEW);
+        JsonObject stage=new JsonObject();stage.addProperty("schema","macscope-owned-native-control-stage/1");
+        stage.addProperty("status","refusal_observed");stage.addProperty("control_request_sha256",hash(Files.readAllBytes(dir.resolve("control.json"))));
+        stage.addProperty("before",before);stage.add("observation",out);
+        Files.writeString(dir.resolve("control-stage.json"),JSON.toJson(stage),StandardOpenOption.CREATE_NEW);
+        // Return normally: GhidraScript owns transaction completion. Stage is NOT a pass.
+
     }
 }

@@ -94,3 +94,21 @@ bound memory proofs, preserved observable-state snapshots and runtime checks.
 No synthetic graph is exported or allowed to reach parameter commit. Generic
 errors, missing evidence, snapshot read failures or unexpected mutation remain
 failures, not successful negative controls. No retry on uncertain teardown.
+
+### Staged transaction measurement
+
+The negative experiment writes only a pending `control-stage.json` observation.
+A second synchronous headless script measures restoration after the first script
+has returned and Ghidra has ended its transaction. Only this second measurement,
+validated again by the host against the pending stage and pinned requests, can
+produce a final control result. Missing stages or generic failures cannot pass.
+No transaction is manually closed; no synthetic HighFunction transfers between
+scripts.
+
+Snapshots preserve every capped code unit. Bytes are read only from explicitly
+initialized, nonmapped memory blocks. Definitely uninitialized, nonmapped units
+are represented by explicit block/range/state markers, never fabricated zeroes.
+Mapped, unknown, cross-block or inconsistent ranges fail. Initialized-memory read
+errors fail rather than being reclassified. Selected caller/callee bytes still
+must match their actual frozen hashes. Marker equality is initialization-state
+and range evidence, not evidence of unavailable byte contents.

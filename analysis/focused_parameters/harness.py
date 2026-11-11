@@ -201,6 +201,7 @@ def run_locked(project,args):
         if control is not None:
             sources=[p for p in sources if p.name!='MacscopeBridge.java']
             sources.append(Path(__file__).with_name('OwnedNativeControls.java'))
+            sources.append(Path(__file__).with_name('VerifyOwnedNativeControl.java'))
             pin(safe_path(controls.__file__))
         for src in sources:
             src=safe_path(src); pin(src); dst=scripts/src.name; shutil.copyfile(src,dst); pin(dst)
@@ -230,6 +231,7 @@ def run_locked(project,args):
                     source_bytes=cp[:4].hex(),target_kind='linker_function_start',target_bytes=cp[:4].hex())]
             write(tail,tail_plan);pin(tail)
             argv+=['-preScript','OwnedNativeControls.java',str(worker/'request.json'),str(worker/'recovery.json'),'25',
+                   '-preScript','VerifyOwnedNativeControl.java',str(worker/'request.json'),str(worker/'recovery.json'),'25',
                    '-scriptPath',str(scripts)]
         argv+=['-max-cpu','1','-analysisTimeoutPerFile','240','-log',str(worker/'engine.log'),'-scriptlog',str(worker/'script.log')]
         sandbox=engine.profile(project,deps,write_root=worker,read_only_program=True)
@@ -252,6 +254,8 @@ def run_locked(project,args):
             report=engine.read_worker_object(worker/'recovery.json.control.json',256*1024)
             snapshots=engine.read_worker_object(worker/'control-snapshots.json',16*1024*1024)
             controls.validate(report,control,request,digest(attempt/'request.json'),snapshots)
+            stage=engine.read_worker_object(worker/'control-stage.json',8*1024*1024)
+            controls.validate_stage(stage,report,snapshots,digest(worker/'control-stage.json'),digest(attempt/'control.json'))
             engine.engine_checks.verify_runtime(report['java_runtime'],deps['java_home'])
             require(not (worker/'controlled-focus.json').exists(), 'unexpected controlled focus success')
             if control=='ast_scope':
@@ -275,7 +279,7 @@ def run_locked(project,args):
         integrity_error=None
         try: recheck()
         except Exception as check: integrity_error=str(check)
-        write(attempt/'failure.json',{'schema':SCHEMA,'status':'failed','error':str(exc),'integrity_error':integrity_error})
+        write(attempt/'failure.json',{'schema':controls.SCHEMA if control is not None else SCHEMA,'status':'failed','error':str(exc),'integrity_error':integrity_error})
         raise
 
 
