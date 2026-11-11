@@ -186,6 +186,8 @@ def parser():
             s.add_argument('--from-import',action='store_true',help='Linearly decode a bounded --range from the saved no-analysis import')
             s.add_argument('--receipt',help='Replay one saved import-disassembly job for the same range')
             s.add_argument('--callback-evidence',action='store_true',help='Add conservative arm64 callback-site byte facts; not a target or writer proof')
+            s.add_argument('--callback-provenance',action='store_true',help='Track symbolic input registers without preserving values across calls')
+            s.add_argument('--callback-abi',choices=('aapcs64',),help='Explicit conditional call-preservation hypothesis; requires --callback-evidence')
             s.add_argument('--callback-target-receipt',help='Link exactly one saved destination receipt; requires --callback-evidence')
             selections.add_argument('--range',dest='va_range',metavar='START:END',
                                     help='Show saved instructions in an unslid VA range (exclusive end)')
@@ -548,9 +550,11 @@ def imported_disassembly(args, project, image, start, end):
     def annotate(response):
         if not getattr(args,'callback_evidence',False):
             return response
-        response = callback_evidence.project(response)
+        abi = getattr(args,'callback_abi',None)
+        provenance = getattr(args,'callback_provenance',False)
+        response = callback_evidence.project(response,abi=abi,provenance=provenance)
         target = getattr(args,'callback_target_receipt',None)
-        return callback_links.attach(project,image,raw_slice,response,target) if target else response
+        return callback_links.attach(project,image,raw_slice,response,target,abi=abi,provenance=provenance) if target else response
     if args.receipt:
         response = import_disasm.replay(project,image,proof,payload,args.receipt)
         return annotate(response)
@@ -1640,6 +1644,10 @@ def execute_command(a, address_selection=None):
     import_disassembly = a.command == 'disasm' and a.from_import
     if a.command == 'disasm' and (a.receipt or import_disassembly) and (not import_disassembly or va_range is None):
         raise Error('disasm_scope','Import disassembly and receipt replay require --from-import --range START:END',2)
+    if a.command == 'disasm' and a.callback_provenance and not a.callback_evidence:
+        raise Error('callback_scope','Register provenance requires --callback-evidence',2)
+    if a.command == 'disasm' and a.callback_abi and not a.callback_evidence:
+        raise Error('callback_scope','ABI hypothesis requires --callback-evidence',2)
     if a.command == 'disasm' and a.callback_target_receipt and not a.callback_evidence:
         raise Error('callback_scope','Target receipt requires --callback-evidence',2)
     if a.command == 'disasm' and a.callback_evidence and not import_disassembly:

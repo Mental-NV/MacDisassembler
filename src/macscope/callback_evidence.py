@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 
-POLICY = 'macscope-callback-sites/2'
+POLICY = 'macscope-callback-sites/3'
 MAX_INSTRUCTIONS = 1024
 MASK = (1 << 64) - 1
 
@@ -13,8 +13,11 @@ def signed(value, bits):
     return value - (1 << bits) if value & (1 << (bits-1)) else value
 
 
-def project(response):
+def project(response, *, abi=None, provenance=False):
     """Annotate a validated import disassembly without mutating its receipt."""
+    if abi not in (None, 'aapcs64'):
+        raise ValueError('Unsupported callback ABI hypothesis')
+    tracing = provenance or abi is not None
     result = copy.deepcopy(response)
     data = result['data']
     proof = data['selection']
@@ -22,6 +25,9 @@ def project(response):
               'source_envelope_sha256': hashlib.sha256(json.dumps(response, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')).hexdigest(),
               'selection': copy.deepcopy(proof),
               'status': 'inconclusive', 'sites': [], 'gaps': [],
+              'provenance_mode': 'aapcs64_conditional' if abi else ('register_inputs' if provenance else 'strict'),
+              'assumptions': ['selected-range input registers are symbolic',
+                              'direct callees obey AAPCS64 and return normally; arbitrary memory effects'] if abi else [],
               'interpreted_end_va': proof['start_va'], 'stop_reason': 'not_interpreted',
               'missing_evidence': ['closure_layout_and_context', 'runtime_invocation_target',
                                    'eventual_state_writer']}
@@ -43,13 +49,19 @@ def project(response):
             report['gaps'].append({'reason': 'invalid_instruction_evidence'})
             return result
         cursor += 4
-    regs = {}
+    regs = ({reg: {'kind': 'range_input_register', 'register': f'x{reg}',
+                   'selection_start_va': proof['start_va'], 'source_envelope_sha256': report['source_envelope_sha256']} for reg in range(31)} if tracing else {})
+    sp = {'kind': 'stack_pointer_relative', 'selection_start_va': proof['start_va'],
+          'source_envelope_sha256': report['source_envelope_sha256'], 'offset': 0}
+    conditions = []
     report['stop_reason'] = 'selected_prefix_end'
     for row in rows:
         va = int(row['addr'], 16)
         word = int.from_bytes(bytes.fromhex(row['bytes']), 'little')
         rd, rn = word & 31, (word >> 5) & 31
         site = {'instruction_va': row['addr'], 'instruction_bytes': row['bytes']}
+        if conditions:
+            site['conditional_on_calls'] = list(conditions)
         report['interpreted_end_va'] = hex(va + 4)
         def get(reg):
             return copy.deepcopy(regs.get(reg, {'kind': 'unknown', 'register': f'x{reg}'}))
@@ -60,6 +72,41 @@ def project(response):
             imm = signed(((word >> 5) & 0x7ffff) << 2 | ((word >> 29) & 3), 21)
             address = ((va & ~0xfff) + (imm << 12)) if word >> 31 else va + imm
             put(rd, {'kind': 'address', 'value': hex(address & MASK), 'origin_va': row['addr']})
+        elif abi and word & 0xff800000 in (0x91000000, 0xd1000000):
+            base = copy.deepcopy(sp) if rn == 31 else get(rn)
+            imm = ((word >> 10) & 0xfff) << (12 if word & (1 << 22) else 0)
+            delta = -imm if word & 0x40000000 else imm
+            if base['kind'] == 'stack_pointer_relative':
+                offset = base['offset'] + delta
+                if abs(offset) > 4096:
+                    report['gaps'].append(dict(site, reason='stack_delta_budget'))
+                    report['interpreted_end_va'] = hex(va)
+                    report['stop_reason'] = 'stack_delta_budget'
+                    break
+                value = dict(base, offset=offset)
+            elif base['kind'] in ('address', 'integer_constant'):
+                value = dict(base, value=hex((int(base['value'], 16) + delta) & MASK))
+            else:
+                value = {'kind': 'unknown_arithmetic', 'origin_va': row['addr'],
+                         'source_register': f'x{rn}', 'delta': delta}
+            if rd == 31:
+                if value['kind'] != 'stack_pointer_relative':
+                    report['gaps'].append(dict(site, reason='unknown_stack_assignment'))
+                    report['interpreted_end_va'] = hex(va)
+                    report['stop_reason'] = 'unknown_stack_assignment'
+                    break
+                sp = value
+            else:
+                put(rd, value)
+        elif abi and word & 0x7f800000 == 0x52800000 and rd != 31:
+            shift = ((word >> 21) & 3) * 16
+            if not word & 0x80000000 and shift > 16:
+                report['gaps'].append(dict(site, reason='invalid_movz_encoding'))
+                report['interpreted_end_va'] = hex(va)
+                report['stop_reason'] = 'unsupported_instruction_boundary'
+                break
+            put(rd, {'kind': 'integer_constant', 'value': hex(((word >> 5) & 0xffff) << shift),
+                     'origin_va': row['addr']})
         elif word & 0xff800000 == 0x91000000 and rn != 31 and rd != 31:
             base = get(rn)
             imm = ((word >> 10) & 0xfff) << (12 if word & (1 << 22) else 0)
@@ -69,7 +116,7 @@ def project(response):
         elif word & 0xffe0ffe0 == 0xaa0003e0 and ((word >> 16) & 31) != 31 and rd != 31:  # unshifted MOV Xd,Xm
             put(rd, get((word >> 16) & 31))
         elif word & 0xffc00000 in (0xf9000000, 0xf9400000) and rd != 31:
-            location = {'base': get(rn) if rn != 31 else {'kind': 'unknown_stack_pointer'},
+            location = {'base': get(rn) if rn != 31 else (copy.deepcopy(sp) if abi else {'kind': 'unknown_stack_pointer'}),
                         'base_register': f'x{rn}' if rn != 31 else 'sp',
                         'offset': ((word >> 10) & 0xfff)*8}
             if word & 0xffc00000 == 0xf9400000:
@@ -87,7 +134,7 @@ def project(response):
                 report['interpreted_end_va'] = hex(va)
                 report['stop_reason'] = 'unsupported_instruction_boundary'
                 break
-            base = get(rn) if rn != 31 else {'kind': 'unknown_stack_pointer'}
+            base = get(rn) if rn != 31 else (copy.deepcopy(sp) if abi else {'kind': 'unknown_stack_pointer'})
             offset = signed((word >> 15) & 0x7f, 7) * 8
             # Both lane addresses and store values use pre-instruction state.
             values = [get(rd), get(rt2)]
@@ -106,10 +153,23 @@ def project(response):
         elif word & 0x7c000000 == 0x14000000:  # B / BL immediate
             target = (va + signed(word & 0x3ffffff, 26) * 4) & MASK
             kind = 'direct_call' if word & 0x80000000 else 'direct_branch'
-            report['sites'].append(dict(site, kind=kind, target_va=hex(target)))
-            report['stop_reason'] = 'direct_transfer_boundary'
-            report['gaps'].append(dict(site, reason='direct_transfer_boundary'))
-            break
+            transfer = dict(site, kind=kind, target_va=hex(target))
+            if tracing:
+                transfer['register_inputs'] = {f'x{reg}': get(reg) for reg in (*range(8), *range(19, 30))}
+            report['sites'].append(transfer)
+            if abi and kind == 'direct_call':
+                if len(conditions) >= 32:
+                    report['gaps'].append(dict(site, reason='call_condition_budget'))
+                    report['stop_reason'] = 'call_condition_budget'
+                    break
+                conditions.append(row['addr'])
+                report['gaps'].append(dict(site, reason='unknown_call_effects', target_va=hex(target)))
+                for reg in (*range(19), 30):
+                    regs[reg] = {'kind': 'call_clobbered', 'register': f'x{reg}', 'call_va': row['addr']}
+            else:
+                report['stop_reason'] = 'direct_transfer_boundary'
+                report['gaps'].append(dict(site, reason='direct_transfer_boundary'))
+                break
         elif word & 0xfffffc1f == 0xd63f0000:  # BLR
             report['sites'].append(dict(site, kind='indirect_invocation', operand=get(rn), register=f'x{rn}'))
             report['gaps'].append(dict(site, reason='invocation_boundary'))

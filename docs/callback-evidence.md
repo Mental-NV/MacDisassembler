@@ -1,10 +1,11 @@
 # Bounded callback investigation evidence (F3a)
 
 Status: F3a implementation contract, not the F3 practical readiness gate.
-Current policy version 2 additionally implements [F3b paired storage and direct
-destination links](callback-links.md); version 1 below describes the original
-F3a projection. Both versions leave callback identity and writer attribution
-inconclusive.
+Current policy version 3 adds [opt-in input-register and conditional ABI
+provenance](callback-provenance.md), following [F3b paired storage and direct
+destination links](callback-links.md). Version 1 below describes the original
+F3a projection. All versions leave runtime callback identity and writer
+attribution inconclusive.
 
 `disasm --from-import --range START:END --callback-evidence` adds an optional
 read-only `callback_evidence` projection of the selected byte receipt. It is
