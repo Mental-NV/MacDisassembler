@@ -86,12 +86,18 @@ def lead_view(row, pin, types):
         abi = types.get('abi_projection') or {}
         view.line(f"ABI roles: {f(abi.get('status'))}; conditional on conforming IMP, not implementation verification.")
         view.line('ABI argument labels are generated; declarations do not verify implementation types.')
+        view.line('ABI widths describe values inside register containers, not upper-bit validity or extension.')
         view.items('ABI arguments', abi.get('arguments') or [], 8,
-                   lambda i, x: f(x.get('label')) + ' [' + f(x.get('role')) + '] -> ' + f(x.get('register')))
+                   lambda i, x: f(x.get('label')) + ' [' + f(x.get('role')) + '] -> ' + f(x.get('register')) + ' (' + f(x.get('width_bits')) + '-bit ' + f(x.get('representation')) + ')')
         if abi.get('reasons'):
             view.line('ABI unsupported: ' + f(', '.join(abi['reasons'])))
         if abi.get('return_value'):
-            view.line('Conditional return register: ' + f(abi['return_value'].get('register')))
+            returned = abi['return_value']
+            if returned.get('kind') == 'void':
+                view.line('Conditional return: void (no value register).')
+            else:
+                view.line('Conditional return register: ' + f(returned.get('register')) +
+                          ' (' + f(returned.get('width_bits')) + '-bit ' + f(returned.get('representation')) + ')')
     view.items('Flow gaps', code.get('control_flow_gaps') or [], 4,
                lambda i, x: f(x.get('reason')))
     tokens = token_preview.preview(code)

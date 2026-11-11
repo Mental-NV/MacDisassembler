@@ -5,7 +5,9 @@ from .metadata import VA
 
 
 POLICY = "macscope-objc-function-types/1"
-ABI_POLICY = "darwin-objc-word-registers/1"
+LEGACY_ABI_POLICY = "darwin-objc-word-registers/1"
+ABI_POLICY = "darwin-objc-word-registers/2"
+ABI_POLICIES = (LEGACY_ABI_POLICY, ABI_POLICY)
 FIELD = "objc_type_evidence"
 MAX_SIDECAR_BYTES = 96 * 1024
 GP = {"arm64": [f"x{n}" for n in range(8)],
@@ -17,15 +19,30 @@ LIMITATIONS = [
     "Encoded offsets are not used to infer registers, stack slots or object layout.",
     "No engine signature, pseudocode, annotation or saved receipt is changed.",
 ]
+SCALAR_LIMITATIONS = [
+    "width_bits describes the declared value inside a GP register container, not upper-bit validity or extension.",
+    "B has an 8-bit Boolean storage representation; c does not identify a source Boolean typedef or plain-char signedness.",
+]
+
+
+def limitations(abi_policy):
+    return LIMITATIONS + (SCALAR_LIMITATIONS if abi_policy == ABI_POLICY else [])
+
+
 PIN_FIELDS = ("image_id", "arch", "artifact_sha256", "slice_sha256", "analysis_id", "import_program_sha256")
 METHOD_FIELDS = ("name", "class_name", "class_slot", "category", "method_kind", "type_encoding", "record_va",
                  "selector_va", "selector_reference_va", "implementation_va", "origin", "encoding")
 
 
-def word_type(value):
+def word_type(value, policy=ABI_POLICY):
     if any(q != "const" for q in value["qualifiers"]):
         return None
     kind, code = value["kind"], value["code"]
+    if policy == ABI_POLICY and kind == "scalar" and code in "cCsSiIB":
+        return {"width_bits": {"c": 8, "C": 8, "s": 16, "S": 16,
+                               "i": 32, "I": 32, "B": 8}[code],
+                "representation": "boolean" if code == "B" else "integer",
+                "signed": None if code in ("B", "c") else code.islower()}
     if kind == "scalar" and code in ("q", "Q"):
         return {"width_bits": 64, "representation": "integer", "signed": code == "q"}
     if kind in ("pointer", "object", "class", "selector", "cstring"):
@@ -33,8 +50,10 @@ def word_type(value):
     return None
 
 
-def project_abi(decoded, arch):
-    result = {"policy": ABI_POLICY, "status": "unsupported", "reasons": [],
+def project_abi(decoded, arch, policy=ABI_POLICY):
+    if policy not in ABI_POLICIES:
+        raise ValueError("Unsupported Objective-C ABI policy")
+    result = {"policy": policy, "status": "unsupported", "reasons": [],
               "claim": "conditional_register_roles", "implementation_signature_verified": False}
     if arch not in GP:
         return dict(result, reasons=["unsupported_architecture"])
@@ -44,10 +63,10 @@ def project_abi(decoded, arch):
     reasons = []
     if len(arguments) > len(GP[arch]):
         reasons.append("stack_arguments_unsupported")
-    values = [word_type(arg["type"]) for arg in arguments]
+    values = [word_type(arg["type"], policy) for arg in arguments]
     reasons.extend(f"argument_{index}_type_unsupported" for index, value in enumerate(values) if value is None)
     returns_void = ret["code"] == "v" and not ret["qualifiers"]
-    returned = None if returns_void else word_type(ret)
+    returned = None if returns_void else word_type(ret, policy)
     if not returns_void and returned is None:
         reasons.append("return_type_unsupported")
     if reasons:
@@ -65,7 +84,7 @@ def seal(row):
     return dict(row, sha256=identity(row))
 
 
-def sidecar(row, pin, metadata_gaps, *, redacted=False):
+def sidecar(row, pin, metadata_gaps, *, redacted=False, abi_policy=ABI_POLICY):
     lead, function = row["lead"], row["function"]
     if (not isinstance(metadata_gaps, list) or len(metadata_gaps) > 64
             or any(not isinstance(g, str) or not 0 < len(g) <= 128 for g in metadata_gaps)
@@ -118,7 +137,7 @@ def sidecar(row, pin, metadata_gaps, *, redacted=False):
         binding["query_job"] = lead["query_job"]
     result.update(status="associated", binding=binding,
                   declaration={key: method[key] for key in METHOD_FIELDS if key in method},
-                  decoded_types=decoded, abi_projection=project_abi(decoded, pin["arch"]))
+                  decoded_types=decoded, abi_projection=project_abi(decoded, pin["arch"], abi_policy))
     reason = None
     if len(canonical(result)) > MAX_SIDECAR_BYTES - 100:
         reason = "sidecar_output_limit"
@@ -133,14 +152,16 @@ def sidecar(row, pin, metadata_gaps, *, redacted=False):
     return seal(result)
 
 
-def build(report, metadata_gaps, *, redacted_leads=()):
+def build(report, metadata_gaps, *, redacted_leads=(), abi_policy=ABI_POLICY):
+    if abi_policy not in ABI_POLICIES:
+        raise ValueError("Unsupported Objective-C ABI policy")
     pins = {pin["image_id"]: pin for pin in report["images"]}
     records = [sidecar(row, pins[row["lead"]["image_id"]],
                        [] if row.get("reason") == "lead_output_limit" else metadata_gaps.get(row["lead"]["id"], []),
-                       redacted=row["lead"]["id"] in redacted_leads)
+                       redacted=row["lead"]["id"] in redacted_leads, abi_policy=abi_policy)
                for row in report["leads"]]
-    return {"policy": POLICY, "decoder_policy": objc_types.POLICY, "abi_policy": ABI_POLICY,
-            "limitations": LIMITATIONS, "records": records}
+    return {"policy": POLICY, "decoder_policy": objc_types.POLICY, "abi_policy": abi_policy,
+            "limitations": limitations(abi_policy), "records": records}
 
 
 def validate(report):
@@ -149,7 +170,7 @@ def validate(report):
     section = report[FIELD]
     if (not isinstance(section, dict) or set(section) != {"policy", "decoder_policy", "abi_policy", "limitations", "records"}
             or section["policy"] != POLICY or section["decoder_policy"] != objc_types.POLICY
-            or section["abi_policy"] != ABI_POLICY or section["limitations"] != LIMITATIONS
+            or section["abi_policy"] not in ABI_POLICIES or section["limitations"] != limitations(section["abi_policy"])
             or not isinstance(section["records"], list) or len(section["records"]) != len(report["leads"])):
         raise ValueError("Unsupported or malformed Objective-C type sidecar policy")
     gaps = {}
@@ -160,7 +181,7 @@ def validate(report):
         if any(gap not in row["gaps"] and gap != row.get("reason") for gap in record["metadata_gaps"]):
             raise ValueError("Sidecar metadata gaps differ from the lead")
     redacted = [record["lead_id"] for record in section["records"] if record.get("reason") == "declaration_redacted"]
-    if section != build(report, gaps, redacted_leads=redacted):
+    if section != build(report, gaps, redacted_leads=redacted, abi_policy=section["abi_policy"]):
         raise ValueError("Objective-C sidecar differs from its declaration and pins")
     return {row["lead_id"]: row for row in section["records"]}
 
@@ -172,15 +193,15 @@ def redact_report(report, sanitizer):
     changed = [row["lead"]["id"] for row, sanitized in zip(report["leads"], clean["leads"])
                if row["lead"] != sanitized["lead"] or row["matches"] != sanitized["matches"]]
     gaps = {row["lead_id"]: row["metadata_gaps"] for row in clean[FIELD]["records"]}
-    clean[FIELD] = build(clean, gaps, redacted_leads=changed)
+    clean[FIELD] = build(clean, gaps, redacted_leads=changed, abi_policy=report[FIELD]["abi_policy"])
     return clean
 
 
-def observations(record):
+def observations(record, abi_policy=ABI_POLICY):
     declaration = record["declaration"]
     if declaration:
         declaration = {key: declaration[key] for key in ("name", "class_name", "category", "method_kind", "type_encoding")
                        if key in declaration}
-    return {"policy": POLICY, "decoder_policy": objc_types.POLICY, "abi_policy": ABI_POLICY,
+    return {"policy": POLICY, "decoder_policy": objc_types.POLICY, "abi_policy": abi_policy,
             **{key: record[key] for key in ("status", "reason", "metadata_gaps", "decoded_types", "abi_projection")},
             "declaration": declaration}

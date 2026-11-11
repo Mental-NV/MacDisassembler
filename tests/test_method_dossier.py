@@ -50,7 +50,7 @@ class DossierTests(TemporaryCase):
         report = self.report()
         data = report['data']
         row = data['leads'][0]
-        row['matches'][0]['type_encoding'] = 'v24@0:8B16'
+        row['matches'][0]['type_encoding'] = 'v24@0:8d16'
         data[sidecars.FIELD] = sidecars.build(data, {})
         text = cli.render(report, 'dossier')
         self.assertIn(b'ABI roles: unsupported', text)
