@@ -20,6 +20,34 @@ negative must be distinguished from operational failure, an unrelated exception,
 missing output, and native success. Validate all reported identities and preserved
 pins before accepting the control result.
 
+## Transaction boundary and observable inventory
+
+Use two consecutive headless pre-scripts for every control. The first records
+only a bounded, versioned pending observation: immutable before-state, exact
+caught refusal and request/image identities. It returns normally so Ghidra owns
+and ends the outer script transaction. A nested preparation abort can remain
+pending until that boundary; an immediate in-wrapper after-snapshot is not a
+valid rollback measurement.
+
+The second pre-script independently reloads the pinned request and pending
+observation, snapshots the resulting Program, compares exact inventories and
+publishes the final control report. Missing/invalid first or second stage is a
+failed control. Never manually end a transaction owned by Ghidra. The synthetic
+HighFunction stays a local of the first script; no graph, operation or p-code
+serialization is passed to the second. The second performs no decompilation,
+inference, signature commit or pseudocode export.
+
+Snapshot every bounded code unit/function and both actual selected byte ranges.
+An ordinary initialized-memory read failure remains fatal. If the live Memory
+API positively identifies a code unit as wholly contained in an uninitialized
+block, record that explicit initialization state and block/range provenance
+instead of inventing zero bytes or omitting the unit. Unknown, mixed, missing or
+cross-block coverage fails closed. Host validation must bind each such marker to
+its recorded uninitialized block and contained unit range. Caller/callee memory
+rows still require real initialized bytes matching their immutable extent hashes.
+Equal uninitialized markers prove equal reported initialization/range state, not
+unavailable byte values or a comprehensive internal mutation audit.
+
 ## Native preparation-proof refusal
 
 In a fresh unprepared copy, call the unchanged native preparation script with a
