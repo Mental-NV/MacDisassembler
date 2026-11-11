@@ -7,6 +7,7 @@ import json
 import re
 
 from .errors import Error
+from . import objc_type_evidence
 
 
 MAX_HTML_BYTES = 64 * 1024 * 1024
@@ -141,11 +142,15 @@ def render(result):
 def render_handoff(result):
     data = result["data"]
     leads = data["leads"]
+    type_sidecars = objc_type_evidence.validate(data)
     fields = (("Manifest SHA-256", data["manifest_sha256"]), ("Authority", data["authority"]),
               ("Status", result["status"]), ("Leads shown", len(leads)))
     report = Report("Macscope evidence handoff", "Pinned evidence leads", fields, result["coverage"])
     report.evidence("Handoff metadata", dict(result, data={key: value for key, value in data.items()
-                                                          if key not in ("images", "leads")}))
+                                                          if key not in ("images", "leads", objc_type_evidence.FIELD)}))
+    if type_sidecars:
+        report.evidence("Objective-C declaration type policy", {key: value for key, value in data[objc_type_evidence.FIELD].items()
+                                                              if key != "records"})
     report.evidence("Pinned images", data["images"])
     report.add('<nav aria-label="Lead index"><ol>\n')
     for index, row in enumerate(leads, 1):
@@ -166,6 +171,8 @@ def render_handoff(result):
             report.add("</ul>\n")
         report.evidence("Selection and match evidence", {key: row[key] for key in
                         ("lead", "matches", "match_references", "candidates")})
+        if lead["id"] in type_sidecars:
+            report.evidence("Declared Objective-C types and conditional ABI roles", type_sidecars[lead["id"]])
         if row["function"] is not None:
             report.function(index, row["function"])
         if "fixup" in row:
