@@ -2768,3 +2768,9 @@ It exposes conditional register relationships, not source prototypes, typed retu
 or indirect targets. Unsupported instructions (including TBZ) stop the prefix;
 a separately selected later range does not establish entry-to-range reachability.
 Valid reports retain partial exit6. See [contract and validation](focused-register-relations.md).
+
+Opt-in `--bit-test-fallthrough` selects version2 of that relationship view and
+records explicit TBZ/TBNZ fallthrough predicates. Default version1 still stops at
+those instructions. Predicates are not assumed true at runtime, taken paths are
+not followed, and later facts retain every guard/call obligation. Relocated
+addresses remain unknown runtime bit values. See the linked contract for limits.

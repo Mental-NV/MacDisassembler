@@ -6,6 +6,7 @@ from .errors import Error
 from .storage import canonical, identity
 
 POLICY = 'macscope-focused-register-relations/1'
+BIT_TEST_POLICY = 'macscope-focused-register-relations/2'
 MAX_INSTRUCTIONS = 128
 MAX_BYTES = 1024 * 1024
 
@@ -19,7 +20,7 @@ def parse_range(value):
     return start, end
 
 
-def derive(result, selected, *, abi):
+def derive(result, selected, *, abi, bit_test_fallthrough=False):
     if abi != 'aapcs64':
         raise Error('register_abi', 'Explicit AAPCS64 preservation hypothesis required', 2)
     start, end = selected
@@ -42,8 +43,9 @@ def derive(result, selected, *, abi):
                  'parent_focused_envelope_sha256':parent_digest}
     derived = {'data':{'selection':selection,'instructions':rows,'gaps':[]}}
     facts = callback_evidence.project(derived, abi=abi, provenance=True,
-                                      fallthrough=False, checked_add=False)['data']['callback_evidence']
-    report = {'policy':POLICY, 'status':'partial',
+                                      fallthrough=False, checked_add=False,
+                                      bit_test_fallthrough=bit_test_fallthrough)['data']['callback_evidence']
+    report = {'policy':BIT_TEST_POLICY if bit_test_fallthrough else POLICY, 'status':'partial',
         'source_kind':'verified_saved_import_focused_query', 'source_envelope_sha256':parent_digest,
         'image_id':function['image_id'], 'slice_sha256':function['slice_sha256'],
         'function_id':function['function_id'], 'entry_va':function['entry_va'],
@@ -62,18 +64,20 @@ def derive(result, selected, *, abi):
             'Memory observations are symbolic; direct calls may have arbitrary memory effects.'],
         'sites':facts['sites'], 'gaps':facts['gaps'],
         'interpreted_end_va':facts['interpreted_end_va'], 'stop_reason':facts['stop_reason']}
+    if bit_test_fallthrough:
+        report.update(path_mode=facts['path_mode'],path_obligations=facts['path_obligations'])
     if len(canonical(report)) > MAX_BYTES:
         raise Error('register_budget', 'Register relationship report exceeds its byte budget', 3)
     return report
 
 
-def query(project, job_id, range_text, abi):
+def query(project, job_id, range_text, abi, *, bit_test_fallthrough=False):
     selected = parse_range(range_text)
     manifest = evidence.from_query_jobs(project, [job_id])
     lead = manifest['leads'][0]
     image = next(row for row in project.images() if row['image_id']==lead['image_id'])
     result = evidence.focused_query(project,image,metadata.verified_slice(project,image),lead['value'],job_id)
-    report = derive(result, selected, abi=abi)
+    report = derive(result, selected, abi=abi, bit_test_fallthrough=bit_test_fallthrough)
     report['requested_job_id'] = job_id
     report['publication_job_id'] = result['data']['origin']['job_id']
     if len(canonical(report)) > MAX_BYTES:
