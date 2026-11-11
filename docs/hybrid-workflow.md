@@ -31,8 +31,10 @@ input hashes. Static doctor checks files, not successful native startup. An init
 worker probe, import or analysis has separate startup/time/storage costs.
 
 Use a new project, or a **quiescent private full copy** of an existing project.
-Never copy a project while a worker writes it. Keep the original untouched; inspect
-jobs and verify Program digests on the copy before continuing:
+Never copy a project while a worker writes it. Keep the original untouched.
+The following checks are for an **existing quiescent project copy only**. For a new
+path, skip this block, create/import the project in section 2 first, then inspect
+jobs and verify Program digests before continuing:
 
 ```sh
 macscope jobs list --project "$MAIN_PROJECT" --json
@@ -74,6 +76,10 @@ force a function body. Capture prepares only the selected extent in a disposable
 copy; it does not perform whole-image analysis. Save the output and producing job.
 `xrefs --query-job` reads that saved focused receipt without starting an engine;
 it requires the same exact function address, not `--to`/`--from` address mode.
+Focused xrefs can legitimately return a partial report with **exit code 6** and
+`incoming_scope_not_global`: the selected capture cannot establish global incoming
+references. Retain the report and diagnostics; do not assume every useful result
+exits 0, or retry native capture merely to remove this expected coverage limit.
 Never combine this path with analyzed-query signature-recovery options or assume
 that a planned import-only feature exists.
 
@@ -115,6 +121,10 @@ job identities. Do not enable every recovery option or rerun blindly after failu
 Use either project/image pair consistently for these static queries. `DATA_VA`,
 `SLOT_VA`, `CLASS_SLOT` and `LENGTH` must come from evidence; length is a proven bounded span
 (maximum 4096 bytes per command), not a guessed neighboring object.
+These are optional queries, not a checklist to run blindly: use a metadata family
+only when applicable to the selected image, and use slot-based queries only with
+a verified slot. An absent metadata family can yield an empty result; that is not
+a coverage guarantee or permission to invent a class/fixup slot.
 
 ```sh
 macscope bytes --project "$MAIN_PROJECT" --image "$MAIN_IMAGE" --address "$DATA_VA" --length "$LENGTH" --json
@@ -160,3 +170,12 @@ stop the affected attempt and report the blocker. Do not raise limits, delete
 caches, edit original projects or install tools silently. Prefer a documented
 existing-command recipe when it already answers the question; request a new
 feature only after a concrete, independently demonstrated gap remains.
+
+## Validation scope
+
+All examples have parser/help-only checks. A separate owned small-fixture exercise
+ran 19 commands and four native jobs across the main routes. Its focused-xref
+partial exit stopped a success-only wrapper; the report was retained and unaffected
+checks continued. This was not a native worker failure. That exercise does not
+validate large-image cost or coverage, nor the optional fresh recovery, fixup or
+ivar routes. Those still require applicable evidence and their own validation.

@@ -69,6 +69,11 @@ class WorkflowDocsTests(unittest.TestCase):
         self.assertNotIn('0x3f0',text)
         self.assertIn('hybrid-workflow.md',(GUIDE.parent/'cli.md').read_text())
         self.assertIn('not a hard whole-process memory limit',text)
+        self.assertIn('existing quiescent project copy only',text)
+        self.assertIn('exit code 6',text)
+        self.assertIn('incoming_scope_not_global',text)
+        self.assertIn('only with\na verified slot',text)
+        self.assertIn('does not\nvalidate large-image cost or coverage',text)
         self.assertIn('Do not publish proprietary artifacts',text)
         self.assertIn('export MACSCOPE_GHIDRA="$GHIDRA" MACSCOPE_JAVA_HOME="$JAVA_HOME"',text)
 
