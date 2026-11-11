@@ -7,6 +7,47 @@ from .errors import Error
 POLICY = 'macscope-callback-composition/3'
 
 
+
+def assignment_diagnostic(report, expected_entry):
+    """Describe selected-prefix stores without guessing which is a callback."""
+    stores = [site for site in report['sites'] if site['kind'] == 'memory_store']
+    addresses = [site for site in stores if site['value'].get('kind') == 'address']
+    matches = [site for site in addresses if site['value'].get('value') == expected_entry]
+    companions = ([site for site in stores if site['instruction_va'] == matches[0]['instruction_va']
+                   and 'lane' in site and site.get('lane') != matches[0].get('lane')]
+                  if len(matches) == 1 else [])
+    if not stores:
+        reason, next_evidence = 'no_stores_in_decoded_prefix', 'Check the selected prefix and its interpretation barriers.'
+    elif not addresses:
+        reason, next_evidence = 'no_address_valued_store', 'Independently establish a stored code address; do not infer one from a register name.'
+    elif not matches:
+        reason, next_evidence = 'no_matching_address_store', 'Check the selected thunk against independently evidenced address stores; other stores need not be callbacks.'
+    elif len(matches) > 1:
+        reason, next_evidence = 'multiple_matching_address_stores', 'Obtain unambiguous assignment evidence without discarding intervening instructions.'
+    elif len(companions) != 1:
+        reason, next_evidence = 'unique_match_without_unique_companion_lane', 'Obtain a uniquely associated paired-lane observation; do not assume closure layout.'
+    else:
+        reason, next_evidence = 'unique_matching_pair_observed', 'Inspect the remaining chain obligations; this pair alone does not establish composition.'
+    observations = []
+    for site in stores[:32]:
+        item = {'instruction_va': site['instruction_va'], 'value_kind': site['value'].get('kind')}
+        if 'lane' in site:
+            item['lane'] = site['lane']
+        if site['value'].get('kind') == 'address':
+            item['address'] = site['value']['value']
+        observations.append(item)
+    return {'policy': 'macscope-assignment-diagnostic/1', 'reason': reason,
+            'expected_thunk_entry': expected_entry, 'next_evidence': next_evidence,
+            'source_envelope_sha256': report['source_envelope_sha256'],
+            'selection': copy.deepcopy(report['selection']),
+            'stop_reason': report['stop_reason'], 'gap_count': len(report['gaps']),
+            'counts': {'stores': len(stores), 'address_valued': len(addresses),
+                       'matching_address': len(matches), 'other_address': len(addresses)-len(matches),
+                       'non_address': len(stores)-len(addresses),
+                       'unique_match_companion_lanes': len(companions) if len(matches) == 1 else None},
+            'observations': observations, 'omitted_stores': max(0, len(stores)-32)}
+
+
 def replay(project, image, raw, receipt, *, abi, provenance, fallthrough=False):
     _, manifest = jobs.get(project, receipt)
     request = manifest.get('disasm_request')
@@ -46,6 +87,7 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
             'receipts': {'assignment': assignment, 'invocation': invocation,
                          'writer': link.get('destination_receipt')},
             'independent_evidence': {'assignment': assign, 'invocation': invoke}}
+    view['assignment_diagnostic'] = assignment_diagnostic(assign, thunk['selection']['start_va'])
     if writer_calls:
         proof = writer_call_obligations.project(link, roles)
         view['writer_call_evidence'] = proof

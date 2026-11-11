@@ -74,6 +74,7 @@ class CallbackTextTests(unittest.TestCase):
         e['destination_link']={'status':bad,'reason':bad,'destination_evidence':{'stop_reason':bad}}
         c['destination_effects']={'counts':{k:bad for k in ('stack_or_frame','mapped_image_nonstack','unresolved_destination')}}
         c['status']=bad;c['candidate_status']=bad
+        c['assignment_diagnostic']={'reason':bad}
         for key in ('gaps','assumptions','path_obligations','call_obligations','unknowns'):
             c[key]=[{'role':bad,'reason':bad,'condition':bad,'instruction_va':bad}]*1000
         c['independent_evidence']['assignment']['sites']=[{'kind':'memory_store','instruction_va':bad,'lane':bad,'value':{'kind':bad,'register':bad}}]*1000
@@ -97,3 +98,8 @@ class CallbackTextTests(unittest.TestCase):
         self.assertIn('unique_paired_assignment_not_proven',text)
         self.assertIn('Omitted 1 entries',text)
         self.assertEqual(e,before)
+
+    def test_assignment_diagnostic_detail_is_visible(self):
+        e=self.evidence()
+        e['composition']['assignment_diagnostic']={'reason':'no_address_valued_store'}
+        self.assertIn('Assignment diagnostic: no_address_valued_store',render(e))

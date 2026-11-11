@@ -211,6 +211,8 @@ def callback_summary(report, evidence):
     details('Call obligations (normal return / ABI hypotheses; side effects unknown)', source.get('call_obligations'), scoped)
     details('Unknowns / missing evidence', source.get('unknowns', source.get('missing_evidence')), field)
     if composition:
+        if diagnostic := row(composition.get('assignment_diagnostic')):
+            line('  Assignment diagnostic: ' + field(diagnostic.get('reason')))
         assignment = row(row(composition.get('independent_evidence')).get('assignment'))
         line('  Assignment selection: ' + field(row(assignment.get('selection')).get('start_va'))
              + ':' + field(row(assignment.get('selection')).get('end_va'))

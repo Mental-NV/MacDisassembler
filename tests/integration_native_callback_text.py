@@ -31,6 +31,14 @@ def run(project, manifest):
             gate.require(outputs[0] == outputs[1], 'Nondeterministic output')
             results[format_] = outputs[0]
         comp = gate.check_result(manifest, name, json.loads(results['json']), pins)
+        diagnostic = comp['assignment_diagnostic']
+        reason = {'positive':'unique_matching_pair_observed',
+                  'overwritten_target':'no_matching_address_store',
+                  'unknown_target':'no_address_valued_store'}[name]
+        gate.require(diagnostic['reason'] == reason, 'Incorrect assignment diagnostic')
+        gate.require(diagnostic['selection'] == assignment['selection'], 'Diagnostic selection changed')
+        gate.require(diagnostic['source_envelope_sha256'] == comp['role_identities']['assignment']['source_envelope_sha256'], 'Diagnostic receipt identity changed')
+        gate.require(diagnostic['counts']['stores'] == 2 and diagnostic['omitted_stores'] == 0, 'Diagnostic store accounting changed')
         text = results['text']
         summary = text[text.index('Callback evidence (bounded summary'):]
         gate.require(len(summary.encode()) <= 16384 and len(summary.splitlines()) <= 64, 'Text budget exceeded')
@@ -38,6 +46,7 @@ def run(project, manifest):
                       'Application writer attribution: unknown', 'runtime execution: unknown',
                       'persistence: unknown', 'fallthrough=nonzero', 'side effects unknown', '--format json'):
             gate.require(value in summary, 'Missing text evidence: '+value)
+        gate.require('Assignment diagnostic: '+reason in summary, 'Diagnostic absent from text')
         if name != 'positive':
             gate.require('unique_paired_assignment_not_proven' in summary, 'Missing negative gap')
         stores = [s for s in comp['independent_evidence']['assignment']['sites'] if s['kind']=='memory_store']
