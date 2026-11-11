@@ -20,7 +20,7 @@ from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, a
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
                       program_history, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, objc_types, scalar_signatures, search, swift_symbols, switch_tables
-from . import import_disasm, callback_evidence, callback_links
+from . import import_disasm, callback_evidence, callback_links, callback_composition
 from . import body_ownership, engine_checks, evidence, flow_gap_evidence, saved_flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
@@ -188,6 +188,8 @@ def parser():
             s.add_argument('--callback-evidence',action='store_true',help='Add conservative arm64 callback-site byte facts; not a target or writer proof')
             s.add_argument('--callback-provenance',action='store_true',help='Track symbolic input registers without preserving values across calls')
             s.add_argument('--callback-abi',choices=('aapcs64',),help='Explicit conditional call-preservation hypothesis; requires --callback-evidence')
+            s.add_argument('--callback-assignment-receipt',help='Saved paired callback assignment receipt for conditional composition')
+            s.add_argument('--callback-invocation-receipt',help='Saved paired callback invocation receipt for conditional composition')
             s.add_argument('--callback-target-receipt',help='Link exactly one saved destination receipt; requires --callback-evidence')
             selections.add_argument('--range',dest='va_range',metavar='START:END',
                                     help='Show saved instructions in an unslid VA range (exclusive end)')
@@ -554,7 +556,14 @@ def imported_disassembly(args, project, image, start, end):
         provenance = getattr(args,'callback_provenance',False)
         response = callback_evidence.project(response,abi=abi,provenance=provenance)
         target = getattr(args,'callback_target_receipt',None)
-        return callback_links.attach(project,image,raw_slice,response,target,abi=abi,provenance=provenance) if target else response
+        response = callback_links.attach(project,image,raw_slice,response,target,abi=abi,provenance=provenance) if target else response
+        assignment = getattr(args,'callback_assignment_receipt',None)
+        invocation = getattr(args,'callback_invocation_receipt',None)
+        if assignment or invocation:
+            if not (assignment and invocation and target and args.receipt and (abi or provenance)):
+                raise Error('callback_scope','Composition requires assignment, invocation, thunk and writer receipts plus provenance',2)
+            response = callback_composition.attach(project,image,raw_slice,response,assignment,invocation,abi=abi,provenance=provenance)
+        return response
     if args.receipt:
         response = import_disasm.replay(project,image,proof,payload,args.receipt)
         return annotate(response)
@@ -1644,6 +1653,8 @@ def execute_command(a, address_selection=None):
     import_disassembly = a.command == 'disasm' and a.from_import
     if a.command == 'disasm' and (a.receipt or import_disassembly) and (not import_disassembly or va_range is None):
         raise Error('disasm_scope','Import disassembly and receipt replay require --from-import --range START:END',2)
+    if a.command == 'disasm' and (a.callback_assignment_receipt or a.callback_invocation_receipt) and not (a.callback_assignment_receipt and a.callback_invocation_receipt and a.receipt and a.callback_target_receipt and a.callback_evidence and (a.callback_provenance or a.callback_abi)):
+        raise Error('callback_scope','Composition requires assignment, invocation, thunk and writer receipts plus provenance',2)
     if a.command == 'disasm' and a.callback_provenance and not a.callback_evidence:
         raise Error('callback_scope','Register provenance requires --callback-evidence',2)
     if a.command == 'disasm' and a.callback_abi and not a.callback_evidence:
