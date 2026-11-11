@@ -1,8 +1,76 @@
 # Scoped investigation follow-up plan
 
-Status: proposed implementation sequence, 11 November 2026. Baseline: main
-`b69b85feb048a9ec5c8e18f167b1b446287253c1`. This is a requirements document,
-not a claim that the improvements below are implemented or validated.
+Status: historical F1–F3 requirements retained below; next-step priorities updated
+against main `27bcef51b321f6610fb81ad7b56fdae23090f176`.
+The original baseline was `b69b85feb048a9ec5c8e18f167b1b446287253c1`.
+Pending work is not a claim of implementation or validation.
+
+## Current reconciliation and next priorities
+
+F1 trust compatibility and partial-result handling are implemented; see
+[trust and partial results](trust-and-partial-results.md). F2 selected
+class-slot ivars are implemented with explicit offset evidence; see the
+[selected ivar contract](selected-ivar-contract.md). [Bounded import disassembly](import-disassembly.md)
+is available, so obtaining selected instructions no longer inherently requires
+whole-image analysis or an external debugger. Preserve those working paths.
+
+F3 now includes bounded callback observations, selected direct-destination
+receipt links and opt-in conditional register provenance. See
+[callback sites](callback-evidence.md), [selected links](callback-links.md) and
+[conditional provenance](callback-provenance.md). These are static evidence
+components, not proof that an assigned callback executes, that two unknown
+receivers are identical, or that a memory store persists application state.
+Do not reopen those foundations or label all original F3 acceptance complete.
+
+The following follow-ups extend the current contracts rather than duplicate
+them. Implement in small separately reviewed slices; read the current branch's
+contracts before editing because callback support is evolving.
+
+1. **F4a, P1: ARM64 callback instruction coverage.** Inventory the current
+   decoder's explicit barriers and select common callback instruction forms
+   from independently authored compiler fixtures. Specify exact byte masks,
+   widths, flags, register effects and pre/post-index writeback semantics for
+   each added form before coding. Do not skip unsupported instructions. Keep
+   unsupported, ambiguous, PAC and unknown ABI cases explicit. Acceptance:
+   independent instruction-oracle agreement, positive and near-miss encodings,
+   zero/sign extension, overlapping registers, stack/frame bounds, clobbering
+   and unchanged strict-mode barriers. Extend architecture coverage only when
+   its own evidence supports it; no claimed x86 coverage from ARM64 tests.
+2. **F4b, P1: Compositional callback-to-writer evidence.** Build on the existing
+   one-hop links and register correspondence, not a second graph mechanism.
+   Specify a bounded composition contract before expanding hop depth: identities,
+   limits, cycle handling, transferred values and accumulated assumptions.
+   Keep assignment, context load, invocation, direct destination and memory
+   writer as separate claims. A matching offset or plausible function name
+   cannot equate receivers or prove runtime callback identity. Acceptance:
+   owned positive chains and counterexamples with overwritten callbacks,
+   mismatched contexts, intervening clobbers, uncertain loads, cycles and missing
+   receipts. Unknowns survive composition and offline replay. A verified store
+   remains distinct from attributed application-state mutation or persistence.
+3. **F4c, P1: Exact skipped-ivar diagnostics.** Build on existing offset evidence.
+   When a selected record cannot produce a row, retain a bounded diagnostic
+   identifying its record index/site when verified, reason and missing evidence.
+   Distinguish filtering, unsupported layout, pointer failure, invalid record,
+   unavailable offset and exhausted budget. Do not fabricate a record address
+   when the mapping is unknown. Acceptance: valid prefix rows survive a bad
+   record or truncated tail; missing offsets remain null, real zero remains
+   zero; no skipped record is silently interpreted as absence. Bound diagnostic
+   count and report omitted counts/scope without unbounded allocations.
+4. **F4d, P1: Per-lead gaps beside partial-result summaries.** Keep exit 6 and
+   existing structured lead evidence. Improve the human-readable summary so
+   users can immediately map each incomplete lead to its blocking evidence and
+   a supported next action, rather than reading worker success as completion.
+   Acceptance: mixed complete/partial/failed leads, absent gap sites, limits and
+   terminal-safe rendering; do not suggest nonexistent commands or imply
+   verification from successful jobs alone. Retain machine-readable schemas and
+   raw reasons; review a versioned contract before any incompatible change.
+
+For each follow-up, preserve receipt identity and deterministic offline replay.
+Test a multi-lead saved handoff with the engine unavailable and assert no new
+worker jobs; distinguish replay from fresh analysis. Private evaluations are
+kept outside this public plan. Their operational usefulness does not establish
+full callback identity, application behavior or general performance.
+
 
 This follow-up sets the next priorities after the historical
 [scoped investigation plan](scoped-investigation-plan.md). Keep its A–D
@@ -32,7 +100,7 @@ maintenance. The selected-address batch implementation remains deferred under
 its [separate proposal](bounded-focused-batch-proposal.md); a lifecycle blocker
 there must not block these independent improvements.
 
-## Ordered implementation slices
+## Historical F1–F3 implementation requirements
 
 ### F1 — Trust compatibility and partial-result usability (P0)
 
