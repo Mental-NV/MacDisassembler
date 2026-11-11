@@ -30,55 +30,54 @@ def validate(report, control, request, request_digest, snapshots):
          and isinstance(snapshots['before'],str) and len(snapshots['before'].encode())<=4*1024*1024
          and snapshots['before']==snapshots['after'])
     try:
-        rows=json.loads(snapshots['before'])
-        need(isinstance(rows,list) and 1<=len(rows)<=108194 and all(isinstance(row,str) and row for row in rows))
-        need(rows==sorted(set(rows)))
-        need(all(row.startswith(('unit:','function:','memory:','block:')) for row in rows))
-        memory=[row for row in rows if row.startswith('memory:')]
-        need(len(memory)==2)
+        inventory=json.loads(snapshots['before'])
+        need(isinstance(inventory,dict) and set(inventory)=={'schema','blocks','kinds','units','functions','memory'}
+             and inventory['schema']=='macscope-owned-control-inventory/2')
+        memory=inventory['memory'];need(isinstance(memory,dict) and set(memory)=={'caller','callee'})
         for name in ('caller','callee'):
-            proof=request[name]
-            matches=[row for row in memory if row.startswith('memory:'+name+':')]
-            need(len(matches)==1)
-            parts=matches[0].split(':')
-            need(len(parts)==4 and parts[2]==proof['entry_va'])
-            data=bytes.fromhex(parts[3])
-            need(data.hex()==parts[3] and type(proof['length']) is int and len(data)==proof['length']
+            proof=request[name];row=memory[name]
+            need(isinstance(row,dict) and set(row)=={'entry_va','bytes'} and row['entry_va']==proof['entry_va']
+                 and isinstance(row['bytes'],str))
+            data=bytes.fromhex(row['bytes'])
+            need(data.hex()==row['bytes'] and type(proof['length']) is int and len(data)==proof['length']
                  and 0<len(data)<=8192 and int(proof['end_va_exclusive'],16)-int(proof['entry_va'],16)==len(data)
                  and sha256(data).hexdigest()==proof['extent_sha256'])
-        def address(value):
-            need(isinstance(value,str) and value.startswith('0x'))
-            number=int(value,16);need(0<=number<2**63 and hex(number)==value)
-            return number
-        blocks=[]
-        for row in rows:
-            if row.startswith('block:'):
-                block=json.loads(row[6:])
-                need(isinstance(block,dict) and set(block)=={'name','start','end','initialized','mapped'}
-                     and isinstance(block['name'],str) and bool(block['name'])
-                     and type(block['initialized']) is bool and block['mapped'] is False)
-                need(address(block['start'])<=address(block['end']))
-                need(block not in blocks);blocks.append(block)
-        need(1<=len(blocks)<=4096)
-        unit_count=function_count=0
-        for row in rows:
-            if row.startswith('unit:'):
-                unit_count+=1;unit=json.loads(row[5:])
-                need(isinstance(unit,dict) and set(unit)=={'start','end','length','kind','block','byte_state','bytes','flow'})
-                need(unit['block'] in blocks and isinstance(unit['kind'],str) and bool(unit['kind']) and isinstance(unit['flow'],str))
-                lo,hi=address(unit['start']),address(unit['end']);block=unit['block']
-                need(type(unit['length']) is int and 0<unit['length']<=4*1024*1024 and hi-lo+1==unit['length']
-                     and address(block['start'])<=lo<=hi<=address(block['end']))
-                if block['initialized']:
-                    need(unit['byte_state']=='read' and isinstance(unit['bytes'],str))
-                    data=bytes.fromhex(unit['bytes'])
-                    need(data.hex()==unit['bytes'] and len(data)==unit['length'])
-                else:
-                    need(unit['byte_state']=='uninitialized' and unit['bytes'] is None)
-            elif row.startswith('function:'):
-                function_count+=1;need(len(row.split(':'))>=9)
-        need(1<=unit_count<=100000 and function_count<=4096)
-        if control=='ast_scope': need(function_count>=2)
+        def integer(value):
+            need(type(value) is int and 0<=value<2**63)
+            return value
+        blocks=inventory['blocks'];kinds=inventory['kinds'];units=inventory['units'];functions=inventory['functions']
+        need(isinstance(blocks,list) and 1<=len(blocks)<=4096 and isinstance(kinds,list) and 1<=len(kinds)<=4096
+             and isinstance(units,list) and 1<=len(units)<=100000 and isinstance(functions,list) and len(functions)<=4096)
+        keys=[]
+        for block in blocks:
+            need(isinstance(block,dict) and set(block)=={'name','space','start','end','initialized','mapped'}
+                 and all(isinstance(block[k],str) and block[k] for k in ('name','space'))
+                 and type(block['initialized']) is bool and block['mapped'] is False)
+            need(integer(block['start'])<=integer(block['end']))
+            keys.append((block['space'],block['start'],block['end'],block['name']))
+        need(keys==sorted(set(keys)))
+        need(all(isinstance(k,str) and k for k in kinds) and kinds==sorted(set(kinds)))
+        used_blocks=set();used_kinds=set();previous=None
+        for row in units:
+            need(isinstance(row,list) and len(row)==7)
+            space,start,length,ki,bi,raw,flow=row
+            need(isinstance(space,str) and space and isinstance(flow,str))
+            integer(start);integer(length);integer(ki);integer(bi)
+            need(0<length<=4*1024*1024 and start+length-1<2**63 and ki<len(kinds) and bi<len(blocks))
+            end=start+length-1;block=blocks[bi]
+            need(space==block['space'] and block['start']<=start<=end<=block['end'])
+            if previous is not None:
+                oldspace,oldend=previous
+                need(space>oldspace or space==oldspace and start>oldend)
+            previous=(space,end);used_blocks.add(bi);used_kinds.add(ki)
+            if block['initialized']:
+                need(isinstance(raw,str));data=bytes.fromhex(raw)
+                need(data.hex()==raw and len(data)==length)
+            else: need(raw is None)
+        need(used_blocks==set(range(len(blocks))) and used_kinds==set(range(len(kinds))))
+        need(all(isinstance(row,str) and row.startswith('function:') and len(row.split(':'))>=9 for row in functions)
+             and functions==sorted(set(functions)))
+        if control=='ast_scope': need(len(functions)>=2)
     except (KeyError,TypeError,ValueError,json.JSONDecodeError) as error:
         raise ValueError('Malformed or unbound native snapshot') from error
     before=report['before_sha256']

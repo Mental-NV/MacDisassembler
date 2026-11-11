@@ -112,3 +112,19 @@ Mapped, unknown, cross-block or inconsistent ranges fail. Initialized-memory rea
 errors fail rather than being reclassified. Selected caller/callee bytes still
 must match their actual frozen hashes. Marker equality is initialization-state
 and range evidence, not evidence of unavailable byte contents.
+
+### Lossless inventory/2 encoding
+
+The bounded snapshot now uses `macscope-owned-control-inventory/2`: unique sorted
+block metadata and kind tables, one tuple for **each actual code unit**, lossless
+function records, and caller/callee memory proofs. Unit tuples are
+`[space, start, length, kindIndex, blockIndex, bytesOrNull, flow]`. Addresses and
+indices are exact integers. Actual native end addresses must equal
+`start + length - 1` before encoding. Units are ordered and nonoverlapping within
+each address space; the host validates all references and requires all table
+entries to be used. Block address spaces must agree with their units.
+
+This only removes repeated metadata and nested string escaping. It does not group
+or omit units, invent bytes, replace evidence with hashes, or increase any limit:
+100000 units, 4096 functions/blocks, 4 MiB snapshot, 8 MiB stage. If the compact
+inventory still exceeds a bound, the control fails and retains its artifacts.

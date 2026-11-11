@@ -8,6 +8,9 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.TreeMap;
+import java.util.Comparator;
+import com.google.gson.JsonArray;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
@@ -40,62 +43,82 @@ public class OwnedNativeControls extends OwnedScopedParameters {
     String variable(Variable v) {
         return v.getName()+":"+v.getDataType().getPathName()+":"+v.getVariableStorage()+":"+v.getSource();
     }
+    record Unit(String space,long start,int length,String kind,String blockKey,String bytes,String flow) {}
     String snapshot() throws Exception {
-        TreeSet<String> records=new TreeSet<>(); int count=0;
-        // Whole tiny owned listing, capped. Immutable strings, not live object references.
+        TreeMap<String,JsonObject> blockTable=new TreeMap<>();TreeSet<String> kindTable=new TreeSet<>();
+        ArrayList<Unit> captured=new ArrayList<>();TreeSet<String> functionRows=new TreeSet<>();int count=0;
         var units=currentProgram.getListing().getCodeUnits(true);
         while(units.hasNext()) {
-            monitor.checkCancelled(); if(++count>100000) throw new IllegalStateException("Snapshot listing limit");
-            var u=units.next();
-            var block=currentProgram.getMemory().getBlock(u.getMinAddress());
-            if(block==null || block.isMapped() || !block.contains(u.getMaxAddress()) ||
-               currentProgram.getMemory().getBlock(u.getMaxAddress())!=block)
-                throw new IllegalStateException("Unknown, mapped or cross-block code unit");
-            JsonObject bd=new JsonObject();bd.addProperty("name",block.getName());
-            bd.addProperty("start", "0x"+Long.toHexString(block.getStart().getOffset()));
-            bd.addProperty("end", "0x"+Long.toHexString(block.getEnd().getOffset()));
-            bd.addProperty("initialized",block.isInitialized());bd.addProperty("mapped",block.isMapped());
-            records.add("block:"+JSON.toJson(bd));
-            JsonObject row=new JsonObject();
-            row.addProperty("start","0x"+Long.toHexString(u.getMinAddress().getOffset()));
-            row.addProperty("end","0x"+Long.toHexString(u.getMaxAddress().getOffset()));
-            row.addProperty("length",u.getLength());row.addProperty("kind",u.getClass().getName());row.add("block",bd);
-            if(u.getLength()<1 || u.getLength()>4*1024*1024)throw new IllegalStateException("Code unit byte limit");
+            monitor.checkCancelled();if(++count>100000)throw new IllegalStateException("Snapshot listing limit");
+            var u=units.next();var lo=u.getMinAddress();var hi=u.getMaxAddress();
+            var block=currentProgram.getMemory().getBlock(lo);
+            if(block==null||block.isMapped()||!block.contains(hi)||currentProgram.getMemory().getBlock(hi)!=block||
+               !lo.getAddressSpace().equals(hi.getAddressSpace())||!lo.getAddressSpace().equals(block.getStart().getAddressSpace())||
+               !lo.getAddressSpace().equals(block.getEnd().getAddressSpace()))
+                throw new IllegalStateException("Unknown, mapped, mixed-space or cross-block code unit");
+            long start=lo.getOffset();int length=u.getLength();
+            if(start<0||length<1||length>4*1024*1024||start>Long.MAX_VALUE-length+1||
+               hi.getOffset()!=start+length-1||block.getStart().getOffset()<0||block.getEnd().getOffset()<0)
+                throw new IllegalStateException("Code unit range mismatch");
+            String space=lo.getAddressSpace().getName(),kind=u.getClass().getName();
+            String key=space+"\000"+String.format("%016x",block.getStart().getOffset())+"\000"+
+                String.format("%016x",block.getEnd().getOffset())+"\000"+block.getName();
+            JsonObject bd=new JsonObject();bd.addProperty("space",space);bd.addProperty("name",block.getName());
+            bd.addProperty("start",block.getStart().getOffset());bd.addProperty("end",block.getEnd().getOffset());
+            bd.addProperty("initialized",block.isInitialized());bd.addProperty("mapped",false);
+            if(blockTable.containsKey(key)&&!blockTable.get(key).equals(bd))throw new IllegalStateException("Conflicting block metadata");
+            blockTable.put(key,bd);kindTable.add(kind);
+            if(blockTable.size()>4096||kindTable.size()>4096)throw new IllegalStateException("Snapshot table limit");
+            String bytes=null;
             if(block.isInitialized()) {
-                byte[] bytes=u.getBytes();
-                if(bytes.length!=u.getLength())throw new IllegalStateException("Incomplete initialized unit bytes");
-                row.addProperty("byte_state","read");row.addProperty("bytes",HexFormat.of().formatHex(bytes));
-            } else {
-                row.addProperty("byte_state","uninitialized");row.add("bytes",com.google.gson.JsonNull.INSTANCE);
+                byte[] read=u.getBytes();if(read.length!=length)throw new IllegalStateException("Incomplete initialized bytes");
+                bytes=HexFormat.of().formatHex(read);
             }
             String flow="";
             if(u instanceof Instruction i) {
                 flow=i.getFlowType()+":"+i.getFlowOverride()+":"+i.getFallThrough();
                 for(var target:i.getFlows())flow+=":"+target;
             }
-            row.addProperty("flow",flow);records.add("unit:"+JSON.toJson(row));
+            captured.add(new Unit(space,start,length,kind,key,bytes,flow));
         }
-        var functions=currentProgram.getFunctionManager().getFunctions(true); count=0;
+        captured.sort(Comparator.comparing(Unit::space).thenComparingLong(Unit::start));
+        JsonArray blocks=new JsonArray(),kinds=new JsonArray(),rows=new JsonArray();
+        ArrayList<String> blockKeys=new ArrayList<>(blockTable.keySet()),kindKeys=new ArrayList<>(kindTable);
+        for(String key:blockKeys)blocks.add(blockTable.get(key));for(String kind:kindKeys)kinds.add(kind);
+        String previousSpace=null;long previousEnd=-1;
+        for(Unit u:captured) {
+            if(u.space().equals(previousSpace)&&u.start()<=previousEnd)throw new IllegalStateException("Overlapping units");
+            previousSpace=u.space();previousEnd=u.start()+u.length()-1;
+            JsonArray row=new JsonArray();row.add(u.space());row.add(u.start());row.add(u.length());
+            row.add(kindKeys.indexOf(u.kind()));row.add(blockKeys.indexOf(u.blockKey()));
+            if(u.bytes()==null)row.add(com.google.gson.JsonNull.INSTANCE);else row.add(u.bytes());
+            row.add(u.flow());rows.add(row);
+        }
+        var functions=currentProgram.getFunctionManager().getFunctions(true);count=0;
         while(functions.hasNext()) {
-            monitor.checkCancelled(); if(++count>4096)throw new IllegalStateException("Snapshot function limit");
+            monitor.checkCancelled();if(++count>4096)throw new IllegalStateException("Snapshot function limit");
             var f=functions.next();String r="function:"+f.getEntryPoint()+":"+f.getName()+":"+
                 f.getPrototypeString(false,true)+":"+f.getSignatureSource()+":"+f.getCallingConventionName()+":"+
                 f.hasCustomVariableStorage()+":"+variable(f.getReturn());
             var ranges=f.getBody().getAddressRanges(true);
             while(ranges.hasNext()){var range=ranges.next();r+=":"+range.getMinAddress()+"-"+range.getMaxAddress();}
-            for(var p:f.getParameters())r+=":"+variable(p);
-            records.add(r);
+            for(var param:f.getParameters())r+=":"+variable(param);functionRows.add(r);
         }
+        JsonObject memory=new JsonObject();
         for(String name:new String[]{"caller","callee"}) {
             JsonObject p=trial.getAsJsonObject(name);long lo=value(p,"entry_va"),hi=value(p,"end_va_exclusive");
             if(lo%4!=0||hi%4!=0||hi<=lo||hi-lo>8192||p.get("length").getAsLong()!=hi-lo)
                 throw new IllegalStateException("Control extent invalid");
             byte[] bytes=new byte[(int)(hi-lo)];
-            if(currentProgram.getMemory().getBytes(address(text(p,"entry_va")),bytes)!=bytes.length ||
-               !hash(bytes).equals(text(p,"extent_sha256"))) throw new IllegalStateException("Control memory differs");
-            records.add("memory:"+name+":"+text(p,"entry_va")+":"+HexFormat.of().formatHex(bytes));
+            if(currentProgram.getMemory().getBytes(address(text(p,"entry_va")),bytes)!=bytes.length||
+               !hash(bytes).equals(text(p,"extent_sha256")))throw new IllegalStateException("Control memory differs");
+            JsonObject row=new JsonObject();row.addProperty("entry_va",text(p,"entry_va"));
+            row.addProperty("bytes",HexFormat.of().formatHex(bytes));memory.add(name,row);
         }
-        String result=JSON.toJson(records);
+        JsonObject inventory=new JsonObject();inventory.addProperty("schema","macscope-owned-control-inventory/2");
+        inventory.add("blocks",blocks);inventory.add("kinds",kinds);inventory.add("units",rows);
+        inventory.add("functions",JSON.toJsonTree(functionRows));inventory.add("memory",memory);
+        String result=JSON.toJson(inventory);
         if(result.getBytes(StandardCharsets.UTF_8).length>4*1024*1024)throw new IllegalStateException("Snapshot byte limit");
         return result;
     }

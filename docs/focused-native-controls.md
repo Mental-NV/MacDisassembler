@@ -55,7 +55,7 @@ The first complete per-unit JSON representation exceeded the existing 4 MiB
 snapshot limit on the owned import; that failed attempt is not a passing control.
 Use explicit `macscope-owned-control-inventory/2` encoding without changing caps:
 deduplicate sorted block metadata and code-unit-kind tables, then retain **one
-compact tuple per observed code unit**: start, length, kind index, block index,
+compact tuple per observed code unit**: address space, start, length, kind index, block index,
 actual bytes or explicit null, and exact flow description. Derive the end only
 when it equals the actual observed unit maximum. Block metadata retains address
 space, range, initialization and mapped state. Keep full sorted function records

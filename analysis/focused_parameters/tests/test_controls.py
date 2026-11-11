@@ -15,13 +15,13 @@ class ControlReports(unittest.TestCase):
         request={'image_sha256':c.POSITIVE,'caller':{'entry_va':'0xc2c','end_va_exclusive':'0xc30','length':4,'extent_sha256':extent},
                  'callee':{'entry_va':'0xbec','end_va_exclusive':'0xbf0','length':4,'extent_sha256':extent}}
         ast=kind=='ast_scope'
-        block=dict(name='text',start='0xbec',end='0xc2f',initialized=True,mapped=False)
-        unit=dict(start='0xbec',end='0xbef',length=4,kind='InstructionDB',block=block,byte_state='read',bytes=raw,flow='RETURN')
-        records=['memory:callee:0xbec:'+raw,'memory:caller:0xc2c:'+raw,
-                 'block:'+json.dumps(block),'unit:'+json.dumps(unit)]
-        if ast: records+=['function:0xbec:callee:proto:DEFAULT:cc:false:return:range',
-                          'function:0xc2c:caller:proto:DEFAULT:cc:false:return:range']
-        serialized=json.dumps(sorted(records))
+        block=dict(name='text',space='ram',start=0xbec,end=0xc2f,initialized=True,mapped=False)
+        functions=['function:0xbec:callee:proto:DEFAULT:cc:false:return:range',
+                   'function:0xc2c:caller:proto:DEFAULT:cc:false:return:range'] if ast else []
+        inventory=dict(schema='macscope-owned-control-inventory/2',blocks=[block],kinds=['InstructionDB'],
+            units=[['ram',0xbec,4,0,0,raw,'RETURN']],functions=functions,
+            memory={name:dict(entry_va=request[name]['entry_va'],bytes=raw) for name in ('caller','callee')})
+        serialized=json.dumps(inventory)
         snapshots=dict(before=serialized,after=serialized)
         digest=sha256(snapshots['before'].encode()).hexdigest()
         evidence=[dict(entry_va='0xbec',extent_sha256=extent,operations_scanned=10,phase='before_commit',status='complete')] if ast else []
@@ -61,16 +61,9 @@ class ControlReports(unittest.TestCase):
 
     def test_snapshot_payload_negatives_even_when_self_hashed(self):
         request,report,snapshot=self.fixture('prep_digest')
-        rows=[row for row in json.loads(snapshot['before']) if row.startswith('memory:')]
-        cases=['', 'not json', '{}', '[]', json.dumps(['malformed']), json.dumps([rows[0]]),
-               json.dumps(rows+[rows[0]]),json.dumps(list(reversed(rows))),
-               json.dumps([rows[0],rows[1].replace('0xc2c','0xc30')]),
-               json.dumps([rows[0],rows[1].replace('c0035fd6','00000000')]),
-               json.dumps(rows+['unit:bad']),json.dumps(rows+['function:bad'])]
-        for value in cases:
-            with self.subTest(value=value):
-                bad=copy.deepcopy(report);bad['before_sha256']=bad['after_sha256']=sha256(value.encode()).hexdigest()
-                with self.assertRaises(ValueError):c.validate(bad,'prep_digest',request,'b'*64,dict(before=value,after=value))
+        for value in ('','not json','{}','[]','["malformed"]'):
+            bad=copy.deepcopy(report);bad['before_sha256']=bad['after_sha256']=sha256(value.encode()).hexdigest()
+            with self.assertRaises(ValueError):c.validate(bad,'prep_digest',request,'b'*64,dict(before=value,after=value))
 
     def test_pending_stage_contract(self):
         request,report,snapshots=self.fixture('prep_rollback')
@@ -86,41 +79,61 @@ class ControlReports(unittest.TestCase):
             with self.assertRaises(ValueError):c.validate_stage(bad,report,snapshots,'d'*64,'e'*64)
         with self.assertRaises(ValueError):c.validate_stage({},report,snapshots,'d'*64,'e'*64)
 
-    def test_memory_block_markers(self):
-        request,report,snapshots=self.fixture('prep_digest')
-        base=json.loads(snapshots['before'])
-        block=dict(name='bss',start='0xd000',end='0xdfff',initialized=False,mapped=False)
-        unit=dict(start='0xd978',end='0xd97b',length=4,kind='DataDB',block=block,
-                  byte_state='uninitialized',bytes=None,flow='')
-        def check(b,u,extra=()):
-            rows=sorted(base+['block:'+json.dumps(b),'unit:'+json.dumps(u)]+list(extra))
-            text=json.dumps(rows);r=copy.deepcopy(report);r['before_sha256']=r['after_sha256']=sha256(text.encode()).hexdigest()
-            return c.validate(r,'prep_digest',request,'b'*64,dict(before=text,after=text))
-        check(block,unit)
-        initialized=dict(block,initialized=True);read=dict(unit,block=initialized,byte_state='read',bytes='00010203')
-        check(initialized,read)
-        for mutate in ('mapped','wrongblock','range','length','fakebytes','read','initialized_nobytes','shortread'):
-            b=copy.deepcopy(block);u=copy.deepcopy(unit)
-            if mutate=='mapped':b['mapped']=True;u['block']=b
-            if mutate=='wrongblock':u['block']['name']='other'
-            if mutate=='range':u['end']='0xe000'
-            if mutate=='length':u['length']=5
-            if mutate=='fakebytes':u['bytes']='00000000'
-            if mutate=='read':u['byte_state']='read'
-            if mutate=='initialized_nobytes':b['initialized']=True;u['block']=b
-            if mutate=='shortread':b=initialized;u=dict(read,bytes='00')
-            with self.subTest(mutate=mutate),self.assertRaises(ValueError):check(b,u)
+    def check_inventory(self,inventory,kind='prep_digest'):
+        request,report,_=self.fixture(kind)
+        text=json.dumps(inventory);report['before_sha256']=report['after_sha256']=sha256(text.encode()).hexdigest()
+        return c.validate(report,kind,request,'b'*64,dict(before=text,after=text))
 
-    def test_rejects_truncated_inventory_even_when_self_hashed(self):
-        for kind in ('prep_digest','ast_scope'):
-            request,report,snapshot=self.fixture(kind)
-            for removed in ('unit:','block:','function:'):
-                if removed=='function:' and kind!='ast_scope': continue
-                rows=[row for row in json.loads(snapshot['before']) if not row.startswith(removed)]
-                text=json.dumps(rows);bad=copy.deepcopy(report)
-                bad['before_sha256']=bad['after_sha256']=sha256(text.encode()).hexdigest()
-                with self.subTest(kind=kind,removed=removed),self.assertRaises(ValueError):
-                    c.validate(bad,kind,request,'b'*64,dict(before=text,after=text))
+    def test_explicit_uninitialized_tuple(self):
+        _,_,snapshot=self.fixture('prep_digest');inventory=json.loads(snapshot['before'])
+        inventory['blocks'][0]['initialized']=False;inventory['units'][0][5]=None
+        self.check_inventory(inventory)
+        inventory['units'][0][5]='00000000'
+        with self.assertRaises(ValueError):self.check_inventory(inventory)
+
+    def test_compact_inventory_negative_mutations(self):
+        _,_,snapshot=self.fixture('ast_scope')
+        mutations={
+          'missing_memory':lambda v:v['memory'].pop('caller'),
+          'memory_entry':lambda v:v['memory']['caller'].update(entry_va='0xc30'),
+          'memory_hash':lambda v:v['memory']['caller'].update(bytes='00000000'),
+          'empty_units':lambda v:v.update(units=[]),
+          'empty_blocks':lambda v:v.update(blocks=[]),
+          'empty_kinds':lambda v:v.update(kinds=[]),
+          'missing_functions':lambda v:v.update(functions=[]),
+          'bad_ref':lambda v:v['units'][0].__setitem__(4,1),
+          'bad_kind':lambda v:v['units'][0].__setitem__(3,1),
+          'space':lambda v:v['units'][0].__setitem__(0,'other'),
+          'mapped':lambda v:v['blocks'][0].update(mapped=True),
+          'null_read':lambda v:v['units'][0].__setitem__(5,None),
+          'short_read':lambda v:v['units'][0].__setitem__(5,'00'),
+          'wrong_end':lambda v:v['blocks'][0].update(end=0xbec),
+          'length':lambda v:v['units'][0].__setitem__(2,3),
+          'overflow':lambda v:v['units'][0].__setitem__(1,2**63-1),
+          'negative':lambda v:v['units'][0].__setitem__(1,-1),
+          'boolstart':lambda v:v['units'][0].__setitem__(1,True),
+          'boollength':lambda v:v['units'][0].__setitem__(2,True),
+          'boolref':lambda v:v['units'][0].__setitem__(4,False),
+          'boolblock':lambda v:v['blocks'][0].update(start=False),
+          'overlap':lambda v:v['units'].append(copy.deepcopy(v['units'][0])),
+          'order':lambda v:v['units'].insert(0,['ram',0xbf0,4,0,0,'c0035fd6','']),
+          'duplicate_block':lambda v:v['blocks'].append(copy.deepcopy(v['blocks'][0])),
+          'unused_block':lambda v:v['blocks'].append(dict(v['blocks'][0],start=0xd000,end=0xdfff)),
+          'duplicate_kind':lambda v:v['kinds'].append(v['kinds'][0]),
+          'unused_kind':lambda v:v['kinds'].append('UnusedKind'),
+        }
+        for label,mutate in mutations.items():
+            with self.subTest(label=label):
+                inventory=json.loads(snapshot['before']);mutate(inventory)
+                with self.assertRaises(ValueError):self.check_inventory(inventory,'ast_scope')
+
+    def test_multiple_spaces_ordered_and_bound(self):
+        _,_,snapshot=self.fixture('prep_digest');inventory=json.loads(snapshot['before'])
+        inventory['blocks'].append(dict(inventory['blocks'][0],name='other',space='zzz'))
+        inventory['units'].append(['zzz',0xbec,4,0,1,'c0035fd6','RETURN'])
+        self.check_inventory(inventory)
+        inventory['units'].reverse()
+        with self.assertRaises(ValueError):self.check_inventory(inventory)
 
     def test_control_serialization_explicitly_preserves_nulls(self):
         # Source/API contract check only: no Gson jar is available on this host.
