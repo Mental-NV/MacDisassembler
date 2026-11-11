@@ -6,6 +6,10 @@ Stage A implementation and source validation are now recorded separately in
 [scoped-discovery-validation.md](scoped-discovery-validation.md). The baseline
 reconciliation below is historical; installed execution parity remains deferred.
 
+The Stage C owned resource-first workflow is documented in
+[resource-first-calendar-workflow.md](resource-first-calendar-workflow.md), with
+its separate [validation record](resource-first-calendar-validation.md).
+
 ## Purpose
 
 Make bounded metadata discovery and selected-function investigation useful when a large image exceeds general inventory limits. Preserve useful partial results without converting missing evidence into absence, resolved runtime dispatch, or whole-function semantic equivalence.
