@@ -1,6 +1,7 @@
 # F3c: explicit ABI-conditional frame and receiver provenance
 
 Status: implementation contract, not runtime behavior or persistence recovery.
+Policy 5 additionally supports [shifted-register ADD](register-add-evidence.md).
 Policy 4 additionally supports [bounded SP pair writeback](callback-stack-pairs.md).
 
 `--callback-evidence --callback-provenance` enables symbolic selected-input

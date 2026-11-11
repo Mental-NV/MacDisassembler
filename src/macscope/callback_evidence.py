@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 
-POLICY = 'macscope-callback-sites/4'
+POLICY = 'macscope-callback-sites/5'
 MAX_INSTRUCTIONS = 1024
 MASK = (1 << 64) - 1
 
@@ -72,6 +72,36 @@ def project(response, *, abi=None, provenance=False):
             imm = signed(((word >> 5) & 0x7ffff) << 2 | ((word >> 29) & 3), 21)
             address = ((va & ~0xfff) + (imm << 12)) if word >> 31 else va + imm
             put(rd, {'kind': 'address', 'value': hex(address & MASK), 'origin_va': row['addr']})
+        elif tracing and word & 0x7f200000 == 0x0b000000:
+            width = 64 if word & 0x80000000 else 32
+            shift_kind, shift_amount = (word >> 22) & 3, (word >> 10) & 63
+            if shift_kind == 3 or shift_amount >= width:
+                report['gaps'].append(dict(site, reason='invalid_add_shift_encoding'))
+                report['interpreted_end_va'] = hex(va)
+                report['stop_reason'] = 'unsupported_instruction_boundary'
+                break
+            rm = (word >> 16) & 31
+            zero = {'kind': 'integer_constant', 'value': '0x0', 'basis': 'zero_register'}
+            left, right = (copy.deepcopy(zero) if rn == 31 else get(rn)), (copy.deepcopy(zero) if rm == 31 else get(rm))
+            concrete = ('address', 'integer_constant')
+            mask = (1 << width)-1
+            if left['kind'] in concrete and right['kind'] in concrete:
+                lhs, rhs = int(left['value'], 16) & mask, int(right['value'], 16) & mask
+                shifted = ((rhs << shift_amount) & mask if shift_kind == 0 else
+                           rhs >> shift_amount if shift_kind == 1 else
+                           (signed(rhs, width) >> shift_amount) & mask)
+                numeric = (lhs + shifted) & mask
+                kind = ('address' if width == 64 and left['kind'] == 'address'
+                        and right['kind'] == 'integer_constant' else 'integer_constant')
+                value = {'kind': kind, 'value': hex(numeric), 'origin_va': row['addr']}
+            else:
+                value = {'kind': 'register_add_result', 'origin_va': row['addr'], 'width': width,
+                         'selection_start_va': proof['start_va'], 'source_envelope_sha256': report['source_envelope_sha256']}
+            report['sites'].append(dict(site, kind='register_add', width=width,
+                left=left, right=right, shift=('lsl', 'lsr', 'asr')[shift_kind],
+                shift_amount=shift_amount, result=copy.deepcopy(value),
+                destination_register=f'x{rd}' if rd != 31 else 'zr', discarded_write=rd == 31))
+            put(rd, value)
         elif abi and word & 0xff800000 in (0x91000000, 0xd1000000):
             base = copy.deepcopy(sp) if rn == 31 else get(rn)
             imm = ((word >> 10) & 0xfff) << (12 if word & (1 << 22) else 0)
