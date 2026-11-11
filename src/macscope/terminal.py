@@ -1,6 +1,8 @@
 """Deterministic, terminal-safe views of CLI evidence envelopes."""
 import io
 
+from . import evidence_summary
+
 
 def safe(value):
     if value is None:
@@ -214,6 +216,8 @@ def render(result):
         report.field("Diagnostic", diagnostic)
     report.line()
     data = result["data"]
+    if command == "evidence" and isinstance(data, dict):
+        evidence_summary.render(report, data)
     layout = LAYOUTS.get(command)
     if data == []:
         report.line("No matching records.")
