@@ -1,11 +1,12 @@
 # F3c: explicit ABI-conditional frame and receiver provenance
 
 Status: implementation contract, not runtime behavior or persistence recovery.
+Policy 4 additionally supports [bounded SP pair writeback](callback-stack-pairs.md).
 
 `--callback-evidence --callback-provenance` enables symbolic selected-input
 register tracking without a callee-preservation hypothesis; direct calls still
 stop. This supports a no-call context-load/thunk/store path purely from bytes.
-`--callback-evidence --callback-abi aapcs64` additionally opts into policy 3's conditional
+`--callback-evidence --callback-abi aapcs64` additionally opts into the conditional
 register-provenance model. Default strict mode keeps unknown instructions/calls
 as barriers. ABI mode is an explicitly declared hypothesis, not a recovered
 compiler identity or proof an arbitrary callee obeys AAPCS64. arm64e/PAC,

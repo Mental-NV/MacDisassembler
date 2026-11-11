@@ -1,7 +1,8 @@
 # Bounded callback investigation evidence (F3a)
 
 Status: F3a implementation contract, not the F3 practical readiness gate.
-Current policy version 3 adds [opt-in input-register and conditional ABI
+Current policy version 4 adds [bounded SP pair writeback](callback-stack-pairs.md)
+to the version 3 [opt-in input-register and conditional ABI
 provenance](callback-provenance.md), following [F3b paired storage and direct
 destination links](callback-links.md). Version 1 below describes the original
 F3a projection. All versions leave runtime callback identity and writer
