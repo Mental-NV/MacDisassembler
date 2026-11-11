@@ -120,9 +120,114 @@ def disasm(report, data):
         if data.get(key):
             report.line("Instruction gaps" if key == "gaps" else "Control-flow gaps")
             report.tree(data[key], 1)
+    if isinstance(data.get("callback_evidence"), dict):
+        callback_summary(report, data["callback_evidence"])
     if ownership := data.get("body_ownership"):
         report.line("Function body ownership")
         report.tree(ownership, 1)
+
+
+
+def callback_summary(report, evidence):
+    """Bounded display only: never modifies evidence or upgrades its claims."""
+    marker = "...[truncated]"
+
+    def clipped(text, limit):
+        raw = text.encode('utf-8')
+        return text if len(raw) <= limit else raw[:limit-len(marker)].decode('utf-8', 'ignore') + marker
+
+    def field(value):
+        if isinstance(value, (dict, list, tuple)):
+            return '[structured; see JSON]'
+        value = 'unavailable' if value is None else str(value)
+        shortened = value[:120]
+        if len(value) > 120:
+            shortened += marker
+        return clipped(safe(shortened), 240)
+
+    def row(value):
+        return value if isinstance(value, dict) else {}
+
+    def sequence(value):
+        return value if isinstance(value, list) else []
+
+    lines = []
+    def line(value):
+        lines.append(clipped(value, 320))
+
+    composition = row(evidence.get('composition'))
+    source = composition or evidence
+    link = row(evidence.get('destination_link'))
+    effects = row(source.get('destination_effects')) or row(link.get('destination_effects'))
+    selection = row(evidence.get('selection'))
+    line('Callback evidence (bounded summary; independent of byte-decoding completion)')
+    line('  Analysis status: ' + field(source.get('status')))
+    if composition:
+        line('  Composition candidate: ' + field(composition.get('candidate_status')) + ' (not runtime proof)')
+    line('  Selected source: ' + field(selection.get('start_va')) + ':' + field(selection.get('end_va')))
+    line('  Source envelope: ' + field(evidence.get('source_envelope_sha256')))
+    line('  Application writer attribution: ' + field(effects.get('application_writer_attribution', 'unknown'))
+         + '; runtime execution: ' + field(effects.get('runtime_execution', 'unknown'))
+         + '; persistence: ' + field(effects.get('persistence', 'unknown')))
+    if effects:
+        counts = row(effects.get('counts'))
+        line('  Observed destination stores: stack/frame=' + field(counts.get('stack_or_frame'))
+             + '; mapped nonstack=' + field(counts.get('mapped_image_nonstack'))
+             + '; unresolved=' + field(counts.get('unresolved_destination')))
+    if link:
+        line('  Destination link: ' + field(link.get('status')) + '; reason=' + field(link.get('reason')))
+        line('  Destination prefix stop: ' + field(row(link.get('destination_evidence')).get('stop_reason')))
+    line('  Selected-prefix stop: ' + field(evidence.get('stop_reason')))
+
+    def details(label, values, render):
+        values = sequence(values)
+        line('  ' + label + ': ' + str(len(values)))
+        for item in values[:4]:
+            line('    ' + render(item))
+        if len(values) > 4:
+            line('    Omitted ' + str(len(values)-4) + ' entries; see JSON')
+
+    def scoped(item):
+        item = row(item)
+        detail = row(item.get('evidence')) or item
+        return ('role=' + field(item.get('role', 'selected_source')) + '; '
+                + field(detail.get('reason') or detail.get('kind'))
+                + '; site=' + field(detail.get('instruction_va'))
+                + ('; fallthrough=' + field(detail.get('fallthrough_predicate')) if 'fallthrough_predicate' in detail else ''))
+
+    def assumption(item):
+        if not isinstance(item, dict):
+            return field(item)
+        return 'role=' + field(item.get('role')) + '; ' + field(item.get('condition'))
+
+    # Composition decisions follow collected role-local boundaries in JSON.
+    # Surface explicit decision reasons first without changing evidence ordering.
+    gaps = sequence(source.get('gaps'))
+    if composition:
+        gaps = sorted(gaps, key=lambda item: 'reason' not in row(item))
+    details('Gaps (explicit decisions first; may include role-local boundaries)', gaps, scoped)
+    details('Assumptions', source.get('assumptions'), assumption)
+    details('Path obligations (not executed paths)', source.get('path_obligations'), scoped)
+    details('Call obligations (normal return / ABI hypotheses; side effects unknown)', source.get('call_obligations'), scoped)
+    details('Unknowns / missing evidence', source.get('unknowns', source.get('missing_evidence')), field)
+    if composition:
+        assignment = row(row(composition.get('independent_evidence')).get('assignment'))
+        line('  Assignment selection: ' + field(row(assignment.get('selection')).get('start_va'))
+             + ':' + field(row(assignment.get('selection')).get('end_va'))
+             + '; stop=' + field(assignment.get('stop_reason')))
+        line('  Assignment envelope: ' + field(assignment.get('source_envelope_sha256')))
+        line('  Expected selected thunk entry: ' + field(selection.get('start_va')))
+        stores = [s for s in sequence(assignment.get('sites')) if row(s).get('kind') == 'memory_store']
+        def store(item):
+            value = row(item.get('value'))
+            return ('site=' + field(item.get('instruction_va')) + '; lane=' + field(item.get('lane'))
+                    + '; value=' + field(value.get('kind')) + ':'
+                    + field(value.get('value') if value.get('kind') == 'address' else value.get('register')))
+        details('Assignment stores (not inferred callback targets)', stores, store)
+    # Fixed list caps produce <= 53 lines / 16 KiB; retain a final full-evidence route.
+    for value in lines:
+        report.line(value)
+    report.line('  Full evidence: repeat with --format json; summary omissions do not imply complete analysis.')
 
 
 def references(report, data):
