@@ -1833,13 +1833,16 @@ def execute_command(a, address_selection=None):
             filters['type_decoding_policy'] = objc_types.POLICY
         if getattr(a,'class_slot',None) is not None:
             slot = metadata.hex_address(a.class_slot,'Objective-C class list slot')
-            records,gaps = (objc.selected_ivars(raw,image,slot) if a.action == 'ivars'
+            records,gaps = (objc.selected_ivars(raw,image,slot,diagnostics=diagnostics) if a.action == 'ivars'
                             else objc.selected_methods(raw,image,slot))
             filters['class_slot'] = hex(slot)
         else:
             records,gaps = objc.inventory(raw,image,a.action,diagnostics=diagnostics)
+        unfiltered_count = len(records)
         records=[dict(row,image_id=image['image_id'],arch=image['arch'])
                  for row in records if a.name_contains is None or a.name_contains in (row['name'] or '')]
+        if a.action == 'ivars' and a.name_contains is not None:
+            diagnostics.append(f'Ivar name filter excluded {unfiltered_count-len(records)} captured rows; not missing metadata.')
         records.sort(key=lambda row:(row['name'] or '',row.get('class_name') or '',
                                     int(row.get('record_va',row.get('class_va')),16)))
         rows,cov=page(records,a,image['image_id'],p.project_id,filters,order='objc-name/address/v1')
