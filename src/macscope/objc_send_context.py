@@ -153,6 +153,9 @@ def build(project, report):
                 except (ValueError, Error) as exc:
                     record = {'status': 'unresolved', 'source_va': hex(site), 'source_bytes': raw.hex(),
                               'branch_kind': kind, 'stub_va': hex(target), 'reason': exc.code if isinstance(exc, Error) else str(exc)}
+                if record['status'] == 'verified_static_selector_path':
+                    from . import send_register_origins
+                    record['register_origins'] = send_register_origins.build(context, function, record)
                 row['sites'].append(record)
         except (ValueError, Error) as exc:
             row['reason'] = exc.code if isinstance(exc, Error) else str(exc)
@@ -184,6 +187,12 @@ def summary(section):
             text = (site['source_va'] + ' -> ' + site['stub_va'] + ' ' +
                     (site['selector'] + ' via _objc_msgSend' if site['status'] == 'verified_static_selector_path'
                      else 'unresolved: ' + site['reason']))
+            origins = site.get('register_origins', {})
+            if origins.get('status') == 'verified_conditional_register_origins':
+                origin = origins['receiver_register']['origin']
+                text += ' ; x0 <- ' + ('entry ' + origin['register'] if origin['kind'] == 'entry_register' else origin['value'])
+            elif origins:
+                text += ' ; x0 origin unavailable: ' + origins.get('reason', 'unknown')
             lines.append(terminal.safe(text[:200]) + (' [clipped]' if len(text)>200 else ''))
             shown += 1
     lines.append(f'Sites shown: {shown}; omitted here: {total-shown}. No supported match does not mean no sends.')
