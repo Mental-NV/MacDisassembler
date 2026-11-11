@@ -566,10 +566,11 @@ def imported_disassembly(args, project, image, start, end):
         target = getattr(args,'callback_target_receipt',None)
         via = getattr(args,'callback_via_receipt',None)
         if via:
-            return callback_twohop.attach(project,image,raw_slice,response,via,target,abi=abi,provenance=provenance,
+            response = callback_twohop.attach(project,image,raw_slice,response,via,target,abi=abi,provenance=provenance,
                 checked_add=getattr(args,'callback_destination_checked_add_fallthrough',False),
                 writer_calls=getattr(args,'callback_writer_call_obligations',False))
-        response = callback_links.attach(project,image,raw_slice,response,target,abi=abi,provenance=provenance) if target else response
+        elif target:
+            response = callback_links.attach(project,image,raw_slice,response,target,abi=abi,provenance=provenance)
         assignment = getattr(args,'callback_assignment_receipt',None)
         invocation = getattr(args,'callback_invocation_receipt',None)
         if assignment or invocation:
@@ -1668,8 +1669,10 @@ def execute_command(a, address_selection=None):
     import_disassembly = a.command == 'disasm' and a.from_import
     if a.command == 'disasm' and (a.receipt or import_disassembly) and (not import_disassembly or va_range is None):
         raise Error('disasm_scope','Import disassembly and receipt replay require --from-import --range START:END',2)
-    if a.command == 'disasm' and a.callback_via_receipt and (not (a.callback_evidence and a.receipt and a.callback_target_receipt) or len({a.receipt,a.callback_via_receipt,a.callback_target_receipt}) != 3 or a.callback_assignment_receipt or a.callback_invocation_receipt or a.callback_checked_add_fallthrough):
-        raise Error('callback_scope','Two-hop evidence requires three distinct saved receipts without composition or source guard',2)
+    if a.command == 'disasm' and a.callback_via_receipt and (not (a.callback_evidence and a.receipt and a.callback_target_receipt) or len({a.receipt,a.callback_via_receipt,a.callback_target_receipt}) != 3 or a.callback_checked_add_fallthrough):
+        raise Error('callback_scope','Two-hop evidence requires three distinct saved route receipts without source guard',2)
+    if a.command == 'disasm' and a.callback_via_receipt and (a.callback_assignment_receipt or a.callback_invocation_receipt) and len({a.receipt,a.callback_via_receipt,a.callback_target_receipt,a.callback_assignment_receipt,a.callback_invocation_receipt}) != 5:
+        raise Error('callback_scope','Five-role composition requires five distinct saved receipts',2)
     if a.command == 'disasm' and a.callback_destination_checked_add_fallthrough and not (a.callback_via_receipt and (a.callback_provenance or a.callback_abi)):
         raise Error('callback_scope','Destination guard requires two-hop evidence and explicit provenance',2)
     if a.command == 'disasm' and a.callback_checked_add_fallthrough and (not (a.callback_evidence and (a.callback_provenance or a.callback_abi)) or a.callback_target_receipt or a.callback_assignment_receipt or a.callback_invocation_receipt):

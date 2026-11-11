@@ -175,6 +175,9 @@ def callback_summary(report, evidence):
         if writer_proof := row(chain.get('writer_call_evidence')):
             line('  Conditional writer proof: ' + field(writer_proof.get('status')) + ' (runtime values unknown)')
     if composition:
+        if composition.get('route_kind'):
+            line('  Composition route: ' + field(composition.get('route_kind'))
+                 + '; conditional writer-entry bindings: ' + field(len(composition.get('conditional_writer_entry_bindings', []))))
         line('  Composition candidate: ' + field(composition.get('candidate_status')) + ' (not runtime proof)')
     line('  Selected source: ' + field(selection.get('start_va')) + ':' + field(selection.get('end_va')))
     line('  Source envelope: ' + field(evidence.get('source_envelope_sha256')))
