@@ -168,6 +168,9 @@ def render(result):
     header += 'Static evidence only: runtime dispatch, behavior and persistence are not established.\n'
     if result['status'] == 'partial':
         header += 'Partial evidence (exit6): retained useful artifacts, not an engine crash.\n'
+    if 'objc_send_context' in data:
+        from . import objc_send_context
+        header += objc_send_context.summary(data['objc_send_context'])
     parts = [header]
     size, lines, shown = len(header.encode('utf-8')), header.count('\n'), 0
     for row in leads[:MAX_LEADS]:
