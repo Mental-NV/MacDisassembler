@@ -20,7 +20,7 @@ from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, a
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
                       program_history, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, objc_types, scalar_signatures, search, swift_symbols, switch_tables
-from . import import_disasm, callback_evidence
+from . import import_disasm, callback_evidence, callback_links
 from . import body_ownership, engine_checks, evidence, flow_gap_evidence, saved_flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
@@ -186,6 +186,7 @@ def parser():
             s.add_argument('--from-import',action='store_true',help='Linearly decode a bounded --range from the saved no-analysis import')
             s.add_argument('--receipt',help='Replay one saved import-disassembly job for the same range')
             s.add_argument('--callback-evidence',action='store_true',help='Add conservative arm64 callback-site byte facts; not a target or writer proof')
+            s.add_argument('--callback-target-receipt',help='Link exactly one saved destination receipt; requires --callback-evidence')
             selections.add_argument('--range',dest='va_range',metavar='START:END',
                                     help='Show saved instructions in an unslid VA range (exclusive end)')
         if c=='decompile':
@@ -542,10 +543,17 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
 
 
 def imported_disassembly(args, project, image, start, end):
-    proof,payload = import_disasm.selection(metadata.verified_slice(project,image),image,start,end)
+    raw_slice = metadata.verified_slice(project,image)
+    proof,payload = import_disasm.selection(raw_slice,image,start,end)
+    def annotate(response):
+        if not getattr(args,'callback_evidence',False):
+            return response
+        response = callback_evidence.project(response)
+        target = getattr(args,'callback_target_receipt',None)
+        return callback_links.attach(project,image,raw_slice,response,target) if target else response
     if args.receipt:
         response = import_disasm.replay(project,image,proof,payload,args.receipt)
-        return callback_evidence.project(response) if getattr(args,'callback_evidence',False) else response
+        return annotate(response)
     with project.writer():
         jobs.verify_engine_writer_stopped(project)
         deps = engine.dependencies(args.ghidra,args.java_home,full=True)
@@ -561,7 +569,7 @@ def imported_disassembly(args, project, image, start, end):
                                          reason='undecoded_range' if partial else None),
                             diagnostics=['Linear decoding does not prove function boundaries, reachability or runtime behavior.'])
         response = import_disasm.publish(project,job,response)
-        return callback_evidence.project(response) if getattr(args,'callback_evidence',False) else response
+        return annotate(response)
 
 
 def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_from=None):
@@ -1632,6 +1640,8 @@ def execute_command(a, address_selection=None):
     import_disassembly = a.command == 'disasm' and a.from_import
     if a.command == 'disasm' and (a.receipt or import_disassembly) and (not import_disassembly or va_range is None):
         raise Error('disasm_scope','Import disassembly and receipt replay require --from-import --range START:END',2)
+    if a.command == 'disasm' and a.callback_target_receipt and not a.callback_evidence:
+        raise Error('callback_scope','Target receipt requires --callback-evidence',2)
     if a.command == 'disasm' and a.callback_evidence and not import_disassembly:
         raise Error('callback_scope','Callback evidence requires --from-import --range START:END',2)
     fresh = a.command == 'decompile' and a.fresh

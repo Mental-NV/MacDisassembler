@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 
-POLICY = 'macscope-callback-sites/1'
+POLICY = 'macscope-callback-sites/2'
 MAX_INSTRUCTIONS = 1024
 MASK = (1 << 64) - 1
 
@@ -79,6 +79,37 @@ def project(response):
                 put(rd, {'kind': 'memory_read', 'origin_va': value['origin_va']})
             else:
                 report['sites'].append(dict(site, kind='memory_store', location=location, value=get(rd)))
+        elif word & 0xffc00000 in (0xa9000000, 0xa9400000) and rd != 31 and ((word >> 10) & 31) != 31:
+            rt2 = (word >> 10) & 31
+            load = word & 0xffc00000 == 0xa9400000
+            if load and rd == rt2:
+                report['gaps'].append(dict(site, reason='unsupported_duplicate_pair_destination'))
+                report['interpreted_end_va'] = hex(va)
+                report['stop_reason'] = 'unsupported_instruction_boundary'
+                break
+            base = get(rn) if rn != 31 else {'kind': 'unknown_stack_pointer'}
+            offset = signed((word >> 15) & 0x7f, 7) * 8
+            # Both lane addresses and store values use pre-instruction state.
+            values = [get(rd), get(rt2)]
+            for lane, reg in enumerate((rd, rt2)):
+                location = {'base': copy.deepcopy(base), 'base_register': f'x{rn}' if rn != 31 else 'sp',
+                            'offset': offset + lane * 8}
+                if load:
+                    report['sites'].append(dict(site, kind='memory_load', register=f'x{reg}',
+                                               location=location, lane=lane, width=8))
+                else:
+                    report['sites'].append(dict(site, kind='memory_store', location=location,
+                                               value=values[lane], lane=lane, width=8))
+            if load:
+                for lane, reg in enumerate((rd, rt2)):
+                    put(reg, {'kind': 'memory_read', 'origin_va': row['addr'], 'lane': lane})
+        elif word & 0x7c000000 == 0x14000000:  # B / BL immediate
+            target = (va + signed(word & 0x3ffffff, 26) * 4) & MASK
+            kind = 'direct_call' if word & 0x80000000 else 'direct_branch'
+            report['sites'].append(dict(site, kind=kind, target_va=hex(target)))
+            report['stop_reason'] = 'direct_transfer_boundary'
+            report['gaps'].append(dict(site, reason='direct_transfer_boundary'))
+            break
         elif word & 0xfffffc1f == 0xd63f0000:  # BLR
             report['sites'].append(dict(site, kind='indirect_invocation', operand=get(rn), register=f'x{rn}'))
             report['gaps'].append(dict(site, reason='invocation_boundary'))
