@@ -215,6 +215,7 @@ def parser():
             source.add_argument('--fresh',action='store_true',help='Reopen the saved analyzed Program and decompile one function')
             source.add_argument('--from-import',action='store_true',
                                 help='Disassemble and decompile one exact --address from the saved no-analysis import')
+            s.add_argument('--preflight',action='store_true',help='With --from-import, verify exact saved-slice selection only; no engine or capture')
             s.add_argument('--with-type-hints',action='store_true',help='Apply accepted type hints in the fresh query copy')
             s.add_argument('--recover-dispatch-return',action='store_true',
                            help='Use verified x86_64 dispatch return evidence in a fresh query')
@@ -1729,6 +1730,9 @@ def execute_command(a, address_selection=None):
         raise Error('callback_scope','Callback evidence requires --from-import --range START:END',2)
     fresh = a.command == 'decompile' and a.fresh
     from_import = a.command == 'decompile' and a.from_import
+    preflight = a.command == 'decompile' and a.preflight
+    if preflight and (not from_import or a.format not in ('json','text')):
+        raise Error('focused_preflight_scope','--preflight requires --from-import and JSON or text output',2)
     with_hints = a.command == 'decompile' and a.with_type_hints
     recover_dispatch = a.command == 'decompile' and a.recover_dispatch_return
     recover_direct = a.command == 'decompile' and a.recover_direct_signatures
@@ -1881,6 +1885,21 @@ def execute_command(a, address_selection=None):
         return revise_annotation(a,p,command,address_selection)
     if a.command == 'annotations' and a.action == 'import':
         return import_annotations(a,p)
+    if preflight:
+        image=p.select(a.image,a.arch)
+        proof,_=focused.select(p,image,a.address)
+        data={'policy':'macscope-focused-selection-preflight/1',
+              'project_id':p.project_id,'image_id':image['image_id'],'arch':image['arch'],
+              'slice_sha256':image['sha256'],'source_kind':'verified_saved_slice',
+              'extent':proof,'native_readiness':'not_checked','capture_performed':False,
+              'limitations':[
+                  'Only exact byte-bound static selection was verified, not a recovered function.',
+                  'Proof plans are static preparation evidence, not applied native overrides or recovered control flow.',
+                  'No Ghidra Program, dependency, trust or execution readiness check was performed.',
+                  'No pseudocode, signature, runtime reachability or later capture success is established.',
+                  'Native budgets and dependency paths do not establish readiness in preflight mode.',
+                  'A later capture revalidates inputs and performs its separate native checks.']}
+        return envelope(command,data,cov=coverage('verified saved-slice focused selection only',1,1))
     if fresh or from_import or (import_disassembly and not a.receipt) or a.command in ('import','analyze'):
         check_engine_access(a,p)
     if a.command=='status':

@@ -2774,3 +2774,15 @@ records explicit TBZ/TBNZ fallthrough predicates. Default version1 still stops a
 those instructions. Predicates are not assumed true at runtime, taken paths are
 not followed, and later facts retain every guard/call obligation. Relocated
 addresses remain unknown runtime bit values. See the linked contract for limits.
+
+### Preview an exact focused selection without Ghidra
+
+```sh
+macscope decompile --project PROJECT --from-import --preflight --address 0xENTRY --format json
+```
+
+Replace `0xENTRY` with an exact unslid linker entry. This verifies the saved slice
+and the existing bounded extent proof without an engine, trust prompt or new job.
+Exit0 certifies only the static selection, not Program availability, decompilation
+or runtime behavior. JSON/text only. Ordinary captures are unchanged.
+See [the contract](focused-selection-preflight.md) for limits and validation.
