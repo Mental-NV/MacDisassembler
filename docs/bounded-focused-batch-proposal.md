@@ -100,7 +100,9 @@ Proposed logical layout (names are internal, not a migration commitment):
 
 Require a fresh reviewed sandbox profile narrowing the existing job write root
 to `worker/`, with no broader reads, executions, privileges, network access, or
-writable parent. Pin its digest. Deny worker creation, modification, deletion,
+writable parent. Pin both stable policy identity and exact per-attempt rendered
+profile as specified in §9; they are not interchangeable. Deny worker creation,
+modification, deletion,
 rename, and link-based replacement of committed records and their ancestors.
 Copied request inputs in `worker/` are never authoritative; the supervisor uses
 its own pinned request. Dependency roots and the pristine import remain outside
@@ -371,7 +373,7 @@ are pinned by schema; no arbitrary deletion of provenance or warning fields.
   IDs, architecture, artifact and slice digests, immutable import-record digest,
   Program-tree digest, `source_analysis_id:null`, ordered focused requests and
   their complete proofs, bridge/runtime/dependency/policy/schema versions and
-  hashes, effective limits/options, and intended sandbox policy identity.
+  hashes, effective limits/options, and stable sandbox policy identity.
   Include auxiliary JDK/runtime libraries and native decompiler, not just version
   strings. Machine-local executable paths/attempt times are separate diagnostics.
 - **Focused-request digest:** SHA-256 of the complete canonical focused-request
@@ -393,6 +395,24 @@ are pinned by schema; no arbitrary deletion of provenance or warning fields.
   immutable attempt-start hash, `operation:succeeded`, evidence classification,
   receipt hash and byte length. Its own digest is external, never a self-reference.
   The derived index references this digest plus receipt digest.
+
+**Sandbox identity has two layers.** The request binds a versioned policy/template
+digest, renderer implementation digest, all security-relevant parameters, and
+an explicit versioned allowlist of relocatable path roles. Initially only the
+new attempt's worker subtree and its child home/tmp/Program/candidate paths may
+vary by approved substitution; dependency/runtime roots and the project root
+remain fixed for fresh resume. Store these machine-local bindings in the
+immutable attempt-start record, outside path-independent identity payloads.
+That record also binds the exact rendered profile bytes/digest, validated path
+bindings, and the stable policy identity. Before each launch, regenerate and
+verify the exact profile against those bindings and recheck canonical physical
+paths, protected ancestors, dependency identities, and read/write/exec/network
+permissions. Do not normalize away arbitrary paths or compare only version
+labels. A new attempt-local path changes rendered bytes without changing the
+approved policy; any other changed security semantics requires a new reviewed
+policy/request. Engine-free replay verifies the saved template/renderer identity,
+bindings, and exact saved profile bytes under the supported historical validator,
+without requiring today's filesystem paths or rendered profile to match.
 
 Replay is engine-free and never silently recaptures. Required saved data: the
 batch request; immutable import/image identity records; the saved exact slice
@@ -439,10 +459,11 @@ consent on **each** engine-launching attempt, never from saved state.
 
 Fresh continuation requires exact current source/slice/import Program-tree,
 architecture, runtime/bridge/native and auxiliary dependencies, policy/schema,
-proofs, sandbox identity, and effective options/limit equality with the original
-request. Changed identities require a new batch. Old runtime paths may relocate
-only if all pinned content and sandbox semantics remain identical and the
-reviewed identity rules explicitly permit it; do not ignore a changed sandbox.
+proofs, stable sandbox policy/renderer identity, and effective options/limit
+equality with the original request. Each attempt's exact rendered profile must
+match its own validated bindings under §9; rendered digests are not required to
+equal across approved attempt-path substitutions. Changed dependencies,
+project/runtime locations, permissions, or other identities require a new batch.
 
 Skip only valid committed entries, including semantic partials. Retry the first
 uncommitted entry from pristine state and continue in original order. Never
