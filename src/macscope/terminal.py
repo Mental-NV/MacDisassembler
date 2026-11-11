@@ -318,6 +318,46 @@ def byte_dump(report, data):
         report.line(f"{start + offset:#018x}  {row.hex(' '):<47}  |{ascii_view}|")
 
 
+def project_status_summary(report, data):
+    """Explain recorded lifecycle separately; preserve the full raw status below."""
+    def field(value):
+        text = safe(value)
+        return text[:160] + (' [clipped]' if len(text) > 160 else '')
+    rows = data.get('images', [])
+    rows = rows if isinstance(rows, list) else []
+    report.line('Import and whole-image analysis are independent of query outcomes and graph coverage.')
+    for image in rows[:8]:
+        if not isinstance(image, dict):
+            report.line('Image status unavailable: invalid recorded row.')
+            continue
+        analysis = image.get('analysis');analysis = analysis if isinstance(analysis, dict) else {}
+        programs = image.get('programs');programs = programs if isinstance(programs, dict) else {}
+        imported = programs.get('import');imported = imported if isinstance(imported, dict) else {}
+        analyzed = programs.get('analysis');analyzed = analyzed if isinstance(analyzed, dict) else {}
+        import_status = imported.get('status') or ('recorded, not verified in this view' if image.get('imported') else 'not recorded')
+        report.line('Image ' + field(image.get('image_id')) + ': import ' + field(import_status))
+        if imported.get('error') or imported.get('reason'):
+            report.line('  Import diagnostic: ' + field(imported.get('error') or imported.get('reason')))
+        no_analysis = (analysis.get('status') == 'not_analyzed' and 'analysis_id' in analysis
+                       and analysis['analysis_id'] is None and 'active_analysis' in image
+                       and image['active_analysis'] is None and image.get('imported')
+                       and imported.get('status') in (None, 'verified')
+                       and analyzed.get('status') in (None, 'not_analyzed')
+                       and not any(row.get(key) for row in (analysis, imported, analyzed) for key in ('error','reason')))
+        if no_analysis:
+            report.line('  No whole-image analysis recorded (no committed snapshot).')
+        else:
+            report.line('  Whole-image analysis: ' + field(analysis.get('status')) +
+                        '; ID: ' + field(analysis.get('analysis_id')))
+        if analysis.get('error') or analysis.get('reason'):
+            report.line('  Analysis diagnostic: ' + field(analysis.get('error') or analysis.get('reason')))
+        if analyzed:
+            report.line('  Analysis Program verification: ' + field(analyzed.get('status')) +
+                        '; diagnostic: ' + field(analyzed.get('error') or analyzed.get('reason')))
+    report.line(f'Summary images omitted: {max(0,len(rows)-8)}. Full status and job outcomes follow unchanged.')
+    report.line('A missing committed snapshot does not mean no analysis was attempted; failed jobs remain below.')
+
+
 LAYOUTS = {
     "functions list": functions, "functions show": functions, "decompile": decompile,
     "disasm": disasm, "xrefs": references, "cfg": cfg, "calls": calls, "search": search,
@@ -349,6 +389,8 @@ def render(result):
     data = result["data"]
     if command == "evidence" and isinstance(data, dict):
         evidence_summary.render(report, data)
+    if command == "status" and isinstance(data, dict):
+        project_status_summary(report, data)
     layout = LAYOUTS.get(command)
     if data == []:
         report.line("No matching records.")

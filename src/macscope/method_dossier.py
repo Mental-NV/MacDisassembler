@@ -70,7 +70,15 @@ def lead_view(row, pin, types):
     view.line(f"Lead {f(lead.get('id'))} [{f(row.get('status'))}] {f(lead.get('kind'))}: {f(lead.get('value'))}")
     view.line(f"Image {f(lead.get('image_id'))}; architecture {f(pin.get('arch'))}")
     view.line(f"Artifact {f(pin.get('artifact_sha256'))}; slice {f(pin.get('slice_sha256'))}")
-    view.line(f"Source pin: analysis {f(pin.get('analysis_id'))}; import Program {f(pin.get('import_program_sha256'))}")
+    view.line(f"Image evidence: {f(pin.get('status'))}; reason: {f(pin.get('reason'))}")
+    if pin.get('analysis_id'):
+        view.line('Whole-image analysis pin: ' + f(pin['analysis_id']))
+    elif (pin.get('status') == 'available' and pin.get('source') == 'committed_import'
+          and pin.get('import_program_sha256') and not pin.get('reason') and not pin.get('error')):
+        view.line('No whole-image analysis recorded in this import-pinned report; other snapshots not checked.')
+    else:
+        view.line('Whole-image analysis selection not established; no analysis success or absence inferred.')
+    view.line('Import Program pin: ' + f(pin.get('import_program_sha256')))
     blockers = ([row['reason']] if row.get('reason') else []) + (row.get('gaps') or [])
     view.items('Blockers', blockers, 4, lambda i, x: f(x) + ' (site not inferred)')
     if row.get('status') != 'resolved' and not blockers:
