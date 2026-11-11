@@ -1,5 +1,14 @@
 # Objective-C type evidence beside selected functions
 
+```sh
+macscope evidence --project WORKSPACE --leads leads.json --objc-types --format html --output typed-evidence.html
+```
+
+Use an existing pinned manifest with `objc_selector` leads and verified
+`class_slot` values. JSON output contains the same optional section. This
+read-only export can use saved analyzed functions or valid focused receipts;
+it does not start a new capture. Existing manifests need no schema change.
+
 ## Contract before implementation
 
 Add an opt-in `evidence --objc-types` sidecar for reviewer-selected
@@ -31,16 +40,20 @@ Ghidra, applied as an annotation, or used to rewrite machine effects.
 ## Initial ABI subset
 
 Support arm64 and x86_64 Darwin, 64-bit pointer/object/Class/SEL/C-string arguments
-and returns, encoded 64-bit signed/unsigned integer arguments and returns, and
+and returns, encoded 64-bit signed/unsigned integers (`q`/`Q` only), and
 void return. Include the hidden receiver and selector arguments in register
 allocation. All supported fixed arguments use the integer register sequence:
 `x0` through `x7` on arm64; `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9` on x86_64.
 Return is `x0` or `rax`, or no value register for void.
+Register roles follow argument ordinal, never encoded frame/argument offsets.
+`l`/`L` are not in the validated subset. `q` can encode source `long` as well as
+`long long`, so a canonical type display cannot recover that source distinction.
 
 Reject overflow into stack arguments, by-value aggregates, floating/vector or
-small-integer types, unvalidated integer codes/qualifiers, and incomplete type
-decoding. Pointers do not imply knowledge of pointee layout; a block pointer
-does not supply a block signature. Keep every unsupported reason without
+small-integer types, block parameters/returns, unvalidated integer codes/qualifiers,
+and incomplete type decoding. Pointers do not imply knowledge of pointee layout;
+decoded block markers do not supply a block signature or a validated mapping
+in this first subset. Keep every unsupported reason without
 changing the independently observed function, metadata or code coverage.
 
 The mapping policy is versioned separately from type decoding and is not
@@ -59,13 +72,28 @@ do not establish arbitrary-binary ABI correctness.
 - Sidecars have a versioned policy, decoder/ABI policy identities, exact binding
   and a deterministic digest. They are derived from pinned saved input, not
   added to or accepted as an authority over a saved engine receipt.
-- Optional report/lead fields are emitted only with the flag. HTML shows the
+- One optional top-level `objc_type_evidence` section is indexed by lead ID;
+  existing lead and function objects are unchanged. Each sidecar has a separate
+  96 KiB budget. Metadata-selection gaps are recorded separately from code and
+  reference coverage, so an incomplete caller graph cannot invalidate an
+  otherwise exact declaration match.
+- The optional section is emitted only with the flag. HTML shows the
   sidecar and its limitations beside code. Evidence diff must measure its
   meaning separately from engine signature changes, and must not silently
   ignore added, removed, changed or unsupported policy fields.
+- Diff validates known policies and recomputes each sidecar from the report's
+  raw matching declaration, pins and separately recorded metadata-selection
+  gaps. A supplied digest alone is insufficient. These are internal consistency
+  checks, not cryptographic attestation of an externally supplied report.
 - Engine-free replay from the same retained image and receipts is deterministic.
   Changing the active analysis cannot rebind a pinned report. If the selected
   input is missing or corrupt, fail explicitly; never silently recapture.
+- Existing home-path redaction remains unchanged. If it changes a selected
+  declaration or lead, withhold that sidecar as `declaration_redacted`; do not
+  present redacted text as an exact raw type. Diff may retain this conservative
+  unavailable outcome but cannot recover the original redacted declaration.
+- Excessive output size or structural nesting yields an unavailable sidecar,
+  retaining the original lead and its code. No changes to receipt schemas.
 
 ## Acceptance
 
@@ -79,3 +107,36 @@ do not establish arbitrary-binary ABI correctness.
    without Ghidra/JDK, and no tests need a proprietary input.
 5. Independent review and the complete primary/analysis suites pass before
    publication. Decompiler type application requires a later contract.
+
+## Owned compiler validation
+
+The source-controlled [`owned_objc_abi_fixture.m`](../analysis/owned_objc_abi_fixture.m)
+compiled to assembly with Apple clang 21.0.0 (`clang-2100.3.34.2`) for both
+targets using:
+
+```sh
+clang -x objective-c -target arm64-apple-macos14 -O2 -fno-inline -S owned_objc_abi_fixture.m -o arm64.s
+clang -x objective-c -target x86_64-apple-macos14 -O2 -fno-inline -S owned_objc_abi_fixture.m -o x86_64.s
+```
+
+Both compilations succeeded. Static checks observed explicit stores of the
+hidden and explicit parameters from the register sequences above, and seven
+word/pointer passthrough methods returning `x2` through `x0` or `rdx` through
+`rax`. Class-method stores retained the hidden parameter positions. `long`
+and `long long` both encoded as `q`; unsigned variants as `Q`; `sizeof(long)`
+was 8 on both targets. Expected deprecated SEL-to-integer cast warnings were
+limited to the deliberately observable fixture stores.
+
+Source SHA-256:
+`b4912e0aa98311fc12dff2f3179c8c7f32cfc1ac28903145713aa05a4e3bb68f`.
+Assembly SHA-256: arm64
+`e90a7be9810bfaaabe73ec5c257222448a6c43e6e7067cf654e1270a35bebe0d`;
+x86_64 `fc0dcd595366313b71e3c8b8346783bdabd254eee2ca7d0677215264a84eb992`.
+The assembly is generated, not source-controlled. No binary was executed,
+no SDK header/framework was imported, and no installation was changed.
+
+These observations validate only the stated compiler examples and conditional
+mapping. The Python tests use real owned metadata bytes and saved synthetic
+function rows; the focused-reader integration test substitutes a synthetic
+receipt result. This feature has not undergone a new live Ghidra capture or
+third-party input validation.
