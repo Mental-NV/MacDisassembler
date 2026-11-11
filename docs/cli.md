@@ -2757,3 +2757,14 @@ pseudocode/instruction content by slice digest. It creates fresh
 `build/cli-integration-*` evidence on every run. Performance here is a local
 measurement, not a release target or cross-machine benchmark. See the
 [20-round CLI benchmark](benchmark.md) for the measured development host.
+
+## Conditional register facts from a saved focused query
+
+`register-relations --project PROJECT --query-job PUBLISHED_JOB --range START:END
+--abi aapcs64 --format json` derives a separately versioned view from verified saved
+ARM64 focused-query instructions. START:END must be explicit unslid hexadecimal
+addresses; end is exclusive, maximum128 instructions. It never starts an engine.
+It exposes conditional register relationships, not source prototypes, typed returns
+or indirect targets. Unsupported instructions (including TBZ) stop the prefix;
+a separately selected later range does not establish entry-to-range reachability.
+Valid reports retain partial exit6. See [contract and validation](focused-register-relations.md).
