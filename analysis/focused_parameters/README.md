@@ -68,3 +68,63 @@ until separately recorded. No performance/product-readiness claim is permitted.
 ```sh
 PYTHONPATH=src python -m unittest discover -s analysis/focused_parameters/tests -v
 ```
+
+## Separate owned native controls
+
+After independent review, use a private full import-only clone of the frozen
+positive Swift project. Each command gets a fresh Program copy and whole JVM:
+
+```sh
+PYTHONPATH=src python analysis/focused_parameters/controls.py \
+  /private/path/to/disposable-import-project prep_digest \
+  --ghidra /path/to/ghidra_12.2_PUBLIC --java-home /path/to/pinned-jdk \
+  --trust-owned-input --disposable-import-clone
+```
+
+Run `prep_rollback` and `ast_scope` separately, inspecting each result first.
+`prep_digest` tests an injected extent-digest refusal before preparation;
+`prep_rollback` tests an injected invalid-tail refusal after disassembly and
+transaction rollback; `ast_scope` tests a deliberately injected dead AST operation
+outside the selected body. None demonstrates a naturally occurring decode failure
+or native decompiler escape. Repeat successful controls only in fresh workers.
+
+Reports use `macscope-owned-native-controls/1`, with exact refusals, independently
+bound memory proofs, preserved observable-state snapshots and runtime checks.
+`control-assessment.json` is not an inference assessment or a product receipt.
+No synthetic graph is exported or allowed to reach parameter commit. Generic
+errors, missing evidence, snapshot read failures or unexpected mutation remain
+failures, not successful negative controls. No retry on uncertain teardown.
+
+### Staged transaction measurement
+
+The negative experiment writes only a pending `control-stage.json` observation.
+A second synchronous headless script measures restoration after the first script
+has returned and Ghidra has ended its transaction. Only this second measurement,
+validated again by the host against the pending stage and pinned requests, can
+produce a final control result. Missing stages or generic failures cannot pass.
+No transaction is manually closed; no synthetic HighFunction transfers between
+scripts.
+
+Snapshots preserve every capped code unit. Bytes are read only from explicitly
+initialized, nonmapped memory blocks. Definitely uninitialized, nonmapped units
+are represented by explicit block/range/state markers, never fabricated zeroes.
+Mapped, unknown, cross-block or inconsistent ranges fail. Initialized-memory read
+errors fail rather than being reclassified. Selected caller/callee bytes still
+must match their actual frozen hashes. Marker equality is initialization-state
+and range evidence, not evidence of unavailable byte contents.
+
+### Lossless inventory/2 encoding
+
+The bounded snapshot now uses `macscope-owned-control-inventory/2`: unique sorted
+block metadata and kind tables, one tuple for **each actual code unit**, lossless
+function records, and caller/callee memory proofs. Unit tuples are
+`[space, start, length, kindIndex, blockIndex, bytesOrNull, flow]`. Addresses and
+indices are exact integers. Actual native end addresses must equal
+`start + length - 1` before encoding. Units are ordered and nonoverlapping within
+each address space; the host validates all references and requires all table
+entries to be used. Block address spaces must agree with their units.
+
+This only removes repeated metadata and nested string escaping. It does not group
+or omit units, invent bytes, replace evidence with hashes, or increase any limit:
+100000 units, 4096 functions/blocks, 4 MiB snapshot, 8 MiB stage. If the compact
+inventory still exceeds a bound, the control fails and retains its artifacts.
