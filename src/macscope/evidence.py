@@ -45,6 +45,40 @@ def load(path):
     return validate_manifest(manifest)
 
 
+def from_query_jobs(project, job_ids):
+    """Build an ordinary manifest only after exact saved focused receipts validate."""
+    if (not isinstance(job_ids, list) or not 1 <= len(job_ids) <= MAX_LEADS
+            or any(not isinstance(job, str) or not jobs.JOB_ID.fullmatch(job) for job in job_ids)
+            or len(set(job_ids)) != len(job_ids)):
+        raise Error("evidence_query_selection", "Select one to sixteen unique exact saved query job IDs", 2)
+    images = {image['image_id']: image for image in project.images()}
+    pins, leads = {}, []
+    for job_id in job_ids:
+        _, record = jobs.get(project, job_id)
+        request = jobs.focused_record(record)
+        if request is None:
+            raise Error("evidence_query_mismatch", "Only published import-focused query receipts support this shortcut", 3)
+        try:
+            pin = {key: request[key] for key in ('image_id', 'arch', 'artifact_sha256', 'slice_sha256')}
+            pin[IMPORT_PIN] = request['source_program_sha256']
+            entry = request['entry_va']
+            lead = dict(id='job-'+job_id, image_id=pin['image_id'], kind='address', value=entry, query_job=job_id)
+            # Validate syntax before using the stored identity as a candidate lookup.
+            validate_manifest(dict(schema=LEADS_SCHEMA, images=[pin], leads=[lead]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Error("evidence_query_mismatch", "Invalid saved focused query identity", 3) from exc
+        if pin['image_id'] in pins and pins[pin['image_id']] != pin:
+            raise Error("evidence_image_pin", "Selected jobs have conflicting image pins", 3)
+        if pin['image_id'] not in pins and len(pins) >= MAX_IMAGES:
+            raise Error("evidence_manifest_limit", "Select jobs from at most four images", 2)
+        image = images.get(pin['image_id'])
+        open_image(project, image, pin)
+        focused_query(project, image, metadata.verified_slice(project, image), entry, job_id)
+        pins[pin['image_id']] = pin
+        leads.append(lead)
+    return validate_manifest(dict(schema=LEADS_SCHEMA, images=list(pins.values()), leads=leads))
+
+
 def validate_manifest(manifest):
     if (not isinstance(manifest, dict) or manifest.keys() != {"schema", "images", "leads"}
             or manifest["schema"] != LEADS_SCHEMA or not isinstance(manifest["images"], list)
