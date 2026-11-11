@@ -476,6 +476,10 @@ as replay/finalization, not a fresh attempt with fabricated work.
 
 ## 11. Separate owned-fixture feasibility experiment
 
+The [pinned API assessment](batch-lifecycle-api-assessment.md) supports fresh
+Program construction but identifies asynchronous native teardown as an unresolved
+launch prerequisite. It does not pass the live feasibility gate.
+
 After independent contract review, prepare a separate, non-shipping harness and
 small checked-in owned fixture sources. No public command, installation,
 arbitrary-app capture, Linux engine execution, persistent worker, product schema
