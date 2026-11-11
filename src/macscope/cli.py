@@ -290,7 +290,10 @@ def parser():
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl','html'))
     s.add_argument('--include-annotations',action='store_true')
     s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed evidence')
-    common(s,('json','html','text','compact','dossier','links'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
+    common(s,('json','html','text','compact','dossier','links'));s.add_argument('--project',required=True)
+    selection=s.add_mutually_exclusive_group(required=True)
+    selection.add_argument('--leads',help='Pinned evidence leads manifest')
+    selection.add_argument('--query-job',action='append',dest='evidence_query_jobs',help='Exact published import-focused query job; repeat up to sixteen')
     s.add_argument('--reference-links',action='store_true',help='Attach compact selected saved-receipt reference links and safe xrefs hints')
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s.add_argument('--link-focused',action='store_true',help='Verify direct calls between selected focused receipts')
@@ -1844,7 +1847,9 @@ def execute_command(a, address_selection=None):
         return file_fixups(a)
     p=Project(a.project)
     if a.command == 'evidence':
-        report = objc_type_evidence.redact_report(evidence.export(p,evidence.load(a.leads),link_imports=a.link_imports,
+        manifest = (evidence.from_query_jobs(p, a.evidence_query_jobs) if a.evidence_query_jobs is not None
+                    else evidence.load(a.leads))
+        report = objc_type_evidence.redact_report(evidence.export(p,manifest,link_imports=a.link_imports,
                                                   link_focused=a.link_focused,objc_types=a.objc_types),redact)
         if a.reference_links or a.format == 'links':
             from . import selected_reference_links
