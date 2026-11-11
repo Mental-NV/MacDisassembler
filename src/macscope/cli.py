@@ -20,7 +20,7 @@ from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, a
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
                       program_history, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, objc_types, scalar_signatures, search, swift_symbols, switch_tables
-from . import import_disasm, callback_evidence, callback_links, callback_composition
+from . import import_disasm, callback_evidence, callback_links, callback_composition, callback_twohop
 from . import body_ownership, engine_checks, evidence, flow_gap_evidence, saved_flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
@@ -194,6 +194,8 @@ def parser():
             s.add_argument('--callback-invocation-fallthrough',action='store_true',help='Record invocation CBZ/CBNZ fallthrough obligations; requires composition receipts')
             s.add_argument('--callback-assignment-receipt',help='Saved paired callback assignment receipt for conditional composition')
             s.add_argument('--callback-invocation-receipt',help='Saved paired callback invocation receipt for conditional composition')
+            s.add_argument('--callback-via-receipt',help='Pin one intermediate single-instruction thunk receipt; requires saved source and target')
+            s.add_argument('--callback-destination-checked-add-fallthrough',action='store_true',help='Explicit checked-add guard only at two-hop destination; requires provenance')
             s.add_argument('--callback-target-receipt',help='Link exactly one saved destination receipt; requires --callback-evidence')
             selections.add_argument('--range',dest='va_range',metavar='START:END',
                                     help='Show saved instructions in an unslid VA range (exclusive end)')
@@ -561,6 +563,10 @@ def imported_disassembly(args, project, image, start, end):
         response = callback_evidence.project(response,abi=abi,provenance=provenance,
             checked_add=getattr(args,'callback_checked_add_fallthrough',False))
         target = getattr(args,'callback_target_receipt',None)
+        via = getattr(args,'callback_via_receipt',None)
+        if via:
+            return callback_twohop.attach(project,image,raw_slice,response,via,target,abi=abi,provenance=provenance,
+                checked_add=getattr(args,'callback_destination_checked_add_fallthrough',False))
         response = callback_links.attach(project,image,raw_slice,response,target,abi=abi,provenance=provenance) if target else response
         assignment = getattr(args,'callback_assignment_receipt',None)
         invocation = getattr(args,'callback_invocation_receipt',None)
@@ -1660,6 +1666,10 @@ def execute_command(a, address_selection=None):
     import_disassembly = a.command == 'disasm' and a.from_import
     if a.command == 'disasm' and (a.receipt or import_disassembly) and (not import_disassembly or va_range is None):
         raise Error('disasm_scope','Import disassembly and receipt replay require --from-import --range START:END',2)
+    if a.command == 'disasm' and a.callback_via_receipt and (not (a.callback_evidence and a.receipt and a.callback_target_receipt) or len({a.receipt,a.callback_via_receipt,a.callback_target_receipt}) != 3 or a.callback_assignment_receipt or a.callback_invocation_receipt or a.callback_checked_add_fallthrough):
+        raise Error('callback_scope','Two-hop evidence requires three distinct saved receipts without composition or source guard',2)
+    if a.command == 'disasm' and a.callback_destination_checked_add_fallthrough and not (a.callback_via_receipt and (a.callback_provenance or a.callback_abi)):
+        raise Error('callback_scope','Destination guard requires two-hop evidence and explicit provenance',2)
     if a.command == 'disasm' and a.callback_checked_add_fallthrough and (not (a.callback_evidence and (a.callback_provenance or a.callback_abi)) or a.callback_target_receipt or a.callback_assignment_receipt or a.callback_invocation_receipt):
         raise Error('callback_scope','Checked-add guard projection requires selected-only callback evidence and provenance, without linked receipts',2)
     if a.command == 'disasm' and a.callback_writer_call_obligations and not (a.callback_assignment_receipt and a.callback_invocation_receipt and a.callback_abi == 'aapcs64'):

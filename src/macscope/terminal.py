@@ -156,12 +156,17 @@ def callback_summary(report, evidence):
         lines.append(clipped(value, 320))
 
     composition = row(evidence.get('composition'))
-    source = composition or evidence
+    chain = row(evidence.get('two_hop_chain'))
+    source = composition or chain or evidence
     link = row(evidence.get('destination_link'))
     effects = row(source.get('destination_effects')) or row(link.get('destination_effects'))
     selection = row(evidence.get('selection'))
     line('Callback evidence (bounded summary; independent of byte-decoding completion)')
     line('  Analysis status: ' + field(source.get('status')))
+    if chain:
+        line('  Two-hop links: ' + field(chain.get('link_status')) + ' (independent edges; not runtime proof)')
+        line('  Outer extent: ' + field(chain.get('source_extent')))
+        line('  Destination prefix stop: ' + field(chain.get('destination_stop_reason')))
     if composition:
         line('  Composition candidate: ' + field(composition.get('candidate_status')) + ' (not runtime proof)')
     line('  Selected source: ' + field(selection.get('start_va')) + ':' + field(selection.get('end_va')))
@@ -203,6 +208,8 @@ def callback_summary(report, evidence):
     # Composition decisions follow collected role-local boundaries in JSON.
     # Surface explicit decision reasons first without changing evidence ordering.
     gaps = sequence(source.get('gaps'))
+    if chain:
+        gaps = gaps + [{'role':'destination','evidence':g} for g in sequence(chain.get('destination_gaps'))]
     if composition:
         gaps = sorted(gaps, key=lambda item: 'reason' not in row(item))
     details('Gaps (explicit decisions first; may include role-local boundaries)', gaps, scoped)

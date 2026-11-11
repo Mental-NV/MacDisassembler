@@ -15,6 +15,8 @@ def project(raw, link):
     result = {'policy': POLICY, 'destination_identity': link['status'],
               'destination_envelope_sha256': report['source_envelope_sha256'],
               'source_envelope_sha256': link['source_envelope_sha256'],
+              'source_path_obligations': copy.deepcopy(link.get('source_path_obligations', [])),
+              'destination_path_obligations': copy.deepcopy(link.get('destination_path_obligations', [])),
               'destination_selection': copy.deepcopy(report['selection']),
               'assumptions': copy.deepcopy(report.get('assumptions', [])),
               'coverage': 'interpreted_selected_prefix_only',
@@ -45,6 +47,8 @@ def project(raw, link):
         effect = {'instruction_va': site['instruction_va'], 'instruction_bytes': site['instruction_bytes'],
                   'lane': site.get('lane'), 'width': 8, 'base_evidence': copy.deepcopy(base),
                   'base_evidence_scope': scope, 'abi_hypothesis': relation.get('abi_hypothesis'), 'location': copy.deepcopy(site['location']),
+                  'source_branch_conditions': list(relation.get('source_branch_conditions', [])),
+                  'destination_branch_conditions': list(site.get('conditional_on_branches', [])),
                   'source_call_conditions': list(relation.get('source_call_conditions', [])),
                   'destination_call_conditions': list(site.get('conditional_on_calls', [])),
                   'classification': 'unresolved_destination', 'reason': 'base_not_address_proven'}
