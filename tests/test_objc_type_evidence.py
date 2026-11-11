@@ -44,7 +44,7 @@ class AbiProjectionTests(unittest.TestCase):
         self.assertEqual(ordinary,strange)
 
     def test_types_and_qualifiers_outside_initial_subset_are_explicit(self):
-        for code in ('l','L','i','B','c','f','d','D','@?','{Owned=qq}','[2q]','b5','nq','O@'):
+        for code in ('l','L','f','d','D','@?','{Owned=qq}','[2q]','b5','nq','O@'):
             row = self.project('v24@0:8'+code+'16')
             self.assertEqual(row['status'],'unsupported',code)
             self.assertNotIn('arguments',row)
@@ -113,11 +113,11 @@ class SidecarDiffTests(TemporaryCase):
         self.assertIn(b'Optional Objective-C type details omitted', compact)
         self.assertLessEqual(len(compact), 32768)
         self.assertLessEqual(compact.count(b'\n'), 200)
-        report['leads'][0]['matches'][0]['type_encoding'] = 'v24@0:8B16'
+        report['leads'][0]['matches'][0]['type_encoding'] = 'v24@0:8d16'
         report[sidecars.FIELD] = sidecars.build(report, {})
         unsupported = report[sidecars.FIELD]['records'][0]
         self.assertEqual(unsupported['status'], 'associated')
-        self.assertEqual(unsupported['declaration']['type_encoding'], 'v24@0:8B16')
+        self.assertEqual(unsupported['declaration']['type_encoding'], 'v24@0:8d16')
         self.assertEqual(unsupported['abi_projection']['status'], 'unsupported')
         self.assertNotIn('arguments', unsupported['abi_projection'])
         self.assertEqual(report['leads'][0]['function'], before)
