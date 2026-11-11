@@ -85,3 +85,10 @@ report only, no public job/receipt or automatic publication. Native clone execut
 is macOS-only and fails explicitly elsewhere. Review implementation and unit tests
 before any Mac run; retain all failed attempts. No native work is authorized by
 this document alone.
+
+## Recorded status
+
+The bounded owned experiment has been run with the reviewed analysis-only harness.
+See the [reviewed-evidence assessment](owned-cow-copy-assessment.md) for results and
+limits. Independent raw review passed; product integration is deferred. This does
+not enable a product feature.
