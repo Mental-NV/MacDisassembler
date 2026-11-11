@@ -37,7 +37,7 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual(r['sites'][0]['operand']['kind'],'unknown')
 
     def test_barriers_never_join_or_cross_calls(self):
-        for word in (0x54000040,0x14000002,0x94000002,0xd61f0000,0x52800001,0xffffffff):
+        for word in (0x54000040,0xd61f0000,0x52800001,0xffffffff):
             r = report([0x10000001,word,0xf9000001])
             self.assertEqual(r['sites'],[])
             self.assertEqual(r['gaps'][0]['reason'],'unsupported_instruction_boundary')
@@ -72,7 +72,7 @@ class CallbackTests(unittest.TestCase):
         r=report([0xd503201f,0xd65f03c0,0xf9000001])
         self.assertEqual(r['interpreted_end_va'],'0x1008')
         self.assertEqual(r['stop_reason'],'return_boundary')
-        r=report([0xd503201f,0x94000000,0xf9000001])
+        r=report([0xd503201f,0x54000000,0xf9000001])
         self.assertEqual(r['interpreted_end_va'],'0x1004')
         self.assertEqual(r['stop_reason'],'unsupported_instruction_boundary')
         self.assertNotEqual(r['source_envelope_sha256'],report([0xd503201f])['source_envelope_sha256'])
@@ -93,6 +93,45 @@ class CallbackTests(unittest.TestCase):
         e=report([0xf9400fe0,0xf94007e8,0xd63f0100])
         self.assertEqual(e['sites'][-1]['operand'],{'kind':'memory_read','origin_va':'0x1004'})
         self.assertNotIn('value',e['sites'][-1]['operand'])
+
+    def test_pair_storage_lanes_and_original_load_base(self):
+        # STP x1,x2,[x0,#-16]; LDP x0,x1,[x0,#16]; BLR x1
+        r=report([0xa93f0801,0xa9410400,0xd63f0020])
+        self.assertEqual([s['location']['offset'] for s in r['sites'][:4]],[-16,-8,16,24])
+        self.assertEqual(r['sites'][2]['location']['base'],r['sites'][3]['location']['base'])
+        self.assertEqual(r['sites'][-1]['operand'],{'kind':'memory_read','origin_va':'0x1004','lane':1})
+        for word in (0xa9007c01,0xa9800801,0xa8800801,0x29000801,0xad000801,0xa9400000):
+            self.assertEqual(report([word])['sites'],[])
+
+    def test_direct_transfer_is_a_byte_fact_not_followed(self):
+        for word,kind in ((0x17ffffff,'direct_branch'),(0x97ffffff,'direct_call')):
+            r=report([word,0xf9000001])
+            self.assertEqual(len(r['sites']),1)
+            self.assertEqual((r['sites'][0]['kind'],r['sites'][0]['target_va']),(kind,'0xffc'))
+            self.assertEqual(r['status'],'inconclusive')
+            self.assertEqual(r['stop_reason'],'direct_transfer_boundary')
+
+    def test_owned_swift64_optimized_pair_thunk_and_writer_oracle(self):
+        def at(start,encoded):
+            raw=bytes.fromhex(encoded)
+            r=receipt([int.from_bytes(raw[i:i+4],'little') for i in range(0,len(raw),4)])
+            r['data']['selection'].update(start_va=hex(start),end_va=hex(start+len(raw)))
+            for i,row in enumerate(r['data']['instructions']):row['addr']=hex(start+4*i)
+            return subject.project(r)['data']['callback_evidence']
+        # llvm-objdump independently verifies STP x8,x20,[x20,#24].
+        r=at(0xb00,'0800009008d12c9188d201a9')
+        self.assertEqual(len(r['sites']),2)
+        self.assertEqual(r['sites'][0]['value']['value'],'0xb34')
+        self.assertEqual([s['location']['offset'] for s in r['sites']],[24,32])
+        self.assertEqual(r['sites'][1]['value'],{'kind':'unknown','register':'x20'})
+        thunk=at(0xb34,'6fffff17')
+        self.assertEqual(thunk['sites'][0]['target_va'],'0x8f0')
+        # Linker starts: writer0x8f0, next0x92c. Its initial prologue means
+        # the later STR at0x918 must not be claimed as reached by our decoder.
+        writer=at(0x8f0,'ff0301d1f44f02a9fd7b03a9fdc30091f30300aa80420091e123009122008052030080d220010094930a00f9fd7b43a9f44f42a9ff030191c0035fd6')
+        self.assertEqual(writer['sites'],[])
+        self.assertEqual(writer['stop_reason'],'unsupported_instruction_boundary')
+        self.assertEqual(writer['interpreted_end_va'],'0x8f0')
 
     def test_parser_option(self):
         p=cli.parser().parse_args(['disasm','--project','owned','--from-import','--range','0x1000:0x1004','--callback-evidence'])
