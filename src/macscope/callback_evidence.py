@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 
-POLICY = 'macscope-callback-sites/3'
+POLICY = 'macscope-callback-sites/4'
 MAX_INSTRUCTIONS = 1024
 MASK = (1 << 64) - 1
 
@@ -126,16 +126,32 @@ def project(response, *, abi=None, provenance=False):
                 put(rd, {'kind': 'memory_read', 'origin_va': value['origin_va']})
             else:
                 report['sites'].append(dict(site, kind='memory_store', location=location, value=get(rd)))
-        elif word & 0xffc00000 in (0xa9000000, 0xa9400000) and rd != 31 and ((word >> 10) & 31) != 31:
+        elif (word & 0xffc00000 in (0xa9000000, 0xa9400000)
+              or (abi and rn == 31 and word & 0xffc00000 in
+                  (0xa9800000, 0xa9c00000, 0xa8800000, 0xa8c00000))) and rd != 31 and ((word >> 10) & 31) != 31:
             rt2 = (word >> 10) & 31
-            load = word & 0xffc00000 == 0xa9400000
+            load = bool(word & (1 << 22))
+            mode = (word >> 23) & 3
+            writeback = mode in (1, 3)
             if load and rd == rt2:
                 report['gaps'].append(dict(site, reason='unsupported_duplicate_pair_destination'))
                 report['interpreted_end_va'] = hex(va)
                 report['stop_reason'] = 'unsupported_instruction_boundary'
                 break
             base = get(rn) if rn != 31 else (copy.deepcopy(sp) if abi else {'kind': 'unknown_stack_pointer'})
-            offset = signed((word >> 15) & 0x7f, 7) * 8
+            delta = signed((word >> 15) & 0x7f, 7) * 8
+            offset = 0 if mode == 1 else delta
+            if writeback:
+                next_offset = sp['offset'] + delta
+                if abs(next_offset) > 4096:
+                    report['gaps'].append(dict(site, reason='stack_delta_budget'))
+                    report['interpreted_end_va'] = hex(va)
+                    report['stop_reason'] = 'stack_delta_budget'
+                    break
+                next_sp = dict(sp, offset=next_offset)
+                site['addressing_mode'] = 'post_index' if mode == 1 else 'pre_index'
+                site['writeback'] = {'register': 'sp', 'delta': delta,
+                                     'before': copy.deepcopy(sp), 'after': copy.deepcopy(next_sp)}
             # Both lane addresses and store values use pre-instruction state.
             values = [get(rd), get(rt2)]
             for lane, reg in enumerate((rd, rt2)):
@@ -150,6 +166,8 @@ def project(response, *, abi=None, provenance=False):
             if load:
                 for lane, reg in enumerate((rd, rt2)):
                     put(reg, {'kind': 'memory_read', 'origin_va': row['addr'], 'lane': lane})
+            if writeback:
+                sp = next_sp
         elif word & 0x7c000000 == 0x14000000:  # B / BL immediate
             target = (va + signed(word & 0x3ffffff, 26) * 4) & MASK
             kind = 'direct_call' if word & 0x80000000 else 'direct_branch'

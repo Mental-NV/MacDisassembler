@@ -21,6 +21,7 @@ def main():
     commands=command(0x19,segment+section)+command(0x26,struct.pack('<II',0x650,6))
     raw=bytearray(struct.pack('<8I',0xfeedfacf,0x100000c,0,2,2,len(commands),0,0)+commands)
     raw.extend(bytes(0x700-len(raw)))
+    raw[0x570:0x57c]=bytes.fromhex('f44fbea9fd7b01a9fd430091')
     raw[0x568:0x570]=bytes.fromhex('010000f9c0035fd6')
     raw[0x5c0:0x5cc]=bytes.fromhex('e10300aa800a40f9e8ffff17')
     raw[0x650:0x656]=bytes.fromhex('e80a08401000')
@@ -33,7 +34,7 @@ def main():
         (p.path/'inputs'/(digest+'.macho')).write_bytes(raw)
         with p.db(readonly=False) as db:
             db.execute('INSERT INTO images VALUES(?,?,?,?,?)',(digest,'arm64',json.dumps(image),1,None))
-        for job,start,end in [('b'*32,0x5c0,0x5cc),('c'*32,0x568,0x570)]:
+        for job,start,end in [('b'*32,0x5c0,0x5cc),('c'*32,0x568,0x570),('d'*32,0x570,0x57c)]:
             proof,payload=import_disasm.selection(raw,image,start,end)
             binding=import_disasm.binding(p,image,proof)
             (p.path/'jobs'/job).mkdir()
@@ -58,9 +59,22 @@ def main():
         assert relation['base_correspondence']['value']['kind']=='memory_read'
         assert relation['value_correspondence']['value']['register']=='x0'
         assert relation['abi_hypothesis'] is None
+        stack_args=[sys.executable,'-m','macscope','disasm','--project',str(p.path),
+                    '--from-import','--range','0x570:0x57c','--receipt','d'*32,
+                    '--callback-evidence','--callback-abi','aapcs64','--format','json',
+                    '--ghidra','/nonexistent/ghidra','--java-home','/nonexistent/java']
+        stack_first=subprocess.run(stack_args,cwd=temporary,capture_output=True,text=True,check=True)
+        stack_second=subprocess.run(stack_args,cwd=temporary,capture_output=True,text=True,check=True)
+        assert stack_first.stdout==stack_second.stdout
+        stack=json.loads(stack_first.stdout)['data']['callback_evidence']
+        assert stack['policy']=='macscope-callback-sites/4'
+        assert len(stack['sites'])==4
+        assert stack['sites'][0]['writeback']['after']['offset']==-32
+        assert stack['sites'][2]['location']['base']['offset']==-32
+        assert stack['status']=='inconclusive'
         after={str(path.relative_to(p.path)):path.read_bytes() for path in (p.path/'jobs').rglob('*') if path.is_file()}
         assert before==after
-    print('PASS: packaged two-receipt writer-path replay; no engine, new jobs or receipt mutations')
+    print('PASS: packaged writer-path and stack-pair receipt replay; no engine, new jobs or receipt mutations')
 
 
 if __name__=='__main__':
