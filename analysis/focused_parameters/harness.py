@@ -153,9 +153,14 @@ def run(args):
 
 
 def run_locked(project,args):
+    control=getattr(args,'control',None)
+    if control is not None:
+        import controls
+        require(control in controls.REFUSALS and args.arm=='prepared', 'invalid control or inference arm')
     image=project.select(arch='arm64')
     require(image['active_analysis'] is None, 'import-only clone required')
     require(image['sha256'] in OWNED, 'input not frozen owned fixture')
+    if control is not None: require(image['sha256']==controls.POSITIVE, 'controls require frozen positive')
     caller_entry,callee_entry,site=OWNED[image['sha256']]
     caller,cp=focused.select(project,image,caller_entry)
     callee,dp=focused.select(project,image,callee_entry)
@@ -193,19 +198,40 @@ def run_locked(project,args):
         scripts=worker/'bridge'; scripts.mkdir(mode=0o700)
         sources=[engine.BRIDGE/name for name in ('MacscopeFocus.java','MacscopeBridge.java','RecoverCallSignatures.java')]
         sources.append(Path(__file__).with_name('OwnedScopedParameters.java'))
+        if control is not None:
+            sources=[p for p in sources if p.name!='MacscopeBridge.java']
+            sources.append(Path(__file__).with_name('OwnedNativeControls.java'))
+            pin(safe_path(controls.__file__))
         for src in sources:
             src=safe_path(src); pin(src); dst=scripts/src.name; shutil.copyfile(src,dst); pin(dst)
         write(attempt/'request.json',request); pin(attempt/'request.json')
         shutil.copyfile(attempt/'request.json',worker/'request.json'); pin(worker/'request.json')
+        if control is not None:
+            control_request={'schema':controls.SCHEMA,'control':control,'request_sha256':digest(attempt/'request.json')}
+            write(attempt/'control.json',control_request); pin(attempt/'control.json')
+            shutil.copyfile(attempt/'control.json',worker/'control.json'); pin(worker/'control.json')
         argv=['/usr/bin/sandbox-exec','-f',str(attempt/'sandbox.sb'),str(Path(deps['ghidra_path'])/'support/analyzeHeadless'),
               str(worker/'program'),'image','-process',image['image_id']+'.macho','-readOnly','-noanalysis']
-        for label,proof in ([('callee',callee)] if args.arm!='caller' else [])+[('caller',caller)]:
+        preparations=([('callee',callee)] if args.arm!='caller' else [])+[('caller',caller)]
+        if control in ('prep_digest','prep_rollback'): preparations=[]
+        for label,proof in preparations:
             tail=worker/(label+'-tail.json'); write(tail,proof['tail_calls']); pin(tail)
             argv+=['-preScript','MacscopeFocus.java',str(worker/(label+'-focus.json')),image['sha256'],
                    proof['entry_va'],proof['end_va_exclusive'],proof['extent_sha256'],str(tail),digest(tail)]
-        argv+=['-preScript','OwnedScopedParameters.java',str(worker/'request.json'),str(worker/'recovery.json'),'25',
-               '-scriptPath',str(scripts),'-postScript','MacscopeBridge.java',str(worker/'bridge.json'),'query','1','25',caller_entry,'--from-import',
-               '-max-cpu','1','-analysisTimeoutPerFile','240','-log',str(worker/'engine.log'),'-scriptlog',str(worker/'script.log')]
+        if control is None:
+            argv+=['-preScript','OwnedScopedParameters.java',str(worker/'request.json'),str(worker/'recovery.json'),'25',
+                   '-scriptPath',str(scripts),'-postScript','MacscopeBridge.java',str(worker/'bridge.json'),'query','1','25',caller_entry,'--from-import']
+        else:
+            # Prep controls supply their controlled tail proof to unchanged MacscopeFocus.
+            tail=worker/'control-tail.json'
+            tail_plan=copy.deepcopy(caller['tail_calls'])
+            if control=='prep_rollback':
+                tail_plan['candidates']=[dict(source_va=caller['entry_va'],target_va=caller['entry_va'],
+                    source_bytes=cp[:4].hex(),target_kind='linker_function_start',target_bytes=cp[:4].hex())]
+            write(tail,tail_plan);pin(tail)
+            argv+=['-preScript','OwnedNativeControls.java',str(worker/'request.json'),str(worker/'recovery.json'),'25',
+                   '-scriptPath',str(scripts)]
+        argv+=['-max-cpu','1','-analysisTimeoutPerFile','240','-log',str(worker/'engine.log'),'-scriptlog',str(worker/'script.log')]
         sandbox=engine.profile(project,deps,write_root=worker,read_only_program=True)
         (attempt/'sandbox.sb').write_text(sandbox); pin(attempt/'sandbox.sb')
         env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':str(worker/'home'),'TMPDIR':str(worker/'tmp')+'/',
@@ -213,6 +239,7 @@ def run_locked(project,args):
              'JAVA_TOOL_OPTIONS':'-Duser.home='+json.dumps(str(worker/'home'))+' -Djava.io.tmpdir='+json.dumps(str(worker/'tmp')),'LANG':'en_US.UTF-8'}
         manifest={'schema':SCHEMA,'kind':'owned_feasibility_operation','mode':'query','job_id':jobid,
                   'image_id':image['image_id'],'dependencies':deps,'limits':LIMITS,'environment':env,'sandbox_sha256':digest(attempt/'sandbox.sb')}
+        if control is not None: manifest.update(schema=controls.SCHEMA,kind='owned_native_control_operation',control=control)
         write(attempt/'pins.json',{'files':pins,'program_sha256':original,'normalized_program_sha256':normalized,'dependencies':deps,'limits':LIMITS})
         pin(attempt/'pins.json')
         recheck()
@@ -220,6 +247,21 @@ def run_locked(project,args):
                            manifest_path=attempt/'operation.json',manifest=manifest)
         recheck()
         require(engine.tree_digest(worker/'program',ignore=focused.PROJECT_BACKUPS)==normalized,'copied Program changed')
+        if control is not None:
+            require(not (worker/'bridge.json').exists() and not (worker/'recovery.json').exists(), 'unexpected export/recovery')
+            report=engine.read_worker_object(worker/'recovery.json.control.json',256*1024)
+            snapshots=engine.read_worker_object(worker/'control-snapshots.json',16*1024*1024)
+            controls.validate(report,control,request,digest(attempt/'request.json'),snapshots)
+            engine.engine_checks.verify_runtime(report['java_runtime'],deps['java_home'])
+            require(not (worker/'controlled-focus.json').exists(), 'unexpected controlled focus success')
+            if control=='ast_scope':
+                require((worker/'caller-focus.json').is_file() and (worker/'callee-focus.json').is_file(), 'missing exact preparation reports')
+                validate_guards(request,engine.read_worker_object(worker/'recovery.json.guards.json',256*1024),None)
+            else:
+                require(not any((worker/name).exists() for name in ('caller-focus.json','callee-focus.json','recovery.json.guards.json')), 'unexpected prepared result')
+            write(attempt/'control-assessment.json',{'schema':controls.SCHEMA,'control':control,'status':'expected_refusal_checked',
+                  'limitations':['owned injected control only','not natural native escape','not product readiness']})
+            return attempt
         raw=engine.read_worker_object(worker/'bridge.json',32*1024*1024)
         raw_checks=validate_raw(raw,image,deps,caller_entry)
         read=lambda name: engine.read_worker_object(worker/name,256*1024)

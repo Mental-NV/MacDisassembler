@@ -68,3 +68,29 @@ until separately recorded. No performance/product-readiness claim is permitted.
 ```sh
 PYTHONPATH=src python -m unittest discover -s analysis/focused_parameters/tests -v
 ```
+
+## Separate owned native controls
+
+After independent review, use a private full import-only clone of the frozen
+positive Swift project. Each command gets a fresh Program copy and whole JVM:
+
+```sh
+PYTHONPATH=src python analysis/focused_parameters/controls.py \
+  /private/path/to/disposable-import-project prep_digest \
+  --ghidra /path/to/ghidra_12.2_PUBLIC --java-home /path/to/pinned-jdk \
+  --trust-owned-input --disposable-import-clone
+```
+
+Run `prep_rollback` and `ast_scope` separately, inspecting each result first.
+`prep_digest` tests an injected extent-digest refusal before preparation;
+`prep_rollback` tests an injected invalid-tail refusal after disassembly and
+transaction rollback; `ast_scope` tests a deliberately injected dead AST operation
+outside the selected body. None demonstrates a naturally occurring decode failure
+or native decompiler escape. Repeat successful controls only in fresh workers.
+
+Reports use `macscope-owned-native-controls/1`, with exact refusals, independently
+bound memory proofs, preserved observable-state snapshots and runtime checks.
+`control-assessment.json` is not an inference assessment or a product receipt.
+No synthetic graph is exported or allowed to reach parameter commit. Generic
+errors, missing evidence, snapshot read failures or unexpected mutation remain
+failures, not successful negative controls. No retry on uncertain teardown.
