@@ -7,7 +7,7 @@ from .errors import Error
 POLICY = 'macscope-callback-receipt-link/1'
 
 
-def attach(project, image, raw, response, job_id):
+def attach(project, image, raw, response, job_id, *, abi=None, provenance=False):
     """Verify the destination independently before adding a derived link."""
     _, manifest = jobs.get(project, job_id)
     request = manifest.get('disasm_request', {})
@@ -20,7 +20,7 @@ def attach(project, image, raw, response, job_id):
         raise Error('callback_target_receipt', 'Destination must be a bounded import-disassembly receipt', 8) from exc
     proof, payload = import_disasm.selection(raw, image, start, end)
     target = import_disasm.replay(project, image, proof, payload, job_id)
-    projected = callback_evidence.project(target)
+    projected = callback_evidence.project(target, abi=abi, provenance=provenance)
     result = copy.deepcopy(response)
     report = result['data']['callback_evidence']
     target_report = projected['data']['callback_evidence']
@@ -45,4 +45,31 @@ def attach(project, image, raw, response, job_id):
         link['reason'] = 'destination_selection_exceeds_linker_extent'
         return result
     link.update(status='verified_direct_entry_link', transfer=transfers[0], destination_extent=extent)
+    if abi or provenance:
+        inputs = transfers[0].get('register_inputs', {})
+        def correspond(value):
+            if (value.get('kind') == 'range_input_register'
+                    and value.get('selection_start_va') == hex(start)
+                    and value.get('source_envelope_sha256') == target_report['source_envelope_sha256']
+                    and value.get('register') in inputs):
+                return {'status': 'matched_input_register', 'evidence_scope': 'source_transfer',
+                        'value': copy.deepcopy(inputs[value['register']])}
+            return {'status': 'not_correlated', 'evidence_scope': 'destination', 'value': copy.deepcopy(value)}
+        relations = []
+        for site in target_report['sites']:
+            if site['kind'] != 'memory_store':
+                continue
+            base = site['location']['base']
+            base_binding, value_binding = correspond(base), correspond(site['value'])
+            matched = all(binding['status'] == 'matched_input_register' for binding in (base_binding, value_binding))
+            relations.append({'instruction_va': site['instruction_va'], 'instruction_bytes': site['instruction_bytes'],
+                'destination_location': copy.deepcopy(site['location']), 'destination_value': copy.deepcopy(site['value']),
+                'base_correspondence': base_binding, 'value_correspondence': value_binding,
+                'storage_role': 'stack' if base['kind'] in ('stack_pointer_relative', 'unknown_stack_pointer') else 'unattributed_memory',
+                'lane': site.get('lane'), 'abi_hypothesis': abi,
+                'basis': ('abi_conditional_register_correspondence' if abi else 'byte_proven_register_correspondence')
+                         if matched else 'partial_register_correspondence',
+                'source_call_conditions': list(transfers[0].get('conditional_on_calls', [])),
+                'destination_call_conditions': list(site.get('conditional_on_calls', []))})
+        link['store_relations'] = relations
     return result
