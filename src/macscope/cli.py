@@ -304,6 +304,7 @@ def parser():
     s.add_argument('--query-job',required=True)
     s.add_argument('--range',dest='register_range',required=True,help='Explicit unslid START:END, exclusive end, at most 128 ARM64 instructions')
     s.add_argument('--abi',choices=('aapcs64',),required=True,help='Explicit normal-return/callee-preservation hypothesis, not verified Swift ABI')
+    s.add_argument('--bit-test-fallthrough',action='store_true',help='Conditionally trace TBZ/TBNZ fallthrough; predicates unverified, taken paths not analyzed')
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left JSON export or evidence handoff')
     s.add_argument('right',help='Right JSON export or evidence handoff')
@@ -1853,7 +1854,7 @@ def execute_command(a, address_selection=None):
     p=Project(a.project)
     if a.command == 'register-relations':
         from . import register_relations
-        report = register_relations.query(p,a.query_job,a.register_range,a.abi)
+        report = register_relations.query(p,a.query_job,a.register_range,a.abi,bit_test_fallthrough=a.bit_test_fallthrough)
         return envelope(command,report,status='partial',
                         cov=coverage('conditional selected register relationships',partial=True,reason='runtime_and_path_unknown'))
     if a.command == 'evidence':

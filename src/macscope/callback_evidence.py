@@ -5,6 +5,7 @@ import json
 import re
 
 POLICY = 'macscope-callback-sites/7'
+BIT_TEST_POLICY = 'macscope-callback-sites/8'
 MAX_INSTRUCTIONS = 1024
 MASK = (1 << 64) - 1
 
@@ -13,7 +14,7 @@ def signed(value, bits):
     return value - (1 << bits) if value & (1 << (bits-1)) else value
 
 
-def project(response, *, abi=None, provenance=False, fallthrough=False, checked_add=False):
+def project(response, *, abi=None, provenance=False, fallthrough=False, checked_add=False, bit_test_fallthrough=False):
     """Annotate a validated import disassembly without mutating its receipt."""
     if abi not in (None, 'aapcs64'):
         raise ValueError('Unsupported callback ABI hypothesis')
@@ -22,14 +23,17 @@ def project(response, *, abi=None, provenance=False, fallthrough=False, checked_
         raise ValueError('Fallthrough obligations require register provenance')
     if checked_add and not tracing:
         raise ValueError('Checked-add guards require register provenance')
+    if bit_test_fallthrough and (not tracing or fallthrough or checked_add):
+        raise ValueError('Bit-test fallthrough requires tracing and cannot mix path modes')
     result = copy.deepcopy(response)
     data = result['data']
     proof = data['selection']
-    report = {'policy': POLICY,
+    report = {'policy': BIT_TEST_POLICY if bit_test_fallthrough else POLICY,
               'source_envelope_sha256': hashlib.sha256(json.dumps(response, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')).hexdigest(),
               'selection': copy.deepcopy(proof),
               'status': 'inconclusive', 'sites': [], 'gaps': [],
-              'path_mode': ('explicit_fallthrough_and_checked_add' if fallthrough and checked_add else
+              'path_mode': ('explicit_bit_test_fallthrough' if bit_test_fallthrough else
+                            'explicit_fallthrough_and_checked_add' if fallthrough and checked_add else
                             'explicit_fallthrough' if fallthrough else
                             'explicit_checked_add_guards' if checked_add else 'no_conditional_paths'),
               'checked_add_mode': 'explicit_adjacent_overflow_guard' if checked_add else 'disabled',
@@ -167,7 +171,8 @@ def project(response, *, abi=None, provenance=False, fallthrough=False, checked_
             left, right = (copy.deepcopy(zero) if rn == 31 else get(rn)), (copy.deepcopy(zero) if rm == 31 else get(rm))
             concrete = ('address', 'integer_constant')
             mask = (1 << width)-1
-            if left['kind'] in concrete and right['kind'] in concrete:
+            if (left['kind'] in concrete and right['kind'] in concrete
+                    and (not bit_test_fallthrough or 'address' not in (left['kind'], right['kind']))):
                 lhs, rhs = int(left['value'], 16) & mask, int(right['value'], 16) & mask
                 shifted = ((rhs << shift_amount) & mask if shift_kind == 0 else
                            rhs >> shift_amount if shift_kind == 1 else
@@ -280,6 +285,45 @@ def project(response, *, abi=None, provenance=False, fallthrough=False, checked_
                     put(reg, {'kind': 'memory_read', 'origin_va': row['addr'], 'lane': lane})
             if writeback:
                 sp = next_sp
+        elif bit_test_fallthrough and word & 0x7e000000 == 0x36000000:  # TBZ / TBNZ
+            bit = ((word >> 26) & 32) | ((word >> 19) & 31)
+            width = 32 if bit < 32 else 64
+            nonzero_branch = bool(word & (1 << 24))
+            displacement = signed((word >> 5) & 0x3fff, 14) * 4
+            target = (va + displacement) & MASK
+            value = get(rd) if rd != 31 else {'kind': 'integer_constant', 'value': '0x0', 'basis': 'zero_register'}
+            expected_set = not nonzero_branch
+            branch = dict(site, kind='conditional_branch', branch='tbnz' if nonzero_branch else 'tbz',
+                          target_va=hex(target), fallthrough_va=hex(va+4), width=width, bit_index=bit,
+                          register=(f'w{rd}' if width == 32 else f'x{rd}') if rd != 31 else 'zr',
+                          tested_value=value, fallthrough_predicate='bit_set' if expected_set else 'bit_clear',
+                          predicate_status='unverified', taken_path='not_analyzed')
+            report['sites'].append(branch)
+            known_set = None
+            if value['kind'] == 'integer_constant':
+                known_set = bool((int(value['value'],16) >> bit) & 1)
+            elif value['kind'] == 'register_add_result' and value.get('width') == 32 and bit >= 32:
+                known_set = False
+            identity_bearing = value['kind'] in ('address','range_input_register','memory_read',
+                'register_add_result','call_clobbered','unknown_arithmetic','stack_pointer_relative') or 'value_identity' in value
+            conflicts = [prior['instruction_va'] for prior in report['path_obligations']
+                         if identity_bearing and prior.get('bit_index') == bit
+                         and prior['tested_value'] == value
+                         and prior['fallthrough_predicate'] != branch['fallthrough_predicate']]
+            reason = ('conditional_backedge_or_cycle' if displacement <= 0 or target <= va else
+                      'branch_condition_budget' if len(branch_conditions) >= 16 else
+                      'impossible_fallthrough_predicate' if known_set is not None and known_set != expected_set else
+                      'contradictory_fallthrough_predicates' if conflicts else None)
+            if reason:
+                if conflicts:branch['contradictory_with'] = conflicts
+                report['gaps'].append(dict(site, reason=reason, prior_sites=conflicts))
+                report['stop_reason'] = reason
+                break
+            if known_set is not None:branch['predicate_status'] = 'statically_satisfied'
+            report['path_obligations'].append(copy.deepcopy(branch))
+            branch_conditions.append(row['addr'])
+            if 'alternate_branch_paths_not_analyzed' not in report['missing_evidence']:
+                report['missing_evidence'].append('alternate_branch_paths_not_analyzed')
         elif fallthrough and word & 0x7e000000 == 0x34000000:  # CBZ / CBNZ W/X
             width = 64 if word & (1 << 31) else 32
             nonzero_branch = bool(word & (1 << 24))
