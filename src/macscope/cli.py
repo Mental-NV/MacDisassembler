@@ -20,6 +20,7 @@ from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, a
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
                       program_history, validate_snapshot_functions, write_json)
 from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, objc_types, scalar_signatures, search, swift_symbols, switch_tables
+from . import import_disasm
 from . import body_ownership, engine_checks, evidence, flow_gap_evidence, saved_flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
@@ -149,7 +150,7 @@ def parser():
     s=sub.add_parser('objc');ss=s.add_subparsers(dest='action',required=True)
     for c in ('classes','methods','selectors','properties','ivars'):
         s=ss.add_parser(c);project(s);common(s);pagination(s);s.add_argument('--name-contains')
-        if c=='methods':
+        if c in ('methods','ivars'):
             s.add_argument('--class-slot',help='Select one unslid __objc_classlist or __objc_nlclslist pointer slot')
         if c in ('methods','ivars'):
             s.add_argument('--decode-types',action='store_true',help='Present recorded types without applying them to pseudocode')
@@ -181,6 +182,9 @@ def parser():
         s=sub.add_parser(c);project(s);common(s,('text','json','dot') if c=='cfg' else ('text','json','jsonl'))
         selections=selector(s,all_option=c=='decompile')
         if c=='disasm':
+            budgets(s)
+            s.add_argument('--from-import',action='store_true',help='Linearly decode a bounded --range from the saved no-analysis import')
+            s.add_argument('--receipt',help='Replay one saved import-disassembly job for the same range')
             selections.add_argument('--range',dest='va_range',metavar='START:END',
                                     help='Show saved instructions in an unslid VA range (exclusive end)')
         if c=='decompile':
@@ -534,6 +538,27 @@ def fresh_decompile(args, project, image, function, source, revision, hints=None
     with jobs.result_publication('query',job['job_id'],resumed_from):
         response = jobs.publish_query(project,resumed_from or job['job_id'],request,response)
     return flow_evidence.query_view(response,function) if assisted else response
+
+
+def imported_disassembly(args, project, image, start, end):
+    proof,payload = import_disasm.selection(metadata.verified_slice(project,image),image,start,end)
+    if args.receipt:
+        return import_disasm.replay(project,image,proof,payload,args.receipt)
+    with project.writer():
+        jobs.verify_engine_writer_stopped(project)
+        deps = engine.dependencies(args.ghidra,args.java_home,full=True)
+        raw,job = import_disasm.run(project,image,args,deps,proof,payload)
+        covered = import_disasm.validate_rows(raw,proof,payload)
+        data = {'selection':import_disasm.binding(project,image,proof),'covered_bytes':covered,
+                'instructions':raw['instructions'],'gaps':raw['gaps'],
+                'origin':{'mode':'bounded_import_disassembly','job_id':job['job_id'],
+                          **{key:deps[key] for key in ('ghidra_version','ghidra_tree_sha256','bridge_sha256')}}}
+        partial = bool(raw['gaps'])
+        response = envelope('disasm',data,status='partial' if partial else 'complete',
+                            cov=coverage('selected bytes, linear decoding only',covered,len(payload),partial,
+                                         reason='undecoded_range' if partial else None),
+                            diagnostics=['Linear decoding does not prove function boundaries, reachability or runtime behavior.'])
+        return import_disasm.publish(project,job,response)
 
 
 def focused_decompile(args, project, image, *, entry=None, deps=None, resumed_from=None):
@@ -1601,6 +1626,9 @@ def execute_command(a, address_selection=None):
     va_range = getattr(a,'va_range',None) if a.command == 'disasm' else None
     if va_range is not None:
         va_range = disassembly.parse_range(va_range)
+    import_disassembly = a.command == 'disasm' and a.from_import
+    if a.command == 'disasm' and (a.receipt or import_disassembly) and (not import_disassembly or va_range is None):
+        raise Error('disasm_scope','Import disassembly and receipt replay require --from-import --range START:END',2)
     fresh = a.command == 'decompile' and a.fresh
     from_import = a.command == 'decompile' and a.from_import
     with_hints = a.command == 'decompile' and a.with_type_hints
@@ -1741,7 +1769,7 @@ def execute_command(a, address_selection=None):
         return revise_annotation(a,p,command,address_selection)
     if a.command == 'annotations' and a.action == 'import':
         return import_annotations(a,p)
-    if fresh or from_import or a.command in ('import','analyze'):
+    if fresh or from_import or (import_disassembly and not a.receipt) or a.command in ('import','analyze'):
         check_engine_access(a,p)
     if a.command=='status':
         return project_status(a,p)
@@ -1755,6 +1783,8 @@ def execute_command(a, address_selection=None):
     image=p.select(a.image,a.arch)
     if address_selection is not None:
         address_selection.update(image_id=image['image_id'],arch=image['arch'])
+    if import_disassembly:
+        return imported_disassembly(a,p,image,*va_range)
     if from_import:
         return focused_decompile(a,p,image)
     if a.command=='headers':
@@ -1780,7 +1810,8 @@ def execute_command(a, address_selection=None):
             filters['type_decoding_policy'] = objc_types.POLICY
         if getattr(a,'class_slot',None) is not None:
             slot = metadata.hex_address(a.class_slot,'Objective-C class list slot')
-            records,gaps = objc.selected_methods(raw,image,slot)
+            records,gaps = (objc.selected_ivars(raw,image,slot) if a.action == 'ivars'
+                            else objc.selected_methods(raw,image,slot))
             filters['class_slot'] = hex(slot)
         else:
             records,gaps = objc.inventory(raw,image,a.action,diagnostics=diagnostics)
@@ -1799,7 +1830,7 @@ def execute_command(a, address_selection=None):
             if incomplete:
                 diagnostics.append(f'Type decoding incomplete for {incomplete} of {len(rows)} rows on this page; '
                                    'see decoded_types.status and diagnostics. Inventory coverage is reported separately.')
-        cov['scope'] = ('selected Objective-C class declaration methods' if 'class_slot' in filters
+        cov['scope'] = ('selected Objective-C class declaration '+a.action if 'class_slot' in filters
                         else 'selected image Objective-C '+a.action)
         if gaps:
             reasons=[*gaps,*(['page_limit'] if cov['next_cursor'] else [])]
@@ -1826,6 +1857,10 @@ def execute_command(a, address_selection=None):
                 diagnostics.append('No matching class declarations in the completely visited selected class-list scope.')
         elif gaps:
             diagnostics.extend(gaps)
+        if a.action == 'ivars':
+            diagnostics.append('Declared instance ivars only; inherited and runtime-resolved layouts are excluded. '
+                               'Offsets are initial file values, not offset-storage addresses or inferred loads. '
+                               'See offset_evidence for exact bytes or missing proof.')
         return envelope(command,rows,status='partial' if gaps else 'complete',cov=cov,diagnostics=diagnostics)
     if a.command in metadata.PREFLIGHT_LISTS:
         return metadata_collection(a,p,image)

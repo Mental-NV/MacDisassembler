@@ -51,6 +51,7 @@ def diagnostic_kind(reason):
 class ObjCImage:
     def __init__(self, data, image, parsed, *, scoped=False, pointer_limit=None, discovery=False):
         self.parsed = parsed
+        self.scoped = scoped
         self.view = MappedImage(data,parsed["segments"],reject_virtual_overlap=True)
         self.sections = parsed["sections"]
         self.scoped_lookup = (data,image,parsed) if scoped and any(
@@ -77,7 +78,7 @@ class ObjCImage:
         self.pointers.update((int(row["va"],16),row) for row in rows if row["kind"]=="bind")
 
     def relocation(self, site):
-        if self.scoped_lookup is not None or self.discovery:
+        if self.scoped or self.discovery:
             if site not in self.selected_sites:
                 if len(self.selected_sites) >= self.pointer_limit:
                     self.gaps.add(self.pointer_limit_reason)
@@ -422,7 +423,8 @@ class ObjCImage:
                 self.gaps.add(f"unsupported_{kind}_list_format")
                 return range(0)
             first, end = address+8, address+8+count*stride
-            self.view.mapping(first,end-first)
+            if kind != "ivar":
+                self.view.mapping(first,end-first)
             return range(first,end,stride)
         except ValueError:
             self.gaps.add(f"invalid_{kind}_list")
@@ -451,24 +453,33 @@ class ObjCImage:
         return rows
 
     def ivar_offset(self, site, *, anonymous):
-        binding = self.pointers.get(site,{})
-        result = {"declared_offset_bytes":None,"offset_storage_va":None,"offset_status":"unavailable"}
-        if binding.get("kind") == "bind":
-            self.gaps.add("ivar_offset_unavailable")
-            return dict(result,offset_status="external_bind",offset_symbol=binding["symbol"],
-                        offset_library=binding["library"])
+        result = {"declared_offset_bytes":None,"offset_storage_va":None,"offset_status":"unavailable",
+                  "offset_pointer_va":hex(site),
+                  "offset_evidence":{"status":"missing","required":"verified local offset pointer and file-backed nonnegative int32 value"}}
         try:
+            # Resolve lazily scoped fixups before inspecting an external bind.
+            binding = self.relocation(site)
+            if binding.get("kind") == "bind":
+                self.gaps.add("ivar_offset_unavailable")
+                return dict(result,offset_status="external_bind",offset_symbol=binding["symbol"],
+                            offset_library=binding["library"])
             address = self.target(site)
             if not address:
                 if anonymous:
-                    return dict(result,offset_status="anonymous_bitfield")
+                    return dict(result,offset_status="anonymous_bitfield",
+                                offset_evidence={"status":"not_recorded","reason":"anonymous_bitfield"})
                 raise ValueError("Ivar offset storage is missing")
             result["offset_storage_va"] = hex(address)
             value, = self.view.unpack("<i",address)
             if value < 0:
                 raise ValueError("Negative initial ivar offset")
-            return dict(result,declared_offset_bytes=value,offset_status="recorded")
-        except ValueError:
+            return dict(result,declared_offset_bytes=value,offset_status="recorded",
+                        offset_evidence={"status":"recorded","storage_va":hex(address),
+                                         "width_bytes":4,"encoding":"signed_int32_little_endian",
+                                         "bytes":value.to_bytes(4,"little",signed=True).hex(),
+                                         "scope":"file_initial_value_not_runtime_layout"})
+        except ValueError as error:
+            result["offset_evidence"]["reason"] = str(error)
             self.gaps.add("ivar_offset_unavailable")
             return result
 
@@ -479,6 +490,11 @@ class ObjCImage:
             records = self.declaration_sites(int(owner["metadata_va"],16)+48,32,"ivar")
             visited = records[:remaining]
             for record in visited:
+                try:
+                    self.view.mapping(record,32)
+                except ValueError:
+                    self.gaps.add("unavailable_ivar_record_bytes")
+                    continue
                 try:
                     name, encoding = self.target(record+8), self.target(record+16)
                     if not encoding:
@@ -519,7 +535,7 @@ class ObjCImage:
         return rows
 
 
-def selected_methods(data, image, class_slot):
+def selected_declarations(data, image, class_slot, *, scope):
     parsed = thin(data)
     matches = [row for row in parsed["sections"] if row["name"] in CLASS_LISTS
                and row["file_offset"] is not None
@@ -545,8 +561,17 @@ def selected_methods(data, image, class_slot):
         selected = objc.class_record(class_slot,address)
     except ValueError:
         return [], sorted(objc.gaps | {"invalid_class_record"})
-    rows = objc.method_rows([selected],include_categories=False)
+    rows = (objc.ivar_rows([selected]) if scope == "ivars"
+            else objc.method_rows([selected],include_categories=False))
     return [dict(row,class_slot=hex(class_slot)) for row in rows],sorted(objc.gaps)
+
+
+def selected_methods(data, image, class_slot):
+    return selected_declarations(data,image,class_slot,scope="methods")
+
+
+def selected_ivars(data, image, class_slot):
+    return selected_declarations(data,image,class_slot,scope="ivars")
 
 
 def inventory(data, image, scope, *, diagnostics=None):
