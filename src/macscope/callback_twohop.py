@@ -1,9 +1,44 @@
 """Two independently pinned direct edges; no transitive register substitution."""
 import copy
-from . import callback_evidence, callback_links, import_disasm, jobs, metadata, writer_call_obligations
+from . import callback_evidence, callback_links, focused, focused_tailcalls, import_disasm, jobs, metadata, writer_call_obligations
 from .errors import Error
 
-POLICY = 'macscope-pinned-twohop/1'
+POLICY = 'macscope-pinned-twohop/2'
+
+
+def source_boundary(raw, image, outer, link):
+    """An independently recomputed byte extent, not a transitive call proof."""
+    result = {'policy': 'macscope-twohop-source-boundary/1', 'status': 'gap',
+              'source_envelope_sha256': outer['source_envelope_sha256'],
+              'selection': copy.deepcopy(outer['selection'])}
+    def gap(reason):
+        return dict(result, reason=reason)
+    sites = outer['sites']
+    if (len(sites) != 1 or sites[0]['kind'] != 'direct_branch'
+            or outer['stop_reason'] != 'direct_transfer_boundary'
+            or any(g.get('reason') != 'direct_transfer_boundary' for g in outer['gaps'])):
+        return gap('complete_single_branch_evidence_required')
+    if link.get('status') != 'verified_direct_entry_link':
+        return gap('pinned_inner_entry_not_verified')
+    selection = outer['selection']
+    if (int(selection['end_va'],16)-int(selection['start_va'],16) != 4
+            or sites[0]['instruction_va'] != selection['start_va']
+            or sites[0]['target_va'] != link['destination_selection']['start_va']):
+        return gap('selected_branch_identity_mismatch')
+    try:
+        proof, payload = focused.extent(raw, image, selection['start_va'],
+                                       policy='macscope-focused-import/4')
+    except Error as exc:
+        return dict(gap('source_boundary_unavailable'), extent_error=exc.code)
+    if proof['end_va_exclusive'] != selection['end_va'] or proof['length'] != 4:
+        return gap('selection_is_not_complete_source_extent')
+    if (payload.hex() != sites[0]['instruction_bytes']
+            or focused_tailcalls.branch_target(int(selection['start_va'],16),payload) != int(sites[0]['target_va'],16)):
+        return gap('selected_branch_bytes_mismatch')
+    result.update(status='verified_complete_selected_thunk',
+                  basis='terminal_linker_branch' if 'boundary' in proof else 'next_linker_start',
+                  extent=proof, target_va=sites[0]['target_va'])
+    return result
 
 
 def attach(project,image,raw,response,via,target,*,abi=None,provenance=False,checked_add=False, writer_calls=False):
@@ -75,6 +110,10 @@ def attach(project,image,raw,response,via,target,*,abi=None,provenance=False,che
                            for s in destination['sites'] if s['kind']=='direct_call' and abi=='aapcs64'],
         'unknowns':['transitive_register_correspondence_not_applied','runtime_execution',
                     'application_writer_attribution','persistence','execution_order']}
+    boundary = source_boundary(raw,image,outer,link1)
+    chain['source_extent_evidence'] = boundary
+    if boundary['status'] == 'verified_complete_selected_thunk':
+        chain['source_extent'] = boundary['status']
     if chain['path_obligations']:
         chain['unknowns'].append('alternate_branch_paths_not_analyzed')
     if chain['call_obligations']:
