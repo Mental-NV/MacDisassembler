@@ -1,0 +1,327 @@
+{
+  "candidate": "2d7c5e24b1054367834fb649ae9f0976b39fc8bf",
+  "source_sha256": "cb2657a869b5e949ee07258a2348cee0f6a737e55a5878376e6a6e45dd5c8d08",
+  "arches": {
+    "arm64": {
+      "binary_sha256": "2118ebdfe58fb8dbea7ba4e9b8d406662f8a1a8f7c3e1efbf403a142e028190e",
+      "assembly_sha256": "bead49174f83febd62e7a8f46e2a24ce50903f3518ad9d0427969629dddf883b",
+      "jobs": [
+        {
+          "job_id": "e7a03c3e875b445c983f1fb03de7ef79",
+          "entry": "0x708",
+          "proof": {
+            "container_file_offset": "0x708",
+            "end_va_exclusive": "0x72c",
+            "entry_va": "0x708",
+            "extent_sha256": "d36d28463870a2becdac3871f89eb3b6cbf027ee2eb3285fba7e9dfba5f0f067",
+            "flow_gap_classification": {
+              "arch": "arm64",
+              "candidates": [],
+              "policy": "macscope-flow-gap-classification/1",
+              "reason": null
+            },
+            "length": 36,
+            "policy": "macscope-focused-import/4",
+            "program_sha256": "1bd3f28ea7fc901b608261e02a4f45595606dafb3837ea30920c3d0cc0d77cc3",
+            "slice_file_offset": "0x708",
+            "tail_calls": {
+              "arch": "arm64",
+              "candidates": [],
+              "policy": "macscope-focused-tail-calls/1",
+              "reason": null
+            }
+          },
+          "receipt_sha256": "be321954c3d8ec2247ec2c601b500759bdebbc1c97246eae22863a49b25b56df",
+          "elapsed_seconds": 3.47073
+        },
+        {
+          "job_id": "30383568cbce4b67a778e12b39dfe5ce",
+          "entry": "0x740",
+          "proof": {
+            "container_file_offset": "0x740",
+            "end_va_exclusive": "0x748",
+            "entry_va": "0x740",
+            "extent_sha256": "08e7032a9343f08c17ed61b4ea30238858e54e260dbfcaa9e087e5f9769128c2",
+            "flow_gap_classification": {
+              "arch": "arm64",
+              "candidates": [
+                {
+                  "instructions": [
+                    {
+                      "bytes": "07000014",
+                      "va": "0x744"
+                    }
+                  ],
+                  "kind": "unresolved_internal_transfer",
+                  "reason": "same_image_direct_branch",
+                  "source_bytes": "07000014",
+                  "source_va": "0x744",
+                  "target_bytes": "41000090",
+                  "target_va": "0x760"
+                }
+              ],
+              "policy": "macscope-flow-gap-classification/1",
+              "reason": null
+            },
+            "length": 8,
+            "policy": "macscope-focused-import/4",
+            "program_sha256": "1bd3f28ea7fc901b608261e02a4f45595606dafb3837ea30920c3d0cc0d77cc3",
+            "slice_file_offset": "0x740",
+            "tail_calls": {
+              "arch": "arm64",
+              "candidates": [],
+              "policy": "macscope-focused-tail-calls/1",
+              "reason": null
+            }
+          },
+          "receipt_sha256": "c6958f592391153bfa4cc768476eaa88fc208b1a83c3659be23f66e9251cd68a",
+          "elapsed_seconds": 3.686711
+        },
+        {
+          "job_id": "c63230ff3d11486bbe9687539e2fb3dd",
+          "entry": "0x72c",
+          "proof": {
+            "container_file_offset": "0x72c",
+            "end_va_exclusive": "0x740",
+            "entry_va": "0x72c",
+            "extent_sha256": "96a3096aaa8c6d64e4084e13cfe5128b528e8f31d3391eb328515255de9c3547",
+            "flow_gap_classification": {
+              "arch": "arm64",
+              "candidates": [],
+              "policy": "macscope-flow-gap-classification/1",
+              "reason": null
+            },
+            "length": 20,
+            "policy": "macscope-focused-import/4",
+            "program_sha256": "1bd3f28ea7fc901b608261e02a4f45595606dafb3837ea30920c3d0cc0d77cc3",
+            "slice_file_offset": "0x72c",
+            "tail_calls": {
+              "arch": "arm64",
+              "candidates": [],
+              "policy": "macscope-focused-tail-calls/1",
+              "reason": null
+            }
+          },
+          "receipt_sha256": "2fb31a62fe7f27d2065bd65cb458dbe04e7139947be10fefe791e48a1379b1de",
+          "elapsed_seconds": 3.462379
+        },
+        {
+          "job_id": "ab928c17c42543309207b9b548af7216",
+          "entry": "0x6f8",
+          "proof": {
+            "container_file_offset": "0x6f8",
+            "end_va_exclusive": "0x708",
+            "entry_va": "0x6f8",
+            "extent_sha256": "53b13ffd0b273ca9d30ecea03d8fc8619d547f04840bcb10fd80ff5008c6fc98",
+            "flow_gap_classification": {
+              "arch": "arm64",
+              "candidates": [],
+              "policy": "macscope-flow-gap-classification/1",
+              "reason": null
+            },
+            "length": 16,
+            "policy": "macscope-focused-import/4",
+            "program_sha256": "1bd3f28ea7fc901b608261e02a4f45595606dafb3837ea30920c3d0cc0d77cc3",
+            "slice_file_offset": "0x6f8",
+            "tail_calls": {
+              "arch": "arm64",
+              "candidates": [],
+              "policy": "macscope-focused-tail-calls/1",
+              "reason": null
+            }
+          },
+          "receipt_sha256": "5a14cf87b7882e50174fe6b1518090b66b24ab97796e11e6550827e17365e8db",
+          "elapsed_seconds": 3.558368
+        }
+      ]
+    },
+    "x86_64": {
+      "binary_sha256": "7a7f27ea293fa052fceddd6ea2b331aa6cded9ff2a3c700d0d6dbe21a9c02102",
+      "assembly_sha256": "5bafbf3e1c33da37e0c3eb86a1dd7b4b6a94f1025b3471db4436ce7fda745a67",
+      "jobs": [
+        {
+          "job_id": "eb9cf66b4e2746fc9b4106a04cd434e0",
+          "entry": "0x6c0",
+          "proof": {
+            "container_file_offset": "0x6c0",
+            "end_va_exclusive": "0x6f0",
+            "entry_va": "0x6c0",
+            "extent_sha256": "c9a6d930479514836142a869c5d913a0899c547a5b649e94975cda952c8a58e0",
+            "flow_gap_classification": {
+              "arch": "x86_64",
+              "candidates": [
+                {
+                  "instructions": [
+                    {
+                      "bytes": "7e12",
+                      "va": "0x6c7"
+                    }
+                  ],
+                  "kind": "unresolved_internal_transfer",
+                  "reason": "same_image_direct_branch",
+                  "source_bytes": "7e12",
+                  "source_va": "0x6c7",
+                  "target_bytes": "48",
+                  "target_va": "0x6db"
+                },
+                {
+                  "instructions": [
+                    {
+                      "bytes": "7816",
+                      "va": "0x6cc"
+                    }
+                  ],
+                  "kind": "unresolved_internal_transfer",
+                  "reason": "same_image_direct_branch",
+                  "source_bytes": "7816",
+                  "source_va": "0x6cc",
+                  "target_bytes": "31",
+                  "target_va": "0x6e4"
+                }
+              ],
+              "policy": "macscope-flow-gap-classification/1",
+              "reason": null
+            },
+            "length": 48,
+            "policy": "macscope-focused-import/4",
+            "program_sha256": "fae4f042609b6ddd3554f47f53a12438e9531f09f9f7e830dfdf5719434793fc",
+            "slice_file_offset": "0x6c0",
+            "tail_calls": {
+              "arch": "x86_64",
+              "candidates": [],
+              "policy": "macscope-focused-tail-calls/1",
+              "reason": "architecture_unsupported"
+            }
+          },
+          "receipt_sha256": "7c009440a97eddb130c7e60d294dccec6bbf6fc158505c4b7b727c8718160f6e",
+          "elapsed_seconds": 3.679326
+        },
+        {
+          "job_id": "f77d75d4ad604adbb4757e3bdc691e23",
+          "entry": "0x710",
+          "proof": {
+            "container_file_offset": "0x710",
+            "end_va_exclusive": "0x730",
+            "entry_va": "0x710",
+            "extent_sha256": "a6069582fb8b4cea53c4295e16208697771b9da231f5633b2be1d3cb5b66ea72",
+            "flow_gap_classification": {
+              "arch": "x86_64",
+              "candidates": [
+                {
+                  "instructions": [
+                    {
+                      "bytes": "7219",
+                      "va": "0x71a"
+                    }
+                  ],
+                  "kind": "unresolved_internal_transfer",
+                  "reason": "same_image_direct_branch",
+                  "source_bytes": "7219",
+                  "source_va": "0x71a",
+                  "target_bytes": "c3",
+                  "target_va": "0x735"
+                },
+                {
+                  "instructions": [
+                    {
+                      "bytes": "ff25eb080000",
+                      "va": "0x71f"
+                    }
+                  ],
+                  "kind": "unclassified",
+                  "reason": "binding_unverified",
+                  "source_bytes": "ff25eb080000",
+                  "source_va": "0x71f"
+                },
+                {
+                  "instructions": [
+                    {
+                      "bytes": "eb08",
+                      "va": "0x721"
+                    }
+                  ],
+                  "kind": "unresolved_internal_transfer",
+                  "reason": "same_image_direct_branch",
+                  "source_bytes": "eb08",
+                  "source_va": "0x721",
+                  "target_bytes": "00",
+                  "target_va": "0x72b"
+                }
+              ],
+              "policy": "macscope-flow-gap-classification/1",
+              "reason": null
+            },
+            "length": 32,
+            "policy": "macscope-focused-import/4",
+            "program_sha256": "fae4f042609b6ddd3554f47f53a12438e9531f09f9f7e830dfdf5719434793fc",
+            "slice_file_offset": "0x710",
+            "tail_calls": {
+              "arch": "x86_64",
+              "candidates": [],
+              "policy": "macscope-focused-tail-calls/1",
+              "reason": "architecture_unsupported"
+            }
+          },
+          "receipt_sha256": "4dcac24ec9e5d8cd7ef44035c64c6c600ad5529b318f7fb38ef4625e42937d72",
+          "elapsed_seconds": 3.559759
+        },
+        {
+          "job_id": "210f733e8dce47bf8e553f1c5401d8dc",
+          "entry": "0x6f0",
+          "proof": {
+            "container_file_offset": "0x6f0",
+            "end_va_exclusive": "0x710",
+            "entry_va": "0x6f0",
+            "extent_sha256": "ada67525acde98d0af519feee04d0b5382946945b6f2bb9e0d740cf20a5d42b9",
+            "flow_gap_classification": {
+              "arch": "x86_64",
+              "candidates": [],
+              "policy": "macscope-flow-gap-classification/1",
+              "reason": null
+            },
+            "length": 32,
+            "policy": "macscope-focused-import/4",
+            "program_sha256": "fae4f042609b6ddd3554f47f53a12438e9531f09f9f7e830dfdf5719434793fc",
+            "slice_file_offset": "0x6f0",
+            "tail_calls": {
+              "arch": "x86_64",
+              "candidates": [],
+              "policy": "macscope-focused-tail-calls/1",
+              "reason": "architecture_unsupported"
+            }
+          },
+          "receipt_sha256": "05f2d7edf643636b59ca8f0a10fcef114ab982d2c7a8a8fa6db1bfc849fe496b",
+          "elapsed_seconds": 3.582218
+        },
+        {
+          "job_id": "76dda278a17c437a9bbb2a03a4a6dda5",
+          "entry": "0x6a0",
+          "proof": {
+            "container_file_offset": "0x6a0",
+            "end_va_exclusive": "0x6c0",
+            "entry_va": "0x6a0",
+            "extent_sha256": "10094c3b6ec507470d707a4d4d985e369706a5ba10567931f87533da3823fb8b",
+            "flow_gap_classification": {
+              "arch": "x86_64",
+              "candidates": [],
+              "policy": "macscope-flow-gap-classification/1",
+              "reason": null
+            },
+            "length": 32,
+            "policy": "macscope-focused-import/4",
+            "program_sha256": "fae4f042609b6ddd3554f47f53a12438e9531f09f9f7e830dfdf5719434793fc",
+            "slice_file_offset": "0x6a0",
+            "tail_calls": {
+              "arch": "x86_64",
+              "candidates": [],
+              "policy": "macscope-focused-tail-calls/1",
+              "reason": "architecture_unsupported"
+            }
+          },
+          "receipt_sha256": "707eba5a9ae810211d2a1e24ce44849b4dbb53c9b527709771720354af8882d6",
+          "elapsed_seconds": 3.588529
+        }
+      ]
+    }
+  }
+}
