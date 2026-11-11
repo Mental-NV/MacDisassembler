@@ -1,12 +1,14 @@
 """Two independently pinned direct edges; no transitive register substitution."""
 import copy
-from . import callback_evidence, callback_links, import_disasm, jobs, metadata
+from . import callback_evidence, callback_links, import_disasm, jobs, metadata, writer_call_obligations
 from .errors import Error
 
 POLICY = 'macscope-pinned-twohop/1'
 
 
-def attach(project,image,raw,response,via,target,*,abi=None,provenance=False,checked_add=False):
+def attach(project,image,raw,response,via,target,*,abi=None,provenance=False,checked_add=False, writer_calls=False):
+    if writer_calls and abi != 'aapcs64':
+        raise Error('callback_scope','Writer-call obligations require explicit AAPCS64',2)
     # Reuse the ordinary verifier; even gap edges retain independent evidence.
     first=callback_links.attach(project,image,raw,response,via,abi=abi,provenance=provenance)
     outer=first['data']['callback_evidence']
@@ -77,5 +79,16 @@ def attach(project,image,raw,response,via,target,*,abi=None,provenance=False,che
         chain['unknowns'].append('alternate_branch_paths_not_analyzed')
     if chain['call_obligations']:
         chain['unknowns'].extend(['callee_memory_side_effects','receiver_lifetime_after_calls'])
+    if writer_calls:
+        proof=writer_call_obligations.project(link2,roles)
+        if destination['stop_reason'] not in ('selected_prefix_end','return_boundary','direct_transfer_boundary'):
+            proof['gaps'].append({'reason':'writer_unsupported_boundary'})
+        if any(g.get('reason')=='disassembly_incomplete' for g in destination['gaps']):
+            proof['gaps'].append({'reason':'writer_incomplete_disassembly'})
+        if gaps:
+            proof['gaps'].append({'reason':'two_hop_route_not_verified'})
+        if proof['gaps']:proof['status']='gap'
+        chain['writer_call_evidence']=proof
+        chain['unknowns'].append('computed_operand_runtime_value')
     outer['two_hop_chain']=chain
     return first

@@ -1,7 +1,8 @@
 """Bounded conditional destination-store relations; never callee purity proofs."""
 import copy
+from . import computed_store_value
 
-POLICY = 'macscope-writer-call-obligations/1'
+POLICY = 'macscope-writer-call-obligations/2'
 MAX_CALLS = 8
 MAX_POST_CALL_STORES = 64
 
@@ -49,9 +50,14 @@ def project(link, roles):
         relation = relations.get((store['instruction_va'],store.get('lane')), {})
         base = classify(store['location']['base'],relation.get('base_correspondence',{}))
         value = classify(store['value'],relation.get('value_correspondence',{}))
+        computation = computed_store_value.project(report,store) if value == 'unresolved' else None
+        if computation:
+            value = 'scoped_checked_add_computation'
         result['post_call_stores'].append({'evidence': copy.deepcopy(store),
             'base_basis': base, 'value_basis': value, 'register_relation': copy.deepcopy(relation),
             'abi_hypothesis': 'aapcs64', 'status': 'conditional_operands' if 'unresolved' not in (base,value) else 'unresolved_operands'})
+        if computation:
+            result['post_call_stores'][-1]['value_computation'] = computation
         for operand,basis in (('base',base),('value',value)):
             if basis == 'unresolved':
                 result['gaps'].append({'reason': f'writer_post_call_{operand}_unresolved',

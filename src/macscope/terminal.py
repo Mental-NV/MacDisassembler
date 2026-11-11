@@ -167,6 +167,8 @@ def callback_summary(report, evidence):
         line('  Two-hop links: ' + field(chain.get('link_status')) + ' (independent edges; not runtime proof)')
         line('  Outer extent: ' + field(chain.get('source_extent')))
         line('  Destination prefix stop: ' + field(chain.get('destination_stop_reason')))
+        if writer_proof := row(chain.get('writer_call_evidence')):
+            line('  Conditional writer proof: ' + field(writer_proof.get('status')) + ' (runtime values unknown)')
     if composition:
         line('  Composition candidate: ' + field(composition.get('candidate_status')) + ' (not runtime proof)')
     line('  Selected source: ' + field(selection.get('start_va')) + ':' + field(selection.get('end_va')))
@@ -209,6 +211,7 @@ def callback_summary(report, evidence):
     # Surface explicit decision reasons first without changing evidence ordering.
     gaps = sequence(source.get('gaps'))
     if chain:
+        gaps = gaps + [{'role':'writer_proof','evidence':g} for g in sequence(row(chain.get('writer_call_evidence')).get('gaps'))]
         gaps = gaps + [{'role':'destination','evidence':g} for g in sequence(chain.get('destination_gaps'))]
     if composition:
         gaps = sorted(gaps, key=lambda item: 'reason' not in row(item))
