@@ -131,3 +131,8 @@ successful control once with a new Program/JVM to check local repeatability.
 Afterward, assess a separately versioned, explicitly selected opt-in product
 contract with immutable caller/callee evidence and replay validation. These
 controls alone do not authorize shipment or prove runtime/source correctness.
+
+## Recorded result
+
+See the [owned native-control assessment](focused-native-control-assessment.md)
+for exact injected refusals, repetitions, preserved failures and remaining gates.

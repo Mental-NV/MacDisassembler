@@ -118,8 +118,9 @@ say that native support, dependencies and inference success are unverified.
 
 Before a public implementation is considered ready:
 
-1. Complete and independently review the owned native controls, identifying which
-   failures were injected and which real behaviors were observed.
+1. Retain the [completed owned control regression coverage](focused-native-control-assessment.md),
+   distinguishing injected refusals from actual native escapes. This does not
+   substitute for testing the future product path.
 2. Fix exact request/result/receipt versions and unique-edge selection in tests.
 3. Test stale/tampered caller and callee bytes, wrong Program/image, wrong edge,
    overlaps, nonleaf/unsupported callee, custom signatures/storage, return changes,
