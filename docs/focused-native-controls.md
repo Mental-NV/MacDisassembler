@@ -49,6 +49,27 @@ rows still require real initialized bytes matching their immutable extent hashes
 Equal uninitialized markers prove equal reported initialization/range state, not
 unavailable byte values or a comprehensive internal mutation audit.
 
+## Lossless bounded inventory encoding
+
+The first complete per-unit JSON representation exceeded the existing 4 MiB
+snapshot limit on the owned import; that failed attempt is not a passing control.
+Use explicit `macscope-owned-control-inventory/2` encoding without changing caps:
+deduplicate sorted block metadata and code-unit-kind tables, then retain **one
+compact tuple per observed code unit**: start, length, kind index, block index,
+actual bytes or explicit null, and exact flow description. Derive the end only
+when it equals the actual observed unit maximum. Block metadata retains address
+space, range, initialization and mapped state. Keep full sorted function records
+and actual selected caller/callee memory records.
+
+No grouping, skipped units, invented bytes or content hashes replacing inventory
+content. Validate unique deterministically ordered tables, valid used references,
+integer (not Boolean) indices/addresses/lengths, common supported address space,
+nonoverlapping ordered unit ranges wholly in their blocks, and explicit byte/state
+consistency. Preserve 100000 units, 4096 functions/blocks, 4 MiB UTF-8 snapshot and
+8 MiB pending-stage limits. Exact before/after inventory equality remains the
+criterion. If the compact form still exceeds bounds, retain failure and report;
+do not expand budgets or add unreviewed grouping.
+
 ## Native preparation-proof refusal
 
 In a fresh unprepared copy, call the unchanged native preparation script with a
