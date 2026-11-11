@@ -61,6 +61,11 @@ def main():
         assert relation['base_correspondence']['value']['kind']=='memory_read'
         assert relation['value_correspondence']['value']['register']=='x0'
         assert relation['abi_hypothesis'] is None
+        effects=result['destination_link']['destination_effects']
+        assert effects['summary']=='only_unresolved_store_destinations'
+        assert effects['application_writer_attribution']=='unknown'
+        assert effects['runtime_execution']=='unknown'
+        assert effects['persistence']=='unknown'
         stack_args=[sys.executable,'-m','macscope','disasm','--project',str(p.path),
                     '--from-import','--range','0x570:0x57c','--receipt','d'*32,
                     '--callback-evidence','--callback-abi','aapcs64','--format','json',

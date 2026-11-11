@@ -28,7 +28,8 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
     link = thunk.get('destination_link', {})
     writer = link.get('destination_evidence', {})
     roles = {'assignment': assign, 'invocation': invoke, 'thunk': thunk, 'writer': writer}
-    view = {'policy': POLICY, 'status': 'inconclusive', 'candidate_status': 'gap',
+    view = {'policy': POLICY, 'status': 'inconclusive',
+            'destination_effects': copy.deepcopy(link.get('destination_effects', {})), 'candidate_status': 'gap',
             'facts': {}, 'conditional_register_bindings': [], 'assumptions': [], 'gaps': [],
             'role_identities': {role: {'source_envelope_sha256': report.get('source_envelope_sha256'),
                                       'selection': copy.deepcopy(report.get('selection'))}
