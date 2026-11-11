@@ -7,8 +7,12 @@ model is required.
 
 **Status (9 November 2026):** calculator baseline implemented and under
 continued validation; initial narrow phase-2 CLI implemented. Engine use is
-currently **experimental for explicitly trusted, owned inputs only**, not a
-release for hostile binaries. Cached queries work without starting Java.
+currently **experimental for explicitly trusted inputs**, not a release for
+hostile binaries. Trust does not require authorship: use `--trust-input`
+(legacy alias `--experimental-trusted-input`) or affirm the terminal prompt
+before native processing. Cached queries work without starting Java.
+The [current trust and partial-result contract](docs/trust-and-partial-results.md)
+supersedes older ownership-only wording in historical CLI documentation.
 The broad specification is a roadmap, not a completion claim.
 
 - [CLI installation, examples, safety boundaries and validation](docs/cli.md)

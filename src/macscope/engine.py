@@ -694,7 +694,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     if any(c in str(project.path) for c in ('\"', '\\', '\n', '\r')):
         raise Error('worker_path_unsupported','Engine workspace paths containing quotes, backslashes or line breaks are not supported',3)
     if not args.experimental_trusted_input:
-        raise Error('isolation_required', 'Engine operations currently require --experimental-trusted-input for explicitly trusted, user-owned fixtures. Hostile-input isolation is not validated. No unsafe fallback is automatic.', 3)
+        raise Error('isolation_required', 'Engine operations currently require --experimental-trusted-input for explicitly trusted inputs (public alias: --trust-input). Hostile-input isolation is not validated. No unsafe fallback is automatic.', 3)
     if image['arch'] not in ('arm64','x86_64'):
         raise Error('unsupported_arch', 'Engine operations require an ordinary arm64 or x86_64 slice', 3)
     if args.jobs != 1:

@@ -13,6 +13,7 @@ import tempfile
 from unicodedata import normalize as normalize_unicode
 from . import __version__, SCHEMA_VERSION
 from .errors import Error
+from . import trust
 from .macho import inspect_bytes, inspect_path, read_regular, thin
 from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
@@ -40,7 +41,7 @@ class Parser(argparse.ArgumentParser):
 
 
 def parser():
-    p = Parser(prog='macscope', description='Local Mach-O evidence CLI. Engine commands are experimental for explicitly trusted owned fixtures only.')
+    p = Parser(prog='macscope', description='Local Mach-O evidence CLI. Engine commands are experimental for explicitly trusted inputs only.')
     p.add_argument('--version', action='version', version='macscope '+__version__)
     sub = p.add_subparsers(dest='command',required=True)
     def common(s, formats=('text','json','jsonl')):
@@ -77,7 +78,7 @@ def parser():
         s.add_argument('--heap-mib',type=int,default=1024,help='Java heap only, not process memory (256..4096)')
         s.add_argument('--max-functions',type=int,default=1000,help='Maximum enumerated functions (1..10000)')
         s.add_argument('--jobs',type=int,default=1)
-        s.add_argument('--experimental-trusted-input',action='store_true')
+        s.add_argument('--trust-input','--experimental-trusted-input',dest='experimental_trusted_input',action='store_true',help='Confirm trust for this invocation; native processing is not a hostile-input sandbox')
         s.add_argument('--ghidra')
         s.add_argument('--java-home')
     for c in ('version','doctor'):
@@ -90,7 +91,7 @@ def parser():
             checks.add_argument('--verify-worker',action='store_true',help='Run a full headless probe on a generated Mach-O')
             checks.add_argument('--host-only',action='store_true',help='Report host capabilities without reading dependencies or starting processes')
             checks.add_argument('--static',dest='static_runtime',action='store_true',help='Check native dependency files without executing Java or Ghidra')
-            s.add_argument('--experimental-trusted-input',action='store_true')
+            s.add_argument('--trust-input','--experimental-trusted-input',dest='experimental_trusted_input',action='store_true',help='Confirm trust for this invocation; native processing is not a hostile-input sandbox')
     s=sub.add_parser('inspect');s.add_argument('input');common(s)
     s=sub.add_parser('bundle');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('list');s.add_argument('path');common(s);pagination(s)
@@ -130,7 +131,7 @@ def parser():
         else:
             s.add_argument('job_id')
         if action=='resume':
-            s.add_argument('--experimental-trusted-input',action='store_true')
+            s.add_argument('--trust-input','--experimental-trusted-input',dest='experimental_trusted_input',action='store_true',help='Confirm trust for this invocation; native processing is not a hostile-input sandbox')
             s.add_argument('--ghidra')
             s.add_argument('--java-home')
     s=sub.add_parser('headers');project(s);common(s)
@@ -154,9 +155,9 @@ def parser():
             s.add_argument('--decode-types',action='store_true',help='Present recorded types without applying them to pseudocode')
     s=sub.add_parser('swift');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('symbols');project(s);common(s);pagination(s);s.add_argument('--name-contains')
-    s.add_argument('--demangle',action='store_true');s.add_argument('--experimental-trusted-input',action='store_true')
+    s.add_argument('--demangle',action='store_true');s.add_argument('--trust-input','--experimental-trusted-input',dest='experimental_trusted_input',action='store_true',help='Confirm trust for this invocation; native processing is not a hostile-input sandbox')
     s=sub.add_parser('demangle');common(s);s.add_argument('name')
-    s.add_argument('--experimental-trusted-input',action='store_true')
+    s.add_argument('--trust-input','--experimental-trusted-input',dest='experimental_trusted_input',action='store_true',help='Confirm trust for this invocation; native processing is not a hostile-input sandbox')
     s=sub.add_parser('bytes');project(s);common(s)
     address_options(s,s.add_mutually_exclusive_group(required=True))
     s.add_argument('--length',type=int,required=True,dest='byte_length')
@@ -402,7 +403,7 @@ def normalize(raw, image, deps, manifest):
                                      origin='ghidra_immediate_thunk_target')
     functions.sort(key=lambda f:(f['entry_va'] is None,f['address_space'],int(f['entry_va'],16) if f['entry_va'] is not None else 0,f['engine_entry'],f['function_id']))
     image_state = {'active_analysis','imported','import_dependencies','engine_baseline_job_id','previous_program_sha256'}
-    value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in image_state},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','Pseudocode spans cover available token addresses within the function body.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted owned fixtures are supported by this experimental worker mode.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
+    value = {'analysis_id':aid,'image':{k:v for k,v in image.items() if k not in image_state},'identity':analysis_key,'analysis_profile':selected_profile,'status':raw['status'],'functions':functions,'engine':{k:v for k,v in raw.items() if k not in ('functions','input_name','program_info_options')},'limitations':['C-like pseudocode is inferred, not original source or a semantic-equivalence proof.','Pseudocode spans cover available token addresses within the function body.','Function discovery and every facet are bounded; inspect facet coverage.','Only explicitly trusted inputs are supported by this experimental worker mode; hostile-input isolation is not validated.'] + (['Whole-program parameter inference is opt-in and binary-derived; inferred signatures and calling conventions may be wrong. No semantic-equivalence validation was performed.'] if selected_profile['parameter_inference'] else [])}
     if selected_profile['name'] == 'deep':
         value['limitations'].append('Address-table references are inferred from binary evidence and do not establish indirect control-flow targets.')
     return redact(body_ownership.snapshot_view(value,ownership))
@@ -463,8 +464,7 @@ def page(rows,args,aid,project_id,filters,*,order='entry-va/function-id/v1'):
 
 
 def check_engine_access(args, project):
-    if not args.experimental_trusted_input:
-        raise Error('isolation_required','Engine operations require explicit --experimental-trusted-input for trusted user-owned fixtures only',3)
+    trust.require(args)
     if args.jobs != 1 or args.max_memory_mib is not None:
         raise Error('unsupported_budget','Only jobs=1 is supported. Use --heap-mib for the Java heap; hard process-memory budgets are rejected',3)
     if args.command == 'analyze':
@@ -977,8 +977,6 @@ def save_analysis_record(db, project, image_id, aid, record):
 
 
 def resume_job(args, project, command):
-    if not args.experimental_trusted_input:
-        raise Error('isolation_required','Restarting a job requires --experimental-trusted-input',3)
     with project.writer():
         path,record = jobs.get(project,args.job_id)
         record = jobs.record_for_resume(path,record)
@@ -1003,6 +1001,7 @@ def resume_job(args, project, command):
 
 
 def replay_worker_request(args, project, record, *, query_profile=None):
+    trust.require(args)
     mode, budgets, policy = record['mode'], record.get('limits'), record.get('analysis_profile')
     fields = {'timeout':'timeout_seconds','function_timeout':'function_timeout_seconds',
               'max_functions':'max_functions','heap_mib':'java_heap_mib'}
@@ -1408,8 +1407,8 @@ def file_fixups(args):
 
 
 def swift_collection(args, project, image):
-    if args.demangle and not args.experimental_trusted_input:
-        raise Error('isolation_required','Native Swift demangling requires --experimental-trusted-input',3)
+    if args.demangle:
+        trust.require(args)
     info,records,gaps = swift_symbols.symbols(metadata.verified_slice(project,image))
     records = [dict(row,image_id=image['image_id'],arch=image['arch']) for row in records
                if args.name_contains is None or args.name_contains in row['mangled']]
@@ -1651,12 +1650,12 @@ def execute_command(a, address_selection=None):
             return envelope(command,engine.host_capabilities())
         if a.static_runtime:
             return envelope(command,engine.static_dependencies(a.ghidra,a.java_home,full=a.full_digest))
-        if a.verify_worker and not a.experimental_trusted_input:
-            raise Error('isolation_required','The headless doctor probe requires --experimental-trusted-input',3)
+        if a.verify_worker:
+            trust.require(a)
         deps=engine.dependencies(a.ghidra,a.java_home,full=a.full_digest or a.verify_worker)
         probe = verify_doctor_worker(deps) if a.verify_worker else {'status':'not_requested'}
         deps['verification']={'dependency_preflight':'passed','worker_probe':probe}
-        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'forwarded_return_recovery':forwarded_returns.POLICY,'switch_table_recovery':switch_tables.POLICY,'engine_operations':'experimental --experimental-trusted-input only','hard_process_memory_limit':False,'startup_deadline':True,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
+        deps['capabilities']={'cached_queries':True,'fresh_selected_decompile':True,'dispatch_return_recovery':dispatch_returns.POLICY,'direct_signature_recovery':direct_signatures.POLICY,'scalar_signature_recovery':scalar_signatures.POLICY,'callee_parameter_recovery':callee_parameters.POLICY,'forwarded_return_recovery':forwarded_returns.POLICY,'switch_table_recovery':switch_tables.POLICY,'engine_operations':'explicit --trust-input (alias --experimental-trusted-input) or interactive confirmation','hard_process_memory_limit':False,'startup_deadline':True,'automatic_dependency_install':False,'analysis_profiles':[engine.analysis_profile(n) for n in engine.ANALYSIS_PROFILES]}
         return envelope(command,deps)
     if a.command=='inspect':
         data,_=inspect_path(a.input,allow_arm64e=True)
@@ -1715,8 +1714,7 @@ def execute_command(a, address_selection=None):
         data=dict(inventory,inventory_id=inventory_id,records=rows)
         return envelope(command,data,status='partial' if gaps else 'complete',cov=cov)
     if a.command=='demangle':
-        if not a.experimental_trusted_input:
-            raise Error('isolation_required','Native Swift demangling requires --experimental-trusted-input',3)
+        trust.require(a)
         records,provenance=swift_symbols.demangle([a.name])
         result=records[0]
         partial=result['demangle_status']!='demangled'
@@ -1995,6 +1993,8 @@ def render(result,fmt):
         return html_export.render(result)
     if fmt=='dot':
         rows=['digraph cfg {','  // status: '+result['status']+'; bounded static evidence, not exhaustive runtime flow']
+        if result['status'] == 'partial':
+            rows.append('  // Partial result (exit 6): retained evidence is incomplete, not an engine crash.')
         if selection := result.get('address_selection'):
             rows.append(f"  // runtime VA {selection['runtime_va']} with slide {selection['load_slide']} selects {selection['va']}")
         for b in result['data']['blocks']:
@@ -2014,6 +2014,15 @@ def main(argv=None):
     try:
         args=parser().parse_args(argv)
         result=execute(args)
+        if result['status'] == 'partial':
+            reason = result['coverage'].get('truncation_reason') or 'see coverage and data'
+            result['diagnostics'].append(
+                'Partial result (exit 6): useful artifacts are retained; this is not an engine crash. '
+                'Missing coverage: ' + reason)
+            if reason == 'lead_evidence_incomplete':
+                result['diagnostics'].append(
+                    'Worker completion and verified individual links do not establish complete graph coverage. '
+                    'See each lead status, reason and gaps for missing evidence.')
         validate_envelope(result)
         code=6 if result['status']=='partial' else 0
         fmt='json' if result.get('error') else getattr(args,'format','json')

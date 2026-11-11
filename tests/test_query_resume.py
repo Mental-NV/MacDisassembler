@@ -98,7 +98,9 @@ class QueryResumeTests(TemporaryCase):
             self.assertEqual(response["data"]["names"][-1]["name"], "previous-label")
             self.assertEqual(response["data"]["origin"]["job_id"], self.producer)
             self.assertFalse(response["data"]["reused_restart"])
-            self.assertEqual(self.resume(), dict(response, data=dict(response["data"], reused_restart=True)))
+            with patch.object(cli.trust, "require", side_effect=AssertionError("receipt must not prompt")):
+                replay = cli.execute(self.args("jobs", "resume", self.prior))
+            self.assertEqual(replay, dict(response, data=dict(response["data"], reused_restart=True)))
             run.assert_called_once()
         self.assertEqual(self.workspace.select()["active_analysis"], self.latest)
         detail = cli.execute(self.args("jobs", "show", self.prior))
