@@ -66,4 +66,6 @@ def render(result):
                   f'Additional blocker entries omitted for displayed leads: {omitted_blockers}.',
                   'Nested evidence details omitted (compact-only presentation).',
                   'Full evidence: rerun the same evidence invocation with --format json or --format text.'])
+    if 'objc_type_evidence' in result['data']:
+        lines.append('Optional Objective-C type details omitted; use full JSON, HTML or text evidence.')
     return ('\n'.join(lines) + '\n').encode('utf-8')

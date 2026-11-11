@@ -2,7 +2,7 @@
 from collections import defaultdict
 import re
 
-from . import address_xrefs, body_ownership, calls, dyld, flow_evidence, focused, import_links, jobs, metadata, saved_flow_gap_evidence, objc, search
+from . import address_xrefs, body_ownership, calls, dyld, flow_evidence, focused, import_links, jobs, metadata, saved_flow_gap_evidence, objc, objc_type_evidence, search
 from .errors import Error
 from .macho import read_regular, thin
 from .schema import validate_envelope
@@ -395,9 +395,9 @@ def add_focused_calls(report):
                 row.update(status="partial", gaps=sorted(set(row["gaps"]) | gaps))
 
 
-def export(project, manifest, *, link_imports=False, link_focused=False):
+def export(project, manifest, *, link_imports=False, link_focused=False, objc_types=False):
     images = {image["image_id"]: image for image in project.images()}
-    records, pins = {}, []
+    records, pins, method_gaps = {}, [], {}
     providers, pending = [], {}
     for pin in manifest["images"]:
         from_import = IMPORT_PIN in pin
@@ -455,6 +455,8 @@ def export(project, manifest, *, link_imports=False, link_focused=False):
         focused_functions = {}
         for lead in leads:
             methods, error = scoped_selectors.get(lead.get("class_slot"), (selector_rows, selector_error))
+            if objc_types and lead["kind"] == "objc_selector" and "class_slot" in lead:
+                method_gaps[lead["id"]] = [error] if error else methods[1]
             if lead["kind"] == "fixup":
                 row = (unresolved(lead, fixup_error) if fixup_error
                        else fixup_lead(binary, image, parsed_fixups, lead))
@@ -496,4 +498,6 @@ def export(project, manifest, *, link_imports=False, link_focused=False):
     if link_focused:
         report["focused_call_policy"] = FOCUSED_CALL_POLICY
         add_focused_calls(report)
+    if objc_types:
+        report[objc_type_evidence.FIELD] = objc_type_evidence.build(report, method_gaps)
     return report
