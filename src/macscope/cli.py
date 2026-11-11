@@ -299,6 +299,11 @@ def parser():
     s.add_argument('--link-focused',action='store_true',help='Verify direct calls between selected focused receipts')
     s.add_argument('--objc-sends',action='store_true',help='Attach bounded selected ARM64 selector-stub facts; runtime dispatch remains unknown')
     s.add_argument('--objc-types',action='store_true',help='Attach exact Objective-C declarations and conditional ABI register roles')
+    s=sub.add_parser('register-relations',help='Replay conditional machine-register facts; no prototypes or target inference')
+    common(s,('json','text'));s.add_argument('--project',required=True)
+    s.add_argument('--query-job',required=True)
+    s.add_argument('--range',dest='register_range',required=True,help='Explicit unslid START:END, exclusive end, at most 128 ARM64 instructions')
+    s.add_argument('--abi',choices=('aapcs64',),required=True,help='Explicit normal-return/callee-preservation hypothesis, not verified Swift ABI')
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left JSON export or evidence handoff')
     s.add_argument('right',help='Right JSON export or evidence handoff')
@@ -1846,6 +1851,11 @@ def execute_command(a, address_selection=None):
     if a.command=='fixups' and a.input is not None:
         return file_fixups(a)
     p=Project(a.project)
+    if a.command == 'register-relations':
+        from . import register_relations
+        report = register_relations.query(p,a.query_job,a.register_range,a.abi)
+        return envelope(command,report,status='partial',
+                        cov=coverage('conditional selected register relationships',partial=True,reason='runtime_and_path_unknown'))
     if a.command == 'evidence':
         manifest = (evidence.from_query_jobs(p, a.evidence_query_jobs) if a.evidence_query_jobs is not None
                     else evidence.load(a.leads))
