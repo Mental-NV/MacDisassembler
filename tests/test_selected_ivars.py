@@ -109,6 +109,8 @@ class SelectedIvarTests(TemporaryCase):
             return cli.execute(args)
         with patch.object(engine,'dependencies',side_effect=AssertionError('engine')):
             full = query()
+            filtered = query('--name-contains','first')
+            self.assertIn('Ivar name filter excluded 1 captured rows; not missing metadata.', filtered['diagnostics'])
             first = query('--limit','1')
             cursor = first['coverage']['next_cursor']
             second = query('--cursor',cursor)

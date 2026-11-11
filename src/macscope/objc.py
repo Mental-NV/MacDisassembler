@@ -13,6 +13,7 @@ MAX_CLASS_CHAIN_NODES = 262144
 MAX_METHODS = 10000
 MAX_PROPERTIES = 10000
 MAX_IVARS = 10000
+MAX_IVAR_DIAGNOSTICS = 128
 MAX_SELECTORS = 10000
 MAX_SELECTED_POINTERS = 1024
 MAX_INVENTORY_POINTERS = 65536
@@ -50,6 +51,10 @@ def diagnostic_kind(reason):
 
 class ObjCImage:
     def __init__(self, data, image, parsed, *, scoped=False, pointer_limit=None, discovery=False):
+        self.ivar_diagnostics = []
+        self.ivar_diagnostics_omitted = 0
+        self.ivar_unvisited_count = 0
+        self.ivar_owner = None
         self.parsed = parsed
         self.scoped = scoped
         self.view = MappedImage(data,parsed["segments"],reject_virtual_overlap=True)
@@ -410,23 +415,62 @@ class ObjCImage:
             except ValueError:
                 self.gaps.add("invalid_property_protocol")
 
+    def ivar_diagnostic(self, reason, *, index=None, record=None, required, count=None):
+        if count is not None:
+            self.ivar_unvisited_count += count
+        if len(self.ivar_diagnostics) >= MAX_IVAR_DIAGNOSTICS:
+            self.ivar_diagnostics_omitted += 1
+            return
+        location = f"class_va={self.ivar_owner or 'unknown'} index={index if index is not None else 'unknown'} record_va={hex(record) if record is not None else 'unknown'}"
+        suffix = f" declared_unvisited_count={count}" if count is not None else ""
+        self.ivar_diagnostics.append(f"Ivar diagnostic: {reason}; {location}; missing={required}.{suffix}")
+
+    def export_ivar_diagnostics(self, diagnostics):
+        if diagnostics is not None:
+            diagnostics.extend(self.ivar_diagnostics)
+            if self.ivar_unvisited_count:
+                diagnostics.append(f"Ivar record budget: declared_unvisited_count={self.ivar_unvisited_count}; "
+                                   "count covers only reached lists with verified headers, not valid ivars or unvisited classes.")
+            if self.ivar_diagnostics_omitted:
+                diagnostics.append(f"Ivar diagnostics omitted: {self.ivar_diagnostics_omitted} events "
+                                   "(discovery before filtering/pagination; not absent ivars).")
+
+    @staticmethod
+    def ivar_failure(error, fallback):
+        if isinstance(error, ResolutionFailure):
+            if error.reason == "external_class_pointer":
+                return "external_binding"
+            return error.reason
+        message = str(error)
+        if "ambiguous" in message or "Overlapping" in message:
+            return "ambiguous_mapping"
+        if "file-backed" in message:
+            return "unmapped_bytes"
+        return fallback
+
     def declaration_sites(self, site, stride, kind):
         try:
             address = self.target(site)
             if not address:
                 return range(0)
             if address & 7:
+                if kind == "ivar":
+                    self.ivar_diagnostic("unsupported_layout",required="aligned ivar list pointer")
                 self.gaps.add(f"unsupported_{kind}_list_pointer")
                 return range(0)
             entry_size,count = self.view.unpack("<II",address)
             if entry_size != stride:
+                if kind == "ivar":
+                    self.ivar_diagnostic("unsupported_layout",required="32-byte ivar records")
                 self.gaps.add(f"unsupported_{kind}_list_format")
                 return range(0)
             first, end = address+8, address+8+count*stride
             if kind != "ivar":
                 self.view.mapping(first,end-first)
             return range(first,end,stride)
-        except ValueError:
+        except ValueError as error:
+            if kind == "ivar":
+                self.ivar_diagnostic(self.ivar_failure(error,"invalid_list"),required="verified local list pointer and header")
             self.gaps.add(f"invalid_{kind}_list")
             return range(0)
 
@@ -461,6 +505,7 @@ class ObjCImage:
             binding = self.relocation(site)
             if binding.get("kind") == "bind":
                 self.gaps.add("ivar_offset_unavailable")
+                result["offset_evidence"]["reason_code"] = "external_binding"
                 return dict(result,offset_status="external_bind",offset_symbol=binding["symbol"],
                             offset_library=binding["library"])
             address = self.target(site)
@@ -468,11 +513,11 @@ class ObjCImage:
                 if anonymous:
                     return dict(result,offset_status="anonymous_bitfield",
                                 offset_evidence={"status":"not_recorded","reason":"anonymous_bitfield"})
-                raise ValueError("Ivar offset storage is missing")
+                raise ResolutionFailure("missing_offset_pointer","Ivar offset storage is missing")
             result["offset_storage_va"] = hex(address)
             value, = self.view.unpack("<i",address)
             if value < 0:
-                raise ValueError("Negative initial ivar offset")
+                raise ResolutionFailure("negative_offset","Negative initial ivar offset")
             return dict(result,declared_offset_bytes=value,offset_status="recorded",
                         offset_evidence={"status":"recorded","storage_va":hex(address),
                                          "width_bytes":4,"encoding":"signed_int32_little_endian",
@@ -480,6 +525,7 @@ class ObjCImage:
                                          "scope":"file_initial_value_not_runtime_layout"})
         except ValueError as error:
             result["offset_evidence"]["reason"] = str(error)
+            result["offset_evidence"]["reason_code"] = self.ivar_failure(error,"unavailable_offset")
             self.gaps.add("ivar_offset_unavailable")
             return result
 
@@ -487,12 +533,15 @@ class ObjCImage:
         rows = []
         remaining = MAX_IVARS
         for owner in classes:
+            self.ivar_owner = owner["class_va"]
             records = self.declaration_sites(int(owner["metadata_va"],16)+48,32,"ivar")
             visited = records[:remaining]
-            for record in visited:
+            for index,record in enumerate(visited):
                 try:
                     self.view.mapping(record,32)
-                except ValueError:
+                except ValueError as error:
+                    self.ivar_diagnostic(self.ivar_failure(error,"unavailable_record_bytes"),index=index,
+                                         required="unambiguous file-backed complete record")
                     self.gaps.add("unavailable_ivar_record_bytes")
                     continue
                 try:
@@ -511,10 +560,17 @@ class ObjCImage:
                                  "record_va":hex(record), "name_va":hex(name) if name else None, "type_encoding_va":hex(encoding),
                                  "alignment_raw":hex(alignment), "alignment_bytes":8 if alignment==0xffffffff else 1<<alignment,
                                  "size_bytes":size, "origin":"objc_ivar_list", **self.ivar_offset(record,anonymous=anonymous)})
-                except ValueError:
+                    if rows[-1]["offset_status"] in {"unavailable","external_bind"}:
+                        self.ivar_diagnostic(rows[-1]["offset_evidence"]["reason_code"],index=index,record=record,
+                                             required="verified local nonnegative int32 offset; row retained")
+                except ValueError as error:
+                    self.ivar_diagnostic(self.ivar_failure(error,"invalid_record"),index=index,record=record,
+                                         required="valid local name, type encoding and alignment")
                     self.gaps.add("invalid_ivar_record")
             remaining -= len(visited)
             if len(visited) < len(records):
+                self.ivar_diagnostic("exhausted_record_budget",index=len(visited),
+                                     required="additional bounded record inspection",count=len(records)-len(visited))
                 self.gaps.add("ivar_limit")
                 break
         return rows
@@ -535,7 +591,7 @@ class ObjCImage:
         return rows
 
 
-def selected_declarations(data, image, class_slot, *, scope):
+def selected_declarations(data, image, class_slot, *, scope, diagnostics=None):
     parsed = thin(data)
     matches = [row for row in parsed["sections"] if row["name"] in CLASS_LISTS
                and row["file_offset"] is not None
@@ -563,6 +619,8 @@ def selected_declarations(data, image, class_slot, *, scope):
         return [], sorted(objc.gaps | {"invalid_class_record"})
     rows = (objc.ivar_rows([selected]) if scope == "ivars"
             else objc.method_rows([selected],include_categories=False))
+    if scope == "ivars":
+        objc.export_ivar_diagnostics(diagnostics)
     return [dict(row,class_slot=hex(class_slot)) for row in rows],sorted(objc.gaps)
 
 
@@ -570,8 +628,8 @@ def selected_methods(data, image, class_slot):
     return selected_declarations(data,image,class_slot,scope="methods")
 
 
-def selected_ivars(data, image, class_slot):
-    return selected_declarations(data,image,class_slot,scope="ivars")
+def selected_ivars(data, image, class_slot, *, diagnostics=None):
+    return selected_declarations(data,image,class_slot,scope="ivars",diagnostics=diagnostics)
 
 
 def inventory(data, image, scope, *, diagnostics=None):
@@ -607,6 +665,7 @@ def inventory(data, image, scope, *, diagnostics=None):
         return rows,sorted(objc.gaps)
     if scope=="ivars":
         rows = objc.ivar_rows(classes)
+        objc.export_ivar_diagnostics(diagnostics)
         return rows,sorted(objc.gaps)
     methods = objc.method_rows(classes)
     return (methods if scope=="methods" else objc.selectors(methods)),sorted(objc.gaps)
