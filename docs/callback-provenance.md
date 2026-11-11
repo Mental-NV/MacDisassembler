@@ -1,6 +1,8 @@
 # F3c: explicit ABI-conditional frame and receiver provenance
 
 Status: implementation contract, not runtime behavior or persistence recovery.
+Policy 6 adds [explicit invocation path obligations](split-invocation-obligations.md)
+for composition; default conditional-branch barriers remain.
 Policy 5 additionally supports [shifted-register ADD](register-add-evidence.md).
 Policy 4 additionally supports [bounded SP pair writeback](callback-stack-pairs.md).
 

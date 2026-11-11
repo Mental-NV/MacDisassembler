@@ -1,5 +1,9 @@
 # Bounded callback composition (F4b)
 
+Composition policy 2 adds [explicit split-load and invocation-path opt-ins](split-invocation-obligations.md).
+The paired-only contract below remains the default; the native whole-chain limit
+remains until all its roles satisfy their obligations.
+
 Specification first. The composition view joins independently verified saved
 receipts, not execution states. It never forwards a stored value into a load,
 assumes aliases, identifies a live receiver, or claims persistence.

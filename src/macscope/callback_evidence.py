@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 
-POLICY = 'macscope-callback-sites/5'
+POLICY = 'macscope-callback-sites/6'
 MAX_INSTRUCTIONS = 1024
 MASK = (1 << 64) - 1
 
@@ -13,11 +13,13 @@ def signed(value, bits):
     return value - (1 << bits) if value & (1 << (bits-1)) else value
 
 
-def project(response, *, abi=None, provenance=False):
+def project(response, *, abi=None, provenance=False, fallthrough=False):
     """Annotate a validated import disassembly without mutating its receipt."""
     if abi not in (None, 'aapcs64'):
         raise ValueError('Unsupported callback ABI hypothesis')
     tracing = provenance or abi is not None
+    if fallthrough and not tracing:
+        raise ValueError('Fallthrough obligations require register provenance')
     result = copy.deepcopy(response)
     data = result['data']
     proof = data['selection']
@@ -25,6 +27,8 @@ def project(response, *, abi=None, provenance=False):
               'source_envelope_sha256': hashlib.sha256(json.dumps(response, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')).hexdigest(),
               'selection': copy.deepcopy(proof),
               'status': 'inconclusive', 'sites': [], 'gaps': [],
+              'path_mode': 'explicit_fallthrough' if fallthrough else 'no_conditional_paths',
+              'path_obligations': [],
               'provenance_mode': 'aapcs64_conditional' if abi else ('register_inputs' if provenance else 'strict'),
               'assumptions': ['selected-range input registers are symbolic',
                               'direct callees obey AAPCS64 and return normally; arbitrary memory effects'] if abi else [],
@@ -54,6 +58,7 @@ def project(response, *, abi=None, provenance=False):
     sp = {'kind': 'stack_pointer_relative', 'selection_start_va': proof['start_va'],
           'source_envelope_sha256': report['source_envelope_sha256'], 'offset': 0}
     conditions = []
+    branch_conditions = []
     report['stop_reason'] = 'selected_prefix_end'
     for row in rows:
         va = int(row['addr'], 16)
@@ -62,11 +67,16 @@ def project(response, *, abi=None, provenance=False):
         site = {'instruction_va': row['addr'], 'instruction_bytes': row['bytes']}
         if conditions:
             site['conditional_on_calls'] = list(conditions)
+        if branch_conditions:
+            site['conditional_on_branches'] = list(branch_conditions)
         report['interpreted_end_va'] = hex(va + 4)
         def get(reg):
             return copy.deepcopy(regs.get(reg, {'kind': 'unknown', 'register': f'x{reg}'}))
         def put(reg, value):
             if reg != 31:
+                if tracing and value.get('kind') == 'unknown' and 'value_identity' not in value:
+                    value = dict(value, value_identity={'origin_va': row['addr'],
+                        'source_envelope_sha256': report['source_envelope_sha256']})
                 regs[reg] = value
         if word & 0x1f000000 == 0x10000000:  # ADR/ADRP
             imm = signed(((word >> 5) & 0x7ffff) << 2 | ((word >> 29) & 3), 21)
@@ -198,6 +208,53 @@ def project(response, *, abi=None, provenance=False):
                     put(reg, {'kind': 'memory_read', 'origin_va': row['addr'], 'lane': lane})
             if writeback:
                 sp = next_sp
+        elif fallthrough and word & 0x7e000000 == 0x34000000:  # CBZ / CBNZ W/X
+            width = 64 if word & (1 << 31) else 32
+            nonzero_branch = bool(word & (1 << 24))
+            target = (va + signed((word >> 5) & 0x7ffff, 19)*4) & MASK
+            value = get(rd) if rd != 31 else {'kind': 'integer_constant', 'value': '0x0', 'basis': 'zero_register'}
+            branch = dict(site, kind='conditional_branch', branch='cbnz' if nonzero_branch else 'cbz',
+                          target_va=hex(target), fallthrough_va=hex(va+4), width=width,
+                          register=f'x{rd}' if rd != 31 else 'zr', tested_value=value,
+                          fallthrough_predicate='zero' if nonzero_branch else 'nonzero',
+                          predicate_status='unverified', taken_path='not_analyzed')
+            report['sites'].append(branch)
+            if target <= va:
+                report['gaps'].append(dict(site, reason='conditional_backedge_or_cycle'))
+                report['stop_reason'] = 'conditional_backedge_or_cycle'
+                break
+            if len(branch_conditions) >= 16:
+                report['gaps'].append(dict(site, reason='branch_condition_budget'))
+                report['stop_reason'] = 'branch_condition_budget'
+                break
+            if value['kind'] in ('integer_constant', 'address'):
+                is_zero = not (int(value['value'],16) & ((1 << width)-1))
+                if is_zero != nonzero_branch:
+                    report['gaps'].append(dict(site, reason='impossible_fallthrough_predicate'))
+                    report['stop_reason'] = 'impossible_fallthrough_predicate'
+                    break
+                branch['predicate_status'] = 'statically_satisfied'
+            conflicts = []
+            identity_bearing = value['kind'] in ('range_input_register', 'memory_read',
+                'register_add_result', 'call_clobbered', 'unknown_arithmetic', 'stack_pointer_relative') or 'value_identity' in value
+            for prior in report['path_obligations']:
+                if not identity_bearing or prior['tested_value'] != value or prior['fallthrough_predicate'] == branch['fallthrough_predicate']:
+                    continue
+                zero_width = prior['width'] if prior['fallthrough_predicate'] == 'zero' else width
+                nonzero_width = prior['width'] if prior['fallthrough_predicate'] == 'nonzero' else width
+                # X==0 implies W==0, but W==0 alone does not imply X==0.
+                # A symbolic W ADD result is independently zero-extended.
+                if zero_width >= nonzero_width or (value['kind'] == 'register_add_result' and value['width'] == 32):
+                    conflicts.append(prior['instruction_va'])
+            if conflicts:
+                branch['contradictory_with'] = conflicts
+                report['gaps'].append(dict(site, reason='contradictory_fallthrough_predicates', prior_sites=conflicts))
+                report['stop_reason'] = 'contradictory_fallthrough_predicates'
+                break
+            report['path_obligations'].append(copy.deepcopy(branch))
+            branch_conditions.append(row['addr'])
+            if 'alternate_branch_paths_not_analyzed' not in report['missing_evidence']:
+                report['missing_evidence'].append('alternate_branch_paths_not_analyzed')
         elif word & 0x7c000000 == 0x14000000:  # B / BL immediate
             target = (va + signed(word & 0x3ffffff, 26) * 4) & MASK
             kind = 'direct_call' if word & 0x80000000 else 'direct_branch'
