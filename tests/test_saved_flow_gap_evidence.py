@@ -16,7 +16,7 @@ class SavedEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        path = Path(self.temp.name)
+        path = Path(self.temp.name).resolve()
         (path / "inputs").mkdir()
         binary = segment_image(section_flags=0x80000400)[:-4] + bytes.fromhex("00001fd6")
         digest = hashlib.sha256(binary).hexdigest()
