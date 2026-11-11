@@ -34,7 +34,12 @@ def run(project,manifest):
             gate.require(outputs[0]==outputs[1],'Nondeterministic two-hop replay');results[format_]=outputs[0]
         c=json.loads(results['json'])['data']['callback_evidence']['two_hop_chain']
         gate.require(c['status']=='inconclusive' and c['link_status']=='verified_two_hop_entry_links' and not c['gaps'],'Native edges not verified')
-        gate.require(c['source_extent']=='not_proven_selected_bytes_only','Invented source extent')
+        gate.require(c['policy']=='macscope-pinned-twohop/2' and c['source_extent']=='verified_complete_selected_thunk','Missing exact source extent')
+        boundary=c['source_extent_evidence'];extent=boundary['extent']
+        gate.require(boundary['basis']=='terminal_linker_branch' and boundary['source_envelope_sha256']==digests['outer_thunk'],'Unbound source proof')
+        gate.require(extent['entry_va']=='0xd78' and extent['end_va_exclusive']=='0xd7c' and extent['length']==4,'Wrong source extent')
+        gate.require(extent['boundary']['source_bytes']=='8effff17' and boundary['target_va']=='0xbb0','Wrong terminal branch')
+        gate.require('Outer boundary basis: terminal_linker_branch' in results['text'],'Text omitted source basis')
         for role,key in (('outer','outer_thunk'),('inner','inner_thunk'),('destination','writer')):
             identity=c['role_identities'][role]
             gate.require(identity['selection']==manifest[key]['selection'] and identity['source_envelope_sha256']==digests[key],'Role identity changed')
@@ -74,7 +79,7 @@ def run(project,manifest):
         else:
             gate.require('writer_call_evidence' not in c,'Writer proof implicitly enabled')
         text=results['text'];summary=text[text.index('Callback evidence (bounded summary'):]
-        gate.require('Two-hop links: verified_two_hop_entry_links' in summary and 'not_proven_selected_bytes_only' in summary,'Text lost chain limits')
+        gate.require('Two-hop links: verified_two_hop_entry_links' in summary and 'verified_complete_selected_thunk' in summary,'Text lost chain limits')
         if writer_calls:gate.require('Conditional writer proof: '+c['writer_call_evidence']['status'] in summary,'Missing distinct proof status')
         gate.require(len(summary.encode())<=16384 and len(summary.splitlines())<=64,'Text budget exceeded')
     gate.require(gate.job_snapshot(project)==before,'Mutated receipts/jobs')

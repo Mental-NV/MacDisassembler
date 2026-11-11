@@ -166,6 +166,8 @@ def callback_summary(report, evidence):
     if chain:
         line('  Two-hop links: ' + field(chain.get('link_status')) + ' (independent edges; not runtime proof)')
         line('  Outer extent: ' + field(chain.get('source_extent')))
+        if boundary := row(chain.get('source_extent_evidence')):
+            line('  Outer boundary basis: ' + field(boundary.get('basis', boundary.get('reason'))))
         line('  Destination prefix stop: ' + field(chain.get('destination_stop_reason')))
         if writer_proof := row(chain.get('writer_call_evidence')):
             line('  Conditional writer proof: ' + field(writer_proof.get('status')) + ' (runtime values unknown)')
