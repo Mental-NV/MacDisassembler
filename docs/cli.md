@@ -9,6 +9,9 @@ untrusted binaries**. Ghidra operations require an explicit
 `--experimental-trusted-input` flag. Validation uses only this repository's
 source-known calculator. No analyzed input is executed.
 
+For a bounded investigation recipe, see the [practical hybrid workflow](hybrid-workflow.md).
+It separates import-focused capture, analyzed cached reads and explicitly conditional recovery.
+
 ## Install without third-party Python dependencies
 
 Tested: macOS 27.0.1 arm64, Python 3.14.6, full Ghidra 12.2,
