@@ -79,6 +79,10 @@ def functions(report, data):
 
 
 def decompile(report, data):
+    if isinstance(data, dict) and data.get('policy') == 'macscope-focused-selection-preflight/1':
+        report.line('Static selection preflight only; no decompilation or native readiness check.')
+        report.tree(data)
+        return
     if batch := data.get("batch_summary"):
         report.line("Captured batch outcomes")
         report.tree(batch, 1)
