@@ -39,11 +39,11 @@ class CompositionTests(TemporaryCase):
         self.save('a'*32,0x1220,0x122c)
         self.save('0'*32,0x1240,0x1248)
 
-    def composed(self, target_receipt=None, abi=None, context_register=None, fallthrough=False):
+    def composed(self, target_receipt=None, abi=None, context_register=None, fallthrough=False, writer_calls=False):
         args = SimpleNamespace(receipt='8'*32,callback_evidence=True,callback_provenance=True,
                                callback_target_receipt=target_receipt or '9'*32,callback_assignment_receipt='a'*32,
                                callback_invocation_receipt='0'*32,callback_abi=abi,callback_context_register=context_register,
-                               callback_invocation_fallthrough=fallthrough)
+                               callback_invocation_fallthrough=fallthrough,callback_writer_call_obligations=writer_calls)
         with patch.object(cli.metadata,'verified_slice',return_value=self.raw), \
              patch.object(import_disasm.engine,'dependencies',side_effect=AssertionError('native')):
             return cli.imported_disassembly(args,self.project_,self.image,0x1200,0x1204)['data']['callback_evidence']['composition']

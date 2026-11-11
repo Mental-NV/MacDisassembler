@@ -1,10 +1,10 @@
 """Bounded composition of independent observations, never a memory alias proof."""
 import copy
 
-from . import callback_evidence, focused, import_disasm, jobs, metadata
+from . import callback_evidence, focused, import_disasm, jobs, metadata, writer_call_obligations
 from .errors import Error
 
-POLICY = 'macscope-callback-composition/2'
+POLICY = 'macscope-callback-composition/3'
 
 
 def replay(project, image, raw, receipt, *, abi, provenance, fallthrough=False):
@@ -19,10 +19,12 @@ def replay(project, image, raw, receipt, *, abi, provenance, fallthrough=False):
     return callback_evidence.project(response, abi=abi, provenance=provenance, fallthrough=fallthrough)['data']['callback_evidence']
 
 
-def attach(project, image, raw, response, assignment, invocation, *, abi=None, provenance=False, context_register=None, invocation_fallthrough=False):
+def attach(project, image, raw, response, assignment, invocation, *, abi=None, provenance=False, context_register=None, invocation_fallthrough=False, writer_calls=False):
     """All roles are validated immutable receipts; two extra roles, one writer hop."""
     if context_register is not None and context_register not in {f'x{i}' for i in (*range(8), *range(19,30))}:
         raise Error('callback_scope','Unsupported context register pin',2)
+    if writer_calls and abi != 'aapcs64':
+        raise Error('callback_scope','Writer-call obligations require explicit AAPCS64',2)
     result = copy.deepcopy(response)
     thunk = result['data']['callback_evidence']
     assign = replay(project, image, raw, assignment, abi=abi, provenance=provenance)
@@ -44,6 +46,14 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
             'receipts': {'assignment': assignment, 'invocation': invocation,
                          'writer': link.get('destination_receipt')},
             'independent_evidence': {'assignment': assign, 'invocation': invoke}}
+    if writer_calls:
+        proof = writer_call_obligations.project(link, roles)
+        view['writer_call_evidence'] = proof
+        view['gaps'].extend(dict(g, role='writer') for g in proof['gaps'])
+        view['call_obligations'].extend(copy.deepcopy(proof['calls']))
+        if proof['calls']:
+            view['unknowns'].extend(['writer_callee_memory_side_effects', 'receiver_lifetime_after_writer_calls',
+                                     'writer_calls_may_not_return_normally'])
     # Attach after walking roles: the source report must not reference itself.
     for role, report in roles.items():
         for obligation in report.get('path_obligations', []):
@@ -147,6 +157,8 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
     for role, report in roles.items():
         if report.get('stop_reason') not in allowed_stops:
             gap(role + '_unsupported_boundary')
+        if role == 'writer' and not writer_calls and any(s['kind'] == 'indirect_invocation' for s in report.get('sites', [])):
+            gap('writer_indirect_invocation_boundary')
         direct_calls = [s for s in report.get('sites', []) if s['kind'] == 'direct_call']
         if direct_calls:
             if role == 'invocation' and any(int(report['selection']['start_va'],16) <= int(s['target_va'],16) < int(report['selection']['end_va'],16) for s in direct_calls):
@@ -156,7 +168,7 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
                     'evidence': copy.deepcopy(s), 'requires': ['normal_return', 'AAPCS64_callee_preservation'],
                     'memory_effects': 'unknown'} for s in direct_calls)
                 view['unknowns'].append('context_lifetime_after_calls')
-            else:
+            elif not (role == 'writer' and writer_calls):
                 gap(role + '_intervening_call')
         if any(g.get('reason') == 'disassembly_incomplete' for g in report.get('gaps', [])):
             gap(role + '_incomplete_disassembly')
@@ -172,7 +184,7 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
                            'value': copy.deepcopy(value)},
                 'requires_unverified': ['runtime_invoked_code_identity', 'execution_order'],
                 'requires_branch_conditions': [p['evidence']['instruction_va'] for p in view['path_obligations']],
-                'requires_call_conditions': [c['evidence']['instruction_va'] for c in view['call_obligations']],
+                'requires_call_conditions': [c['evidence']['instruction_va'] for c in view['call_obligations'] if c['role'] == 'invocation'],
                 'status': 'conditional_not_applied_to_facts'})
     if view['path_obligations']:
         view['unknowns'].append('alternate_branch_paths_not_analyzed')
