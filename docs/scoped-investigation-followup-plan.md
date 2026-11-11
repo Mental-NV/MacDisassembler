@@ -1,75 +1,145 @@
 # Scoped investigation follow-up plan
 
-Status: historical F1–F3 requirements retained below; next-step priorities updated
-against main `27bcef51b321f6610fb81ad7b56fdae23090f176`.
-The original baseline was `b69b85feb048a9ec5c8e18f167b1b446287253c1`.
-Pending work is not a claim of implementation or validation.
+Status: reconciled through main `83b6bdf5057367d08551397f41bfa979b2a76a13`.
+F1–F3 historical requirements are retained below. F4 checkpoints are merged,
+but bounded implementation is not completion of the practical readiness gate.
+New F5 acceptance items below are planned, not implemented or verified.
 
-## Current reconciliation and next priorities
+## Current reconciliation
 
-F1 trust compatibility and partial-result handling are implemented; see
-[trust and partial results](trust-and-partial-results.md). F2 selected
-class-slot ivars are implemented with explicit offset evidence; see the
-[selected ivar contract](selected-ivar-contract.md). [Bounded import disassembly](import-disassembly.md)
-is available, so obtaining selected instructions no longer inherently requires
-whole-image analysis or an external debugger. Preserve those working paths.
+F1 trust compatibility/partial-result handling, F2 selected class-slot ivars,
+and bounded import disassembly remain working foundations. F3 supports bounded
+callback observations, one-hop direct-destination links and conditional register
+provenance. Preserve receipt identity, explicit unknowns and engine-free replay.
 
-F3 now includes bounded callback observations, selected direct-destination
-receipt links and opt-in conditional register provenance. See
-[callback sites](callback-evidence.md), [selected links](callback-links.md) and
-[conditional provenance](callback-provenance.md). These are static evidence
-components, not proof that an assigned callback executes, that two unknown
-receivers are identical, or that a memory store persists application state.
-Do not reopen those foundations or label all original F3 acceptance complete.
+The following F4 slices are implemented:
+- **F4a:** bounded ARM64 stack-pair writeback evidence, not general instruction
+  coverage. Unsupported instructions remain barriers.
+- **F4b:** [four-role callback composition](callback-composition.md), with facts,
+  assumptions, unknowns and conditional register bindings kept separate. The
+  complete positive chain is validated with owned synthetic receipts. Existing
+  native Swift assignment/thunk fragments are verified; the native split-load,
+  conditional-branch/intervening-call invocation chain remains **uncomposed**.
+- **F4c:** [bounded ivar diagnostics](ivar-diagnostics.md) identify record-level
+  failures, unknown locations and missing offsets without discarding valid rows.
+  Field-specific rejection detail remains incomplete.
+- **F4d:** [per-lead summaries](per-lead-summary.md) add a bounded header to text
+  evidence, but still append the detailed tree. This is not a compact-only view.
 
-The following follow-ups extend the current contracts rather than duplicate
-them. Implement in small separately reviewed slices; read the current branch's
-contracts before editing because callback support is evolving.
+The integrated tree passed 744 primary tests, 115 analysis tests and installed-
+wheel synthetic receipt replay outside the checkout, without new engine jobs or
+receipt mutation. These checks do not establish whole-chain native coverage,
+application-state writer attribution, runtime behavior or general performance.
+No remote CI success or fresh native capture is claimed by this reconciliation.
 
-1. **F4a, P1: ARM64 callback instruction coverage.** Inventory the current
-   decoder's explicit barriers and select common callback instruction forms
-   from independently authored compiler fixtures. Specify exact byte masks,
-   widths, flags, register effects and pre/post-index writeback semantics for
-   each added form before coding. Do not skip unsupported instructions. Keep
-   unsupported, ambiguous, PAC and unknown ABI cases explicit. Acceptance:
-   independent instruction-oracle agreement, positive and near-miss encodings,
-   zero/sign extension, overlapping registers, stack/frame bounds, clobbering
-   and unchanged strict-mode barriers. Extend architecture coverage only when
-   its own evidence supports it; no claimed x86 coverage from ARM64 tests.
-2. **F4b, P1: Compositional callback-to-writer evidence.** Build on the existing
-   one-hop links and register correspondence, not a second graph mechanism.
-   Specify a bounded composition contract before expanding hop depth: identities,
-   limits, cycle handling, transferred values and accumulated assumptions.
-   Keep assignment, context load, invocation, direct destination and memory
-   writer as separate claims. A matching offset or plausible function name
-   cannot equate receivers or prove runtime callback identity. Acceptance:
-   owned positive chains and counterexamples with overwritten callbacks,
-   mismatched contexts, intervening clobbers, uncertain loads, cycles and missing
-   receipts. Unknowns survive composition and offline replay. A verified store
-   remains distinct from attributed application-state mutation or persistence.
-3. **F4c, P1: Exact skipped-ivar diagnostics.** Build on existing offset evidence.
-   When a selected record cannot produce a row, retain a bounded diagnostic
-   identifying its record index/site when verified, reason and missing evidence.
-   Distinguish filtering, unsupported layout, pointer failure, invalid record,
-   unavailable offset and exhausted budget. Do not fabricate a record address
-   when the mapping is unknown. Acceptance: valid prefix rows survive a bad
-   record or truncated tail; missing offsets remain null, real zero remains
-   zero; no skipped record is silently interpreted as absence. Bound diagnostic
-   count and report omitted counts/scope without unbounded allocations.
-4. **F4d, P1: Per-lead gaps beside partial-result summaries.** Keep exit 6 and
-   existing structured lead evidence. Improve the human-readable summary so
-   users can immediately map each incomplete lead to its blocking evidence and
-   a supported next action, rather than reading worker success as completion.
-   Acceptance: mixed complete/partial/failed leads, absent gap sites, limits and
-   terminal-safe rendering; do not suggest nonexistent commands or imply
-   verification from successful jobs alone. Retain machine-readable schemas and
-   raw reasons; review a versioned contract before any incompatible change.
+## Next priorities: F5 acceptance plan
 
-For each follow-up, preserve receipt identity and deterministic offline replay.
-Test a multi-lead saved handoff with the engine unavailable and assert no new
-worker jobs; distinguish replay from fresh analysis. Private evaluations are
-kept outside this public plan. Their operational usefulness does not establish
-full callback identity, application behavior or general performance.
+Implement small reviewed slices in the order below. Write each slice's numeric
+bounds, compatibility policy and owned fixtures before coding. Private evaluation
+artifacts stay outside this plan; the requirements below are generic product
+work, not a publication of application-specific findings.
+
+### F5a — Destination versus attributed writer (P0)
+
+A linked destination is not automatically an application-state writer. Separate
+verified destination identity, observed stores, stack/frame stores, unresolved
+store destinations and attributable non-stack effects. Preserve existing raw
+facts and receipt identities. Do not infer attribution from a name, an offset,
+a direct link, successful decoding or the mere presence of a store. Persistence
+and runtime execution remain unknown even with an attributable store.
+
+Acceptance: owned destinations with only stack spills, no stores, unknown bases,
+and an explicitly evidenced non-stack store. Stack-only and unknown-base cases
+must not be summarized as an application writer. Raw stores remain accessible.
+Any change to existing field names/status semantics requires a reviewed version
+or additive compatibility contract; do not silently rename the writer role.
+
+### F5b — Compact-only multi-lead handoff (P0)
+
+Specify an opt-in compact-only presentation that does not append the full tree.
+Keep current detailed text, JSON, receipts and exit codes unchanged. Include
+lead identity/status, highest-priority blockers, explicit omitted counts and a
+supported route to full evidence; do not invent paths or commands. Truncate
+before terminal escaping and enforce a documented total output budget as well
+as per-field/per-lead caps.
+
+Acceptance: an owned 12-lead fixture with deliberately large nested evidence
+renders at most 200 lines and 32 KiB in compact mode, without dropping partial
+status or hiding that material was omitted. Test oversize labels, controls,
+missing reasons/sites and larger lead counts. Detail/JSON must retain all data;
+partial evidence still exits 6. Offline replay is deterministic and creates no
+jobs. Measure detailed and compact sizes on owned fixtures, not private reports.
+
+### F5c — macOS test-path portability gate (P0, independent)
+
+Canonicalize temporary fixture directory identities where the OS resolves a
+temporary-directory alias to a different absolute path. Compare canonical paths
+in tests when path identity, rather than user spelling, is the contract. Do not
+weaken traversal, symlink, output protection or receipt-identity checks globally.
+
+Acceptance: relevant terminal/output tests pass on macOS with both aliased and
+canonical temporary paths; retain genuine mismatch/security negative tests.
+Run the full primary suite on macOS and record toolchain/platform separately.
+A Linux-only pass cannot close this gate. A missing Mac blocks this acceptance
+item, not independent specification or implementation work.
+
+### F5d — Bounded register-offset ADD (P1)
+
+Inventory required ARM64 register-offset ADD forms from owned compiler output.
+Specify exact encodings, width, extension/shift, SP/ZR behavior, overflow and
+register clobbering. Reject unsupported flag-setting/extended forms rather than
+approximating them. Symbolic base-plus-offset observations must not become alias,
+object-layout or runtime-address proofs.
+
+Acceptance: independent instruction-oracle agreement; positive supported forms,
+near-miss encodings, 32/64-bit widths, extension/shift boundaries, wraparound and
+unknown operands. Unsupported forms remain explicit barriers. Demonstrate the
+newly supported prefix on an owned compiler artifact with exact byte evidence.
+
+### F5e — Split loads and conditional-call obligations (P1)
+
+Start from the explicit native-oracle gap in F4b. Specify separate target/context
+load provenance, conditional-path coverage and intervening-call clobbering before
+extending composition. Set finite path/hop/instruction budgets. Keep every branch
+condition, ABI hypothesis and memory-identity obligation visible; do not remove
+intervening instructions or treat callee-saved guesses as unconditional facts.
+
+Acceptance: owned supported split-load paths and negatives for overwritten slots,
+clobbered context/target, unknown call effects, divergent branches, cycles and
+budget exhaustion. A claimed full native positive must use a contiguous,
+independently verified compiler artifact and preserved receipts. Until that
+passes, report synthetic positive coverage and native unresolved coverage
+separately. Runtime target identity, application attribution and persistence are
+not discharged by matching offsets or a structurally composed path.
+
+### F5f — Field-level ivar rejection diagnostics (P1)
+
+Extend F4c with stable field-level reason codes and verified field sites (or
+explicit unknown): name pointer/string, type pointer/encoding, alignment, record
+mapping and offset storage/value. Preserve legacy aggregate gaps, valid prefix
+rows, null-versus-zero offsets, deterministic order, cap/omission totals and
+separate filtering. Avoid emitting unbounded or untrusted string contents.
+
+Acceptance: independently corrupt each field in an owned multi-record fixture;
+assert the exact failing field/code and mapping confidence while later valid
+records survive where supported. Cover external/unmapped/ambiguous pointers,
+invalid alignment, truncation, field/record budget exhaustion and output caps.
+No invalid-record diagnostic may invent a verified field address.
+
+## Execution and completion rules
+
+For each F5 slice: specification review, implementation, independent review,
+full primary and relevant analysis tests, installed-package smoke, and precise
+passed/blocked/deferred acceptance records. Use immutable offline replay with
+engine access disabled where applicable; distinguish rendering replay from an
+end-to-end pinned-receipt analysis trial. Re-run integration after combining
+slices. If blocked, record the reason and continue an independent task.
+
+After the current scoped improvements, run an owned native positive and a
+negative practical-readiness session, then a separately authorized scoped
+consumer trial. Record feedback without publishing private artifacts. Do not
+call the final goal complete until the native path and attribution obligations
+required by that goal are met; useful partial tooling remains explicitly partial.
 
 
 This follow-up sets the next priorities after the historical
