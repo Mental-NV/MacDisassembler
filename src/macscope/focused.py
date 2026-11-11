@@ -9,10 +9,11 @@ from .errors import Error
 from .macho import thin
 from .pseudocode import VA, address_spans
 from .schema import validate_envelope, validate_function
+from .macho_view import MappedImage
 
 
-POLICY = "macscope-focused-import/3"
-RESUMABLE_POLICIES = frozenset(("macscope-focused-import/2", POLICY))
+POLICY = "macscope-focused-import/4"
+RESUMABLE_POLICIES = frozenset(("macscope-focused-import/2", "macscope-focused-import/3", POLICY))
 MAX_BYTES = 8192
 PROJECT_BACKUPS = frozenset(("image.rep/idata/~index.bak", "image.rep/idata/~journal.bak"))
 RECEIPT_FACETS = {"pseudocode", "instructions", "body_ranges", "xrefs_from", "xrefs_to_entry"}
@@ -38,9 +39,13 @@ def extent(data, image, entry, *, policy=POLICY):
                              "reason": starts.get("reason") if starts else None})
     if not starts["addresses"]:
         raise Error("focused_entry_missing", "The requested address is not a linker function start", 3)
+    boundary = None
     if len(starts["addresses"]) != 2:
-        raise Error("focused_boundary_missing", "The selected entry has no next linker function start", 3)
-    _, end = (int(value, 16) for value in starts["addresses"])
+        if policy != POLICY or starts["addresses"] != [hex(address)]:
+            raise Error("focused_boundary_missing", "The selected entry has no next linker function start", 3)
+        end, boundary = terminal_linker_boundary(data, image, parsed, address)
+    else:
+        _, end = (int(value, 16) for value in starts["addresses"])
     size = end - address
     if size > MAX_BYTES:
         raise Error("focused_extent_limit", f"Selected linker extent exceeds {MAX_BYTES} bytes", 3)
@@ -62,11 +67,49 @@ def extent(data, image, entry, *, policy=POLICY):
     proof = {"policy": policy, "entry_va": hex(address), "end_va_exclusive": hex(end),
              "slice_file_offset": hex(offset), "container_file_offset": hex(offset + int(image["offset"], 16)),
              "extent_sha256": sha256(payload).hexdigest(), "length": size}
+    if boundary is not None:
+        proof["boundary"] = boundary
     if policy in RESUMABLE_POLICIES:
         proof["tail_calls"] = focused_tailcalls.plan(data, image, parsed, proof, payload)
-    if policy == POLICY:
+    if policy in ("macscope-focused-import/3", POLICY):
         proof["flow_gap_classification"] = flow_gap_classification.plan(data, image, parsed, proof, payload)
     return proof, payload
+
+
+
+def terminal_linker_boundary(data, image, parsed, address):
+    """Only called after proving this is the last complete linker-start entry."""
+    if parsed['arch'] != 'arm64':
+        raise Error('focused_boundary_missing','Terminal boundary requires ARM64',3)
+    offset = focused_tailcalls.safe_code(data,parsed,address,4)
+    sections = [s for s in parsed['sections'] if s['file_offset'] is not None
+                and int(s['va'],16) <= address and int(s['va'],16)+int(s['size'],16)==address+4]
+    if offset is None or len(sections)!=1:
+        raise Error('focused_terminal_boundary','Last entry must be one terminal executable instruction',3)
+    try:
+        mapped = MappedImage(data,parsed['segments'],reject_virtual_overlap=True)
+        mapped_offset,_,protection = mapped.mapping(address,4)
+        if mapped_offset != offset or not protection & 4:
+            raise ValueError('Section and executable segment mappings disagree')
+    except ValueError as exc:
+        raise Error('focused_terminal_mapping','Terminal instruction mapping is ambiguous',3) from exc
+    payload = data[offset:offset+4]
+    target = focused_tailcalls.branch_target(address,payload)
+    if target is None or target==address:
+        raise Error('focused_terminal_transfer','Terminal word must be B to a distinct verified entry',3)
+    try:
+        target_proof,_ = extent(data,image,hex(target),policy='macscope-focused-import/1')
+        target_offset,_,target_protection = mapped.mapping(target,target_proof['length'])
+        if target_offset != int(target_proof['slice_file_offset'],16) or not target_protection & 4:
+            raise ValueError('Target section and executable segment mappings disagree')
+    except (Error,ValueError) as exc:
+        raise Error('focused_terminal_target','Terminal branch target lacks an independent linker extent',3) from exc
+    section = sections[0]
+    return address+4, {'policy':'macscope-terminal-linker-boundary/1',
+        'basis':'last_linker_entry_single_terminal_branch', 'section_end_va':hex(address+4),
+        'section':{key:section[key] for key in ('segment','name','va','size','file_offset')},
+        'source_va':hex(address),'source_bytes':payload.hex(),'target_va':hex(target),
+        'target_extent':target_proof}
 
 
 def direct_calls(arch, function):

@@ -61,8 +61,8 @@ def identity(function, policy):
     selected.update(extent_sha256=proof["extent_sha256"], program_sha256=proof["program_sha256"])
     if (selected["arch"] not in ("arm64", "x86_64") or address(selected["entry_va"]) is None
             or any(not is_digest(value) for key, value in selected.items() if key not in ("arch", "entry_va"))
-            or proof.get("policy") != ("macscope-focused-import/2" if policy == LEGACY_POLICY
-                                       else "macscope-focused-import/3")
+            or proof.get("policy") not in (("macscope-focused-import/2",) if policy == LEGACY_POLICY
+                                          else ("macscope-focused-import/3", "macscope-focused-import/4"))
             or proof.get("entry_va") != selected["entry_va"]):
         raise ValueError("Invalid focused gap identity")
     return selected
@@ -124,7 +124,7 @@ def annotate(function, *, policy=None):
     if not gaps:
         return function
     proof = function.get("origin", {}).get("extent", {})
-    policy = policy or (POLICY if proof.get("policy") == "macscope-focused-import/3" else LEGACY_POLICY)
+    policy = policy or (POLICY if proof.get("policy") in ("macscope-focused-import/3", "macscope-focused-import/4") else LEGACY_POLICY)
     if policy not in (LEGACY_POLICY, POLICY):
         raise ValueError("Unsupported flow gap evidence policy")
     selected = identity(function, policy)
@@ -184,7 +184,7 @@ def validate(function, proof):
     if not isinstance(gaps, (list, tuple)):
         raise ValueError("Invalid control-flow gap collection")
     present = [isinstance(gap, dict) and "evidence" in gap for gap in gaps]
-    current = proof.get("policy") == "macscope-focused-import/3"
+    current = proof.get("policy") in ("macscope-focused-import/3", "macscope-focused-import/4")
     if not any(present) and not current:
         return
     if not all(present) or gaps and function.get("decompile_status") == "complete":
