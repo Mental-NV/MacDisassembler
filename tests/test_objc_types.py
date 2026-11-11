@@ -96,7 +96,7 @@ class EncodingTests(unittest.TestCase):
 
     def test_unsupported_and_invalid_do_not_emit_a_partial_type(self):
         for encoding, status, reason in (
-                ('?', 'unsupported', 'unknown_type'), ('^?', 'unsupported', 'unknown_type'),
+                ('?', 'unsupported', 'unknown_type'), ('^r?', 'unsupported', 'unknown_type'),
                 ('jD', 'unsupported', 'unsupported_type_code'), ('', 'invalid', 'empty_or_nontext_encoding'),
                 ('rrq', 'invalid', 'duplicate_qualifier'), ('q8', 'invalid', 'trailing_type_data'),
                 ('[3i', 'invalid', 'unterminated_array'), ('[３i]', 'invalid', 'expected_decimal'),

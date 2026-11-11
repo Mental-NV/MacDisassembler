@@ -3,7 +3,9 @@ import json
 import re
 
 
-POLICY = "objc-type-encoding/v1"
+LEGACY_POLICY = "objc-type-encoding/v1"
+POLICY = "objc-type-encoding/v2"
+POLICIES = (LEGACY_POLICY, POLICY)
 MAX_INPUT = 4096
 MAX_DEPTH = 32
 MAX_NODES = 256
@@ -31,8 +33,11 @@ def quoted(value):
 
 
 class Parser:
-    def __init__(self, text):
+    def __init__(self, text, policy=POLICY):
+        if policy not in POLICIES:
+            raise ValueError("Unsupported Objective-C decoder policy")
         self.text, self.pos, self.nodes = text, 0, 0
+        self.policy = policy
 
     def fail(self, reason, status="invalid"):
         raise DecodeFailure(status, reason, self.pos)
@@ -66,7 +71,7 @@ class Parser:
         self.pos = end + 1
         return value
 
-    def type(self, depth=0, aggregate_close=None):
+    def type(self, depth=0, aggregate_close=None, *, opaque_target=False):
         start = self.pos
         if depth >= MAX_DEPTH:
             self.fail("nesting_limit", "limited")
@@ -112,7 +117,7 @@ class Parser:
                         display = "object " + quoted(name)
                 row.update(kind="object", name=name, display=display)
         elif code == "^":
-            target = self.type(depth + 1, aggregate_close)
+            target = self.type(depth + 1, aggregate_close, opaque_target=True)
             row.update(kind="pointer", pointee=target, display="pointer to " + target["display"])
         elif code == "[":
             count = self.number()
@@ -145,6 +150,8 @@ class Parser:
             label = "anonymous" if name == "?" else name if re.fullmatch(IDENTIFIER, name) else quoted(name)
             row.update(kind=kind, name=name, fields=fields, opaque=fields is None,
                        display=kind + " " + label)
+        elif code == "?" and opaque_target and not qualifiers and self.policy == POLICY:
+            row.update(kind="unknown", display="unknown pointee (signature unavailable)", signature=None)
         elif code == "b":
             width = self.number()
             row.update(kind="bitfield", width=width, display=f"bitfield[{width}]")
@@ -156,8 +163,11 @@ class Parser:
         return row
 
 
-def base_result(encoding):
-    result = {"policy": POLICY, "source": "objc_type_encoding", "status": "decoded",
+def base_result(encoding, policy=None):
+    policy = POLICY if policy is None else policy
+    if policy not in POLICIES:
+        raise ValueError("Unsupported Objective-C decoder policy")
+    result = {"policy": policy, "source": "objc_type_encoding", "status": "decoded",
               "diagnostics": []}
     if encoding is None:
         return dict(result, status="unavailable", diagnostics=["type_encoding_missing"])
@@ -180,11 +190,11 @@ def finish(result, **fields):
     return decoded
 
 
-def decode_ivar(encoding):
-    result = base_result(encoding)
+def decode_ivar(encoding, *, policy=None):
+    result = base_result(encoding, policy)
     if result["status"] != "decoded":
         return result
-    parser = Parser(encoding)
+    parser = Parser(encoding, result["policy"])
     try:
         value = parser.type()
         if parser.pos != len(encoding):
@@ -194,11 +204,11 @@ def decode_ivar(encoding):
     return finish(result, type=value)
 
 
-def decode_method(encoding, selector, method_kind):
-    result = base_result(encoding)
+def decode_method(encoding, selector, method_kind, *, policy=None):
+    result = base_result(encoding, policy)
     if result["status"] != "decoded":
         return result
-    parser = Parser(encoding)
+    parser = Parser(encoding, result["policy"])
     try:
         return_type = parser.type()
         frame = parser.number(optional=True)

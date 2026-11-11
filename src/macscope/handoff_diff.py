@@ -228,7 +228,7 @@ def read_handoff(path, side):
                 complete_types = (sidecar["status"] == "associated"
                                   and sidecar["abi_projection"]["status"] == "projected")
                 facts[lead["id"]]["facets"]["objc_types"] = measured(
-                    objc_type_evidence.observations(sidecar, data[objc_type_evidence.FIELD]["abi_policy"]), complete_types)
+                    objc_type_evidence.observations(sidecar, data[objc_type_evidence.FIELD]["abi_policy"], data[objc_type_evidence.FIELD]["decoder_policy"]), complete_types)
                 facts[lead["id"]]["provenance"]["objc_type_binding"] = sidecar["binding"]
         descriptor = {"export_sha256": hashlib.sha256(raw).hexdigest(), "manifest_sha256": data["manifest_sha256"],
                       "status": envelope["status"], "lead_count": len(facts)}

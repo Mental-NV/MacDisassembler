@@ -84,7 +84,7 @@ def seal(row):
     return dict(row, sha256=identity(row))
 
 
-def sidecar(row, pin, metadata_gaps, *, redacted=False, abi_policy=ABI_POLICY):
+def sidecar(row, pin, metadata_gaps, *, redacted=False, abi_policy=ABI_POLICY, decoder_policy=objc_types.POLICY):
     lead, function = row["lead"], row["function"]
     if (not isinstance(metadata_gaps, list) or len(metadata_gaps) > 64
             or any(not isinstance(g, str) or not 0 < len(g) <= 128 for g in metadata_gaps)
@@ -129,7 +129,7 @@ def sidecar(row, pin, metadata_gaps, *, redacted=False, abi_policy=ABI_POLICY):
             or any(not is_digest(pin.get(k)) for k in ("image_id", "artifact_sha256", "slice_sha256"))
             or not any(is_digest(pin.get(k)) for k in ("analysis_id", "import_program_sha256"))):
         return unavailable("declaration_identity_unavailable")
-    decoded = objc_types.decode_method(method.get("type_encoding"), method["name"], method["method_kind"])
+    decoded = objc_types.decode_method(method.get("type_encoding"), method["name"], method["method_kind"], policy=decoder_policy)
     binding = {key: pin[key] for key in PIN_FIELDS if key in pin}
     binding.update(function_id=function["function_id"], entry_va=function["entry_va"],
                    class_slot=lead["class_slot"], method_record_va=method["record_va"])
@@ -152,15 +152,17 @@ def sidecar(row, pin, metadata_gaps, *, redacted=False, abi_policy=ABI_POLICY):
     return seal(result)
 
 
-def build(report, metadata_gaps, *, redacted_leads=(), abi_policy=ABI_POLICY):
+def build(report, metadata_gaps, *, redacted_leads=(), abi_policy=ABI_POLICY, decoder_policy=objc_types.POLICY):
     if abi_policy not in ABI_POLICIES:
         raise ValueError("Unsupported Objective-C ABI policy")
+    if decoder_policy not in objc_types.POLICIES:
+        raise ValueError("Unsupported Objective-C decoder policy")
     pins = {pin["image_id"]: pin for pin in report["images"]}
     records = [sidecar(row, pins[row["lead"]["image_id"]],
                        [] if row.get("reason") == "lead_output_limit" else metadata_gaps.get(row["lead"]["id"], []),
-                       redacted=row["lead"]["id"] in redacted_leads, abi_policy=abi_policy)
+                       redacted=row["lead"]["id"] in redacted_leads, abi_policy=abi_policy, decoder_policy=decoder_policy)
                for row in report["leads"]]
-    return {"policy": POLICY, "decoder_policy": objc_types.POLICY, "abi_policy": abi_policy,
+    return {"policy": POLICY, "decoder_policy": decoder_policy, "abi_policy": abi_policy,
             "limitations": limitations(abi_policy), "records": records}
 
 
@@ -169,7 +171,7 @@ def validate(report):
         return {}
     section = report[FIELD]
     if (not isinstance(section, dict) or set(section) != {"policy", "decoder_policy", "abi_policy", "limitations", "records"}
-            or section["policy"] != POLICY or section["decoder_policy"] != objc_types.POLICY
+            or section["policy"] != POLICY or section["decoder_policy"] not in objc_types.POLICIES
             or section["abi_policy"] not in ABI_POLICIES or section["limitations"] != limitations(section["abi_policy"])
             or not isinstance(section["records"], list) or len(section["records"]) != len(report["leads"])):
         raise ValueError("Unsupported or malformed Objective-C type sidecar policy")
@@ -181,7 +183,7 @@ def validate(report):
         if any(gap not in row["gaps"] and gap != row.get("reason") for gap in record["metadata_gaps"]):
             raise ValueError("Sidecar metadata gaps differ from the lead")
     redacted = [record["lead_id"] for record in section["records"] if record.get("reason") == "declaration_redacted"]
-    if section != build(report, gaps, redacted_leads=redacted, abi_policy=section["abi_policy"]):
+    if section != build(report, gaps, redacted_leads=redacted, abi_policy=section["abi_policy"], decoder_policy=section["decoder_policy"]):
         raise ValueError("Objective-C sidecar differs from its declaration and pins")
     return {row["lead_id"]: row for row in section["records"]}
 
@@ -193,15 +195,15 @@ def redact_report(report, sanitizer):
     changed = [row["lead"]["id"] for row, sanitized in zip(report["leads"], clean["leads"])
                if row["lead"] != sanitized["lead"] or row["matches"] != sanitized["matches"]]
     gaps = {row["lead_id"]: row["metadata_gaps"] for row in clean[FIELD]["records"]}
-    clean[FIELD] = build(clean, gaps, redacted_leads=changed, abi_policy=report[FIELD]["abi_policy"])
+    clean[FIELD] = build(clean, gaps, redacted_leads=changed, abi_policy=report[FIELD]["abi_policy"], decoder_policy=report[FIELD]["decoder_policy"])
     return clean
 
 
-def observations(record, abi_policy=ABI_POLICY):
+def observations(record, abi_policy=ABI_POLICY, decoder_policy=objc_types.POLICY):
     declaration = record["declaration"]
     if declaration:
         declaration = {key: declaration[key] for key in ("name", "class_name", "category", "method_kind", "type_encoding")
                        if key in declaration}
-    return {"policy": POLICY, "decoder_policy": objc_types.POLICY, "abi_policy": abi_policy,
+    return {"policy": POLICY, "decoder_policy": decoder_policy, "abi_policy": abi_policy,
             **{key: record[key] for key in ("status", "reason", "metadata_gaps", "decoded_types", "abi_projection")},
             "declaration": declaration}
