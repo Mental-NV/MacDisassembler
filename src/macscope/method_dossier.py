@@ -1,5 +1,5 @@
 """Bounded reading view of existing evidence, not a semantic analyzer."""
-from . import objc_type_evidence, terminal
+from . import objc_type_evidence, terminal, token_preview
 
 MAX_LEADS = 4
 MAX_BYTES = 65536
@@ -94,6 +94,20 @@ def lead_view(row, pin, types):
             view.line('Conditional return register: ' + f(abi['return_value'].get('register')))
     view.items('Flow gaps', code.get('control_flow_gaps') or [], 4,
                lambda i, x: f(x.get('reason')))
+    tokens = token_preview.preview(code)
+    view.line(f"Recorded token/address coverage: {f(tokens['status'])}; reason {f(tokens['reason'])}")
+    view.line('UTF-16 token offsets are half-open; address ranges are inclusive. Not source lines or whole-line mappings.')
+    view.line('Tokens may be outside the clipped snippet.')
+    view.items('Token addresses', tokens['records'], 4,
+               lambda i, x: f"{x['text_start']}:{x['text_end']} " + f(x['token'])
+               + (' [token clipped]' if x['token_clipped'] else '') + ' => '
+               + ', '.join(lo + '..' + hi for lo, hi in x['ranges'])
+               + f"; ranges omitted={x['omitted_ranges']}")
+    if tokens['omitted_spans'] is None:
+        view.omitted['Token addresses'] = 'unknown'
+    else:
+        view.omitted['Token addresses'] += tokens['omitted_spans']
+
     pseudocode = code.get('pseudocode')
     lines = pseudocode.splitlines() if isinstance(pseudocode, str) else []
     view.line('Raw pseudocode; numbers are display indices, not recovered source lines or address mappings.')
