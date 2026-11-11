@@ -36,10 +36,21 @@ options before launching a worker.
 
 ## New versioned request and provenance
 
-Define a dedicated request policy and result-origin mode, rather than silently
-adding inferred output to `focused_readonly_import` receipts. Exact names and
-schemas require implementation review; this document does not allocate a runtime
-version. Keep old default request serialization and receipt interpretation intact.
+Propose these distinct versioned identities, all unavailable in the current CLI:
+
+- Request: `macscope-focused-callee-query-request/1`, stored under a separate
+  `focused_callee_request` producer field.
+- Receipt: `macscope-focused-callee-query-receipt/1`.
+- Outcome/provenance policy: `macscope-focused-callee-parameters/1`.
+- Result origin mode: `focused_readonly_import_callee_parameters`.
+
+These are proposed identifiers, not an implemented runtime contract. A dedicated
+request/result validator must dispatch them explicitly; do not silently add
+inferred output to `focused_readonly_import`, reuse the analyzed-query recovery
+identity, or teach the legacy focused-record reader to accept arbitrary schemas.
+Keep old default request serialization and receipt interpretation intact. The
+new receipt retains bounded request/result hashes and producing-job linkage,
+but must fail closed in old readers instead of looking like an ordinary receipt.
 
 The immutable request must bind at least:
 
@@ -78,6 +89,9 @@ parameters and after every subsequent verification decompilation. Preserve
 existing custom-storage/signature/return refusals. Independently verify final
 caller bytes, body, CFG/coverage and native scope. Missing, malformed, wrong-policy
 or out-of-scope evidence is operational failure with no successful receipt.
+Validate the new receipt, request producer field, origin and outcome policies
+as one consistent tuple. Reject mixed old/new identities and duplicate producer
+fields even when inference skips.
 A legitimate unsupported-input skip is distinct and remains visible.
 
 ## Replay, resume and consumer integration
