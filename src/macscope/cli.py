@@ -272,7 +272,7 @@ def parser():
     s=sub.add_parser('export');project(s);common(s,('text','json','jsonl','html'))
     s.add_argument('--include-annotations',action='store_true')
     s=sub.add_parser('evidence',help='Export a private handoff for pinned leads from committed evidence')
-    common(s,('json','html'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
+    common(s,('json','html','text'));s.add_argument('--project',required=True);s.add_argument('--leads',required=True)
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s.add_argument('--link-focused',action='store_true',help='Verify direct calls between selected focused receipts')
     s=sub.add_parser('diff');common(s);pagination(s)
