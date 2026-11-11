@@ -34,7 +34,7 @@ def run(project,manifest):
             gate.require(outputs[0]==outputs[1],'Nondeterministic two-hop replay');results[format_]=outputs[0]
         c=json.loads(results['json'])['data']['callback_evidence']['two_hop_chain']
         gate.require(c['status']=='inconclusive' and c['link_status']=='verified_two_hop_entry_links' and not c['gaps'],'Native edges not verified')
-        gate.require(c['policy']=='macscope-pinned-twohop/2' and c['source_extent']=='verified_complete_selected_thunk','Missing exact source extent')
+        gate.require(c['policy']=='macscope-pinned-twohop/3' and c['source_extent']=='verified_complete_selected_thunk','Missing exact source extent')
         boundary=c['source_extent_evidence'];extent=boundary['extent']
         gate.require(boundary['basis']=='terminal_linker_branch' and boundary['source_envelope_sha256']==digests['outer_thunk'],'Unbound source proof')
         gate.require(extent['entry_va']=='0xd78' and extent['end_va_exclusive']=='0xd7c' and extent['length']==4,'Wrong source extent')
@@ -63,7 +63,16 @@ def run(project,manifest):
         else:
             gate.require(not stores and c['destination_stop_reason']=='unsupported_instruction_boundary','Default barrier lost')
         gate.require(all(c['destination_effects'][key]=='unknown' for key in ('application_writer_attribution','runtime_execution','persistence')),'Upgraded destination claims')
-        gate.require('transitive_register_correspondence_not_applied' in c['unknowns'],'Invented transitive values')
+        gate.require('forwarded_inputs_not_substituted_into_destination_facts' in c['unknowns'],'Lost no-substitution limit')
+        forwarding=c['register_forwarding']
+        gate.require(forwarding['status']=='verified_static_register_forwarding' and forwarding['destination_entry_va']=='0xa90','Missing static forwarding')
+        gate.require(len(forwarding['bindings'])==19 and len(forwarding['edges'])==2,'Wrong forwarding scope')
+        for register in ('x0','x20'):
+            binding=next(b for b in forwarding['bindings'] if b['source']['register']==register)
+            gate.require(binding['source']==dict(kind='range_input_register',register=register,selection_start_va='0xd78',source_envelope_sha256=digests['outer_thunk']),'Wrong outer input binding')
+            gate.require(binding['destination']==dict(kind='range_input_register',register=register,selection_start_va='0xa90',source_envelope_sha256=digests['writer']),'Wrong destination input binding')
+        gate.require(forwarding['thunk_boundaries']['inner']['extent']['end_va_exclusive']=='0xbb4','Inner extent not exact')
+        gate.require('Static register forwarding: verified_static_register_forwarding' in results['text'],'Missing text forwarding scope')
         if writer_calls:
             proof=c['writer_call_evidence']
             if enabled:

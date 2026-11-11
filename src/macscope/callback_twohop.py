@@ -1,9 +1,9 @@
 """Two independently pinned direct edges; no transitive register substitution."""
 import copy
-from . import callback_evidence, callback_links, focused, focused_tailcalls, import_disasm, jobs, metadata, writer_call_obligations
+from . import callback_evidence, callback_links, focused, focused_tailcalls, import_disasm, jobs, metadata, thunk_forwarding, writer_call_obligations
 from .errors import Error
 
-POLICY = 'macscope-pinned-twohop/2'
+POLICY = 'macscope-pinned-twohop/3'
 
 
 def source_boundary(raw, image, outer, link):
@@ -114,6 +114,12 @@ def attach(project,image,raw,response,via,target,*,abi=None,provenance=False,che
     chain['source_extent_evidence'] = boundary
     if boundary['status'] == 'verified_complete_selected_thunk':
         chain['source_extent'] = boundary['status']
+    inner_boundary = source_boundary(raw,image,inner,link2)
+    forwarding = thunk_forwarding.project(chain,roles,boundary,inner_boundary)
+    chain['register_forwarding'] = forwarding
+    if forwarding['status'] == 'verified_static_register_forwarding':
+        chain['unknowns'].remove('transitive_register_correspondence_not_applied')
+        chain['unknowns'].append('forwarded_inputs_not_substituted_into_destination_facts')
     if chain['path_obligations']:
         chain['unknowns'].append('alternate_branch_paths_not_analyzed')
     if chain['call_obligations']:
