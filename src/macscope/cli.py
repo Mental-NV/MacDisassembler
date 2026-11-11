@@ -186,6 +186,7 @@ def parser():
             s.add_argument('--from-import',action='store_true',help='Linearly decode a bounded --range from the saved no-analysis import')
             s.add_argument('--receipt',help='Replay one saved import-disassembly job for the same range')
             s.add_argument('--callback-evidence',action='store_true',help='Add conservative arm64 callback-site byte facts; not a target or writer proof')
+            s.add_argument('--callback-checked-add-fallthrough',action='store_true',help='Selected-only adjacent ADDS-immediate / B.VS or B.VC guard obligations; requires callback evidence and provenance')
             s.add_argument('--callback-provenance',action='store_true',help='Track symbolic input registers without preserving values across calls')
             s.add_argument('--callback-abi',choices=('aapcs64',),help='Explicit conditional call-preservation hypothesis; requires --callback-evidence')
             s.add_argument('--callback-context-register',choices=[f'x{i}' for i in (*range(8),*range(19,30))],help='Explicit machine-register pin for split context loads; requires composition receipts')
@@ -557,7 +558,8 @@ def imported_disassembly(args, project, image, start, end):
             return response
         abi = getattr(args,'callback_abi',None)
         provenance = getattr(args,'callback_provenance',False)
-        response = callback_evidence.project(response,abi=abi,provenance=provenance)
+        response = callback_evidence.project(response,abi=abi,provenance=provenance,
+            checked_add=getattr(args,'callback_checked_add_fallthrough',False))
         target = getattr(args,'callback_target_receipt',None)
         response = callback_links.attach(project,image,raw_slice,response,target,abi=abi,provenance=provenance) if target else response
         assignment = getattr(args,'callback_assignment_receipt',None)
@@ -1658,6 +1660,8 @@ def execute_command(a, address_selection=None):
     import_disassembly = a.command == 'disasm' and a.from_import
     if a.command == 'disasm' and (a.receipt or import_disassembly) and (not import_disassembly or va_range is None):
         raise Error('disasm_scope','Import disassembly and receipt replay require --from-import --range START:END',2)
+    if a.command == 'disasm' and a.callback_checked_add_fallthrough and (not (a.callback_evidence and (a.callback_provenance or a.callback_abi)) or a.callback_target_receipt or a.callback_assignment_receipt or a.callback_invocation_receipt):
+        raise Error('callback_scope','Checked-add guard projection requires selected-only callback evidence and provenance, without linked receipts',2)
     if a.command == 'disasm' and a.callback_writer_call_obligations and not (a.callback_assignment_receipt and a.callback_invocation_receipt and a.callback_abi == 'aapcs64'):
         raise Error('callback_scope','Writer-call obligations require composition receipts and explicit AAPCS64',2)
     if a.command == 'disasm' and (a.callback_context_register or a.callback_invocation_fallthrough) and not (a.callback_assignment_receipt and a.callback_invocation_receipt):
