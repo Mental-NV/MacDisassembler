@@ -25,8 +25,9 @@ def run(project,manifest):
           '--range',manifest['outer_thunk']['range'],'--receipt',manifest['outer_thunk']['job_id'],
           '--callback-via-receipt',manifest['inner_thunk']['job_id'],'--callback-target-receipt',manifest['writer']['job_id'],
           '--callback-evidence','--callback-abi','aapcs64','--ghidra','/nonexistent/ghidra','--java-home','/nonexistent/java']
-    for enabled in (False,True):
+    for enabled,writer_calls in ((False,False),(True,False),(False,True),(True,True)):
         base=args+(['--callback-destination-checked-add-fallthrough'] if enabled else [])
+        if writer_calls:base+=['--callback-writer-call-obligations']
         results={}
         for format_ in ('json','text'):
             outputs=[subprocess.run(base+['--format',format_],capture_output=True,text=True,check=True,timeout=60).stdout for _ in range(2)]
@@ -58,8 +59,23 @@ def run(project,manifest):
             gate.require(not stores and c['destination_stop_reason']=='unsupported_instruction_boundary','Default barrier lost')
         gate.require(all(c['destination_effects'][key]=='unknown' for key in ('application_writer_attribution','runtime_execution','persistence')),'Upgraded destination claims')
         gate.require('transitive_register_correspondence_not_applied' in c['unknowns'],'Invented transitive values')
+        if writer_calls:
+            proof=c['writer_call_evidence']
+            if enabled:
+                gate.require(proof['status']=='conditional_obligations' and not proof['gaps'],'Computed writer proof failed')
+                store,=proof['post_call_stores']
+                gate.require(store['base_basis']=='matched_input_register' and store['value_basis']=='scoped_checked_add_computation','Incorrect operand classification')
+                computation=store['value_computation']
+                gate.require(computation['source_envelope_sha256']==digests['writer'] and computation['selection']==manifest['writer']['selection'],'Computation scope changed')
+                gate.require(computation['definition']['instruction_va']=='0xaa0' and computation['guard']['instruction_va']=='0xaa4','Definition/guard mismatch')
+                gate.require(computation['symbolic_input']['register']=='x0' and computation['runtime_value']=='unknown' and computation['application_meaning']=='unknown','Computation overstated')
+            else:
+                gate.require(proof['status']=='gap' and {'reason':'writer_unsupported_boundary'} in proof['gaps'],'Unprojected guard wrongly proved')
+        else:
+            gate.require('writer_call_evidence' not in c,'Writer proof implicitly enabled')
         text=results['text'];summary=text[text.index('Callback evidence (bounded summary'):]
         gate.require('Two-hop links: verified_two_hop_entry_links' in summary and 'not_proven_selected_bytes_only' in summary,'Text lost chain limits')
+        if writer_calls:gate.require('Conditional writer proof: '+c['writer_call_evidence']['status'] in summary,'Missing distinct proof status')
         gate.require(len(summary.encode())<=16384 and len(summary.splitlines())<=64,'Text budget exceeded')
     gate.require(gate.job_snapshot(project)==before,'Mutated receipts/jobs')
     print('PASS: actual owned independently pinned two-hop edges and conditional destination store; strict defaults, scoped identities and immutable replay')

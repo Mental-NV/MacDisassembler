@@ -103,3 +103,12 @@ class CallbackTextTests(unittest.TestCase):
         e=self.evidence()
         e['composition']['assignment_diagnostic']={'reason':'no_address_valued_store'}
         self.assertIn('Assignment diagnostic: no_address_valued_store',render(e))
+
+    def test_twohop_writer_proof_gap_is_separate(self):
+        e={'status':'inconclusive','two_hop_chain':{'status':'inconclusive',
+            'link_status':'verified_two_hop_entry_links','writer_call_evidence':{
+                'status':'gap','gaps':[{'reason':'writer_unsupported_boundary'}]}}}
+        text=render(e)
+        self.assertIn('Two-hop links: verified_two_hop_entry_links',text)
+        self.assertIn('Conditional writer proof: gap',text)
+        self.assertIn('writer_unsupported_boundary',text)
