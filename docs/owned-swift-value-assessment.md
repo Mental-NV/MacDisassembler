@@ -121,3 +121,8 @@ provenance. A post-call x0 is an opaque register value, not an assumed typed or
 meaningful return. Existing callback role names and unconditional completeness
 claims would misrepresent this new use. These are design prerequisites, not a
 shipping implementation or permission to change existing policies in place.
+
+A subsequent [owned explicit-parameter experiment](owned-swift-parameter-assessment.md)
+uses the existing analyzed-query option to test whether missing direct-call inputs
+can improve in actual pseudocode. Its results and import-focused design gate remain
+separate from the register-relationship view and runtime-target uncertainty.
