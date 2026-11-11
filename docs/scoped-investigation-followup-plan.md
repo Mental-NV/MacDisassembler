@@ -1,43 +1,72 @@
 # Scoped investigation follow-up plan
 
-Status: reconciled through main `83b6bdf5057367d08551397f41bfa979b2a76a13`.
-F1–F3 historical requirements are retained below. F4 checkpoints are merged,
-but bounded implementation is not completion of the practical readiness gate.
-New F5 acceptance items below are planned, not implemented or verified.
+Reconciled through main `7e221748a77622f589b307dfd2f6cbe3adc9bd4a`
+(PR36). This supersedes the earlier F4-only status, not the historical acceptance
+requirements retained below. See [practical readiness status](practical-readiness-status.md)
+for a concise merged-capability and validation ledger. Bounded implementation is
+not completion of all original product or attribution goals.
 
 ## Current reconciliation
 
-F1 trust compatibility/partial-result handling, F2 selected class-slot ivars,
-and bounded import disassembly remain working foundations. F3 supports bounded
-callback observations, one-hop direct-destination links and conditional register
-provenance. Preserve receipt identity, explicit unknowns and engine-free replay.
+F1 trust/partial-result handling and F2 bounded import disassembly/selected ivars
+remain foundations. F4 and all F5 implementation slices are merged. Their scope
+is bounded, not unrestricted instruction or runtime coverage:
 
-The following F4 slices are implemented:
-- **F4a:** bounded ARM64 stack-pair writeback evidence, not general instruction
-  coverage. Unsupported instructions remain barriers.
-- **F4b:** [four-role callback composition](callback-composition.md), with facts,
-  assumptions, unknowns and conditional register bindings kept separate. The
-  complete positive chain is validated with owned synthetic receipts. Existing
-  native Swift assignment/thunk fragments are verified; the native split-load,
-  conditional-branch/intervening-call invocation chain remains **uncomposed**.
-- **F4c:** [bounded ivar diagnostics](ivar-diagnostics.md) identify record-level
-  failures, unknown locations and missing offsets without discarding valid rows.
-  Field-specific rejection detail remains incomplete.
-- **F4d:** [per-lead summaries](per-lead-summary.md) add a bounded header to text
-  evidence, but still append the detailed tree. This is not a compact-only view.
+| Slice | Current implementation | Validation and remaining limit |
+| --- | --- | --- |
+| F4a | [Stack-pair evidence](callback-stack-pairs.md) | Selected ARM64 forms; unsupported encodings remain barriers. |
+| F4b / F5e | [Four-role composition](callback-composition.md), [split-load/path obligations](split-invocation-obligations.md), [writer-call opt-in](writer-call-obligations.md) | The owned native four-role positive now composes **conditionally**, with receipt-pinned negative controls. Runtime identity, aliasing and application attribution remain unknown. |
+| F4c / F5f | [Record](ivar-diagnostics.md) and [field diagnostics](ivar-field-diagnostics.md) | Static owned metadata coverage; unknown locations and offsets remain distinct from verified zero. |
+| F4d / F5b | [Per-lead summaries](per-lead-summary.md) and [compact-only handoff](compact-handoff.md) | Compact mode is implemented; size validation is an owned presentation benchmark, not native analysis or general latency evidence. |
+| F5a | [Destination effects](destination-effects.md) | Separates stack/frame, mapped image and unresolved destinations; none automatically establishes an application writer. |
+| F5c | [Canonical test paths](temporary-path-test-gate.md) | Native macOS baseline failures reproduced and patched suite passed; this historical native checkpoint does not validate every later change on Mac. |
+| F5d | [Shifted-register ADD](register-add-evidence.md) | Owned native X/W instruction oracle plus semantic tests; extended forms and general flag handling remain unsupported. |
 
-The integrated tree passed 744 primary tests, 115 analysis tests and installed-
-wheel synthetic receipt replay outside the checkout, without new engine jobs or
-receipt mutation. These checks do not establish whole-chain native coverage,
-application-state writer attribution, runtime behavior or general performance.
-No remote CI success or fresh native capture is claimed by this reconciliation.
+PR30–36 add the native call/negative gates, useful callback text and assignment
+diagnostics, selected checked-add guards, two pinned thunk hops and scoped
+computed writer operands. These are implemented, not merely planned. The
+[status ledger](practical-readiness-status.md) links each exact bounded contract.
+Historical validation paragraphs in individual slice specifications describe
+that slice's checkpoint; they do not override later capabilities recorded here.
 
-## Next priorities: F5 acceptance plan
+## Next priorities and open gates
 
-Implement small reviewed slices in the order below. Write each slice's numeric
-bounds, compatibility policy and owned fixtures before coding. Private evaluation
-artifacts stay outside this plan; the requirements below are generic product
-work, not a publication of application-specific findings.
+1. **Keep the original purpose visible.** Full Ghidra headless remains the
+   decompiler. Recent instruction projections provide bounded evidence around
+   selected functions; they are not a replacement lifter/decompiler or a claim
+   of general Swift recovery. Judge future work against useful address-linked
+   pseudocode, metadata and investigation handoffs in the [original specification](specification.md).
+2. **Integrate only with evidence.** The alternative owned callback currently has
+   a verified two-hop route and a conditional computed-store proof, separate from
+   assignment/invocation composition. Before combining them, specify outer source
+   extent requirements, scoped register relations across edges, and arithmetic
+   operand/guard obligations. Do not relabel an unknown outer extent or invent
+   transitive substitutions to make a candidate pass. Runtime and memory-identity
+   assumptions remain explicit even if static integration succeeds.
+3. **Validate practical usefulness separately.** The owned positive and negative
+   receipt gates have passed within their declared static scopes. A renewed
+   consumer trial is still needed for the latest improvements. It requires a
+   separately authorized scoped session; do not automatically restart a consumer
+   agent, install a system CLI or execute an inspected application. Keep private
+   evidence outside the repository and record generic feedback only.
+4. **Recheck current compatibility when needed.** F5c closes its native test-path
+   regression at the recorded version. The latest full suite was run in the cloud
+   and installed-wheel native-receipt replay, not a new full Mac suite. A fresh
+   host/engine compatibility check and measured fresh-versus-replay latency are
+   separate gates; do not infer either from unit counts or cached replay.
+5. **Preserve deferrals.** Whole-image analysis, arbitrary runtime dispatch,
+   general source reconstruction, new backends, Linux-first work and continuous
+   installation maintenance are not follow-up priorities. Selected-address batch
+   optimization remains under its [separate proposal](bounded-focused-batch-proposal.md).
+   A blocked gate must not halt independent authorized improvements.
+
+## Historical F5 acceptance requirements
+
+The following requirements defined the now-implemented slices. Their original
+imperative wording is retained for auditability; it is not a claim they are still
+unimplemented. Consult the current table and linked validation records for
+passed, limited and still-open acceptance. Numeric limits and conservative
+negative requirements remain part of the contracts.
 
 ### F5a — Destination versus attributed writer (P0)
 
@@ -128,18 +157,19 @@ No invalid-record diagnostic may invent a verified field address.
 
 ## Execution and completion rules
 
-For each F5 slice: specification review, implementation, independent review,
+For each new slice: specification review, implementation, independent review,
 full primary and relevant analysis tests, installed-package smoke, and precise
 passed/blocked/deferred acceptance records. Use immutable offline replay with
 engine access disabled where applicable; distinguish rendering replay from an
 end-to-end pinned-receipt analysis trial. Re-run integration after combining
 slices. If blocked, record the reason and continue an independent task.
 
-After the current scoped improvements, run an owned native positive and a
-negative practical-readiness session, then a separately authorized scoped
-consumer trial. Record feedback without publishing private artifacts. Do not
-call the final goal complete until the native path and attribution obligations
-required by that goal are met; useful partial tooling remains explicitly partial.
+Owned native conditional-positive and negative receipt gates are now recorded
+as passed within their bounded contracts. They do not prove an attributed
+application-state writer or general consumer usefulness. The next consumer trial
+is a separate authorized step, not an automatic agent restart. Do not call the
+final goal complete until its declared coverage and attribution obligations are
+met; useful partial tooling remains explicitly partial.
 
 
 This follow-up sets the next priorities after the historical
