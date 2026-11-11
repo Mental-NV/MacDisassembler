@@ -90,7 +90,15 @@ capture or native full-suite validation.
 No system CLI installation, Taskovsky session, private application publication or
 fresh full Mac regression suite is claimed.
 
-## Next mechanism to investigate, not an implemented feature
+## Historical mechanism proposal, superseded by PR62/63
+
+The proposal below was implemented in the separately versioned
+[focused register relationships](focused-register-relations.md) view. Its v1
+keeps branch barriers; opt-in v2 records conditional bit-test fallthrough. The
+linked document records actual checks and limits. Raw Ghidra pseudocode and
+prototypes remain unchanged; no runtime target is recovered. Further priorities
+follow the [consumer comparison and decision gate](scoped-investigation-followup-plan.md).
+The paragraphs below retain the original design rationale, not pending work.
 
 Preserve raw pseudocode. Prefer a separately provenance-bound machine-register
 relationship view to automatically injecting signatures. Existing callee-parameter
