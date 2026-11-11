@@ -251,6 +251,12 @@ def callback_summary(report, evidence):
 
 
 def references(report, data):
+    if data.get("policy") == "macscope-focused-receipt-xrefs/1":
+        report.field("Scope", data.get("scope"))
+        report.field("Saved query job", data.get("publication_job_id"))
+        report.field("Source envelope", data.get("source_envelope_sha256"))
+        report.field("Recorded query status", data.get("source_query_status"))
+        report.field("Reference gaps", "; ".join(data.get("gaps", [])) or "none within recorded scope")
     if data.get("function_id"):
         report.field("Function ID", data["function_id"])
     for key, label in (("references", "References"), ("to_entry", "Incoming to entry"), ("from_body", "Outgoing from body")):
