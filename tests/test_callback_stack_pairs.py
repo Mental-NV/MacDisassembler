@@ -94,4 +94,4 @@ class StackPairTests(unittest.TestCase):
         self.assertEqual(a, callback_evidence.project(r, abi='aapcs64'))
         self.assertEqual(r, before)
         self.assertEqual(a['data']['callback_evidence']['sites'][1]['conditional_on_calls'], ['0x1000'])
-        self.assertEqual(a['data']['callback_evidence']['policy'], 'macscope-callback-sites/5')
+        self.assertEqual(a['data']['callback_evidence']['policy'], 'macscope-callback-sites/6')

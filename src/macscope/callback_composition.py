@@ -4,10 +4,10 @@ import copy
 from . import callback_evidence, focused, import_disasm, jobs, metadata
 from .errors import Error
 
-POLICY = 'macscope-callback-composition/1'
+POLICY = 'macscope-callback-composition/2'
 
 
-def replay(project, image, raw, receipt, *, abi, provenance):
+def replay(project, image, raw, receipt, *, abi, provenance, fallthrough=False):
     _, manifest = jobs.get(project, receipt)
     request = manifest.get('disasm_request')
     if not isinstance(request, dict):
@@ -16,21 +16,25 @@ def replay(project, image, raw, receipt, *, abi, provenance):
     end = metadata.hex_address(request.get('end_va'), 'Composition end')
     proof, payload = import_disasm.selection(raw, image, start, end)
     response = import_disasm.replay(project, image, proof, payload, receipt)
-    return callback_evidence.project(response, abi=abi, provenance=provenance)['data']['callback_evidence']
+    return callback_evidence.project(response, abi=abi, provenance=provenance, fallthrough=fallthrough)['data']['callback_evidence']
 
 
-def attach(project, image, raw, response, assignment, invocation, *, abi=None, provenance=False):
+def attach(project, image, raw, response, assignment, invocation, *, abi=None, provenance=False, context_register=None, invocation_fallthrough=False):
     """All roles are validated immutable receipts; two extra roles, one writer hop."""
+    if context_register is not None and context_register not in {f'x{i}' for i in (*range(8), *range(19,30))}:
+        raise Error('callback_scope','Unsupported context register pin',2)
     result = copy.deepcopy(response)
     thunk = result['data']['callback_evidence']
     assign = replay(project, image, raw, assignment, abi=abi, provenance=provenance)
-    invoke = replay(project, image, raw, invocation, abi=abi, provenance=provenance)
+    invoke = replay(project, image, raw, invocation, abi=abi, provenance=provenance, fallthrough=invocation_fallthrough)
     link = thunk.get('destination_link', {})
     writer = link.get('destination_evidence', {})
     roles = {'assignment': assign, 'invocation': invoke, 'thunk': thunk, 'writer': writer}
     view = {'policy': POLICY, 'status': 'inconclusive',
             'destination_effects': copy.deepcopy(link.get('destination_effects', {})), 'candidate_status': 'gap',
             'facts': {}, 'conditional_register_bindings': [], 'assumptions': [], 'gaps': [],
+            'invocation_context_mode': 'explicit_register' if context_register else 'paired_load',
+            'context_register_pin': context_register, 'path_obligations': [], 'call_obligations': [],
             'role_identities': {role: {'source_envelope_sha256': report.get('source_envelope_sha256'),
                                       'selection': copy.deepcopy(report.get('selection'))}
                                 for role, report in roles.items()},
@@ -42,6 +46,8 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
             'independent_evidence': {'assignment': assign, 'invocation': invoke}}
     # Attach after walking roles: the source report must not reference itself.
     for role, report in roles.items():
+        for obligation in report.get('path_obligations', []):
+            view['path_obligations'].append({'role': role, 'source_envelope_sha256': report['source_envelope_sha256'], 'evidence': copy.deepcopy(obligation)})
         for assumption in report.get('assumptions', []):
             view['assumptions'].append({'role': role, 'source_envelope_sha256': report['source_envelope_sha256'],
                                         'condition': assumption})
@@ -80,20 +86,33 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
                     and s['instruction_va'] == operand.get('origin_va')
                     and s.get('lane') == operand.get('lane')]
     target_load = target_loads[0] if len(target_loads) == 1 else None
-    context_loads = ([s for s in loads if s['instruction_va'] == target_load['instruction_va']
-                      and 'lane' in s and s.get('lane') != target_load.get('lane')]
-                     if target_load else [])
+    if context_register:
+        context_operand = call.get('register_inputs', {}).get(context_register, {}) if call else {}
+        context_loads = [s for s in loads if context_operand.get('kind') == 'memory_read'
+                         and s['instruction_va'] == context_operand.get('origin_va')
+                         and s.get('lane') == context_operand.get('lane')]
+    else:
+        context_loads = ([s for s in loads if s['instruction_va'] == target_load['instruction_va']
+                          and 'lane' in s and s.get('lane') != target_load.get('lane')]
+                         if target_load else [])
     context_load = context_loads[0] if len(context_loads) == 1 else None
     if not call or not target_load or not context_load:
-        gap('unique_paired_invocation_load_not_proven')
+        gap('unique_split_invocation_load_not_proven' if context_register else 'unique_paired_invocation_load_not_proven')
     else:
         view['facts']['invocation'] = copy.deepcopy(call)
         view['facts']['invocation_target_load'] = copy.deepcopy(target_load)
         view['facts']['invocation_context_load'] = copy.deepcopy(context_load)
-        expected_context = {'kind': 'memory_read', 'origin_va': context_load['instruction_va'], 'lane': context_load['lane']}
-        if call.get('register_inputs', {}).get(context_load['register']) != expected_context:
+        expected_context = {'kind': 'memory_read', 'origin_va': context_load['instruction_va']}
+        if 'lane' in context_load:
+            expected_context['lane'] = context_load['lane']
+        if call.get('register_inputs', {}).get(context_register or context_load['register']) != expected_context:
             gap('invocation_context_clobbered_or_untracked')
-        if any(s['kind'] == 'memory_store' and int(s['instruction_va'],16) > int(target_load['instruction_va'],16) for s in invoke['sites']):
+        if target_load is context_load:
+            gap('target_and_context_load_not_distinct')
+        if target_load['location']['base'] != context_load['location']['base']:
+            gap('split_load_base_identity_not_proven')
+        earliest_load = min(int(target_load['instruction_va'],16),int(context_load['instruction_va'],16))
+        if any(s['kind'] == 'memory_store' and int(s['instruction_va'],16) > earliest_load for s in invoke['sites']):
             gap('intervening_invocation_store')
         for stored, loaded in ((target, target_load), (context, context_load)):
             if stored and stored['location']['base'].get('kind') in ('address', 'integer_constant') and loaded['location']['base'].get('kind') in ('address', 'integer_constant'):
@@ -128,8 +147,17 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
     for role, report in roles.items():
         if report.get('stop_reason') not in allowed_stops:
             gap(role + '_unsupported_boundary')
-        if any(s['kind'] == 'direct_call' for s in report.get('sites', [])):
-            gap(role + '_intervening_call')
+        direct_calls = [s for s in report.get('sites', []) if s['kind'] == 'direct_call']
+        if direct_calls:
+            if role == 'invocation' and any(int(report['selection']['start_va'],16) <= int(s['target_va'],16) < int(report['selection']['end_va'],16) for s in direct_calls):
+                gap('invocation_direct_call_cycle_or_reentry')
+            if role == 'invocation' and invocation_fallthrough and abi == 'aapcs64':
+                view['call_obligations'].extend({'role': role, 'source_envelope_sha256': report['source_envelope_sha256'],
+                    'evidence': copy.deepcopy(s), 'requires': ['normal_return', 'AAPCS64_callee_preservation'],
+                    'memory_effects': 'unknown'} for s in direct_calls)
+                view['unknowns'].append('context_lifetime_after_calls')
+            else:
+                gap(role + '_intervening_call')
         if any(g.get('reason') == 'disassembly_incomplete' for g in report.get('gaps', [])):
             gap(role + '_incomplete_disassembly')
     if not any('reason' in g for g in view['gaps']):
@@ -143,6 +171,10 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
                 'source': {'role': 'invocation', 'source_envelope_sha256': invoke['source_envelope_sha256'],
                            'value': copy.deepcopy(value)},
                 'requires_unverified': ['runtime_invoked_code_identity', 'execution_order'],
+                'requires_branch_conditions': [p['evidence']['instruction_va'] for p in view['path_obligations']],
+                'requires_call_conditions': [c['evidence']['instruction_va'] for c in view['call_obligations']],
                 'status': 'conditional_not_applied_to_facts'})
+    if view['path_obligations']:
+        view['unknowns'].append('alternate_branch_paths_not_analyzed')
     thunk['composition'] = view
     return result
