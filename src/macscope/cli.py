@@ -18,7 +18,7 @@ from .pseudocode import address_spans
 from .storage import (MAX_SNAPSHOT_BYTES, WORKSPACE_RESERVED, Project, atomic, atomic_chunks,
                       canonical, canonical_chunks, check_json_nesting, identity, is_digest, json_object,
                       program_history, validate_snapshot_functions, write_json)
-from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, scalar_signatures, search, swift_symbols, switch_tables
+from . import address_xrefs, annotation_transfer, annotations, binary_diff, bundle, callee_parameters, calls, direct_signatures, disassembly, dispatch_returns, doctor_probe, dyld, engine, export_trie, flow_boundaries, flow_evidence, forwarded_returns, import_state, jobs, metadata, objc, objc_types, scalar_signatures, search, swift_symbols, switch_tables
 from . import body_ownership, engine_checks, evidence, flow_gap_evidence, saved_flow_gap_evidence, focused, handoff_diff, html_export, macho_symbols, macho_unwind, manual_boundaries, pseudocode, resource_nib, resource_strings, string_evidence, terminal
 from .schema import validate_envelope, validate_function
 
@@ -150,6 +150,8 @@ def parser():
         s=ss.add_parser(c);project(s);common(s);pagination(s);s.add_argument('--name-contains')
         if c=='methods':
             s.add_argument('--class-slot',help='Select one unslid __objc_classlist or __objc_nlclslist pointer slot')
+        if c in ('methods','ivars'):
+            s.add_argument('--decode-types',action='store_true',help='Present recorded types without applying them to pseudocode')
     s=sub.add_parser('swift');ss=s.add_subparsers(dest='action',required=True)
     s=ss.add_parser('symbols');project(s);common(s);pagination(s);s.add_argument('--name-contains')
     s.add_argument('--demangle',action='store_true');s.add_argument('--experimental-trusted-input',action='store_true')
@@ -1776,6 +1778,8 @@ def execute_command(a, address_selection=None):
         raw = metadata.verified_slice(p,image)
         diagnostics = []
         filters = {'action':a.action,'name_contains':a.name_contains}
+        if getattr(a,'decode_types',False):
+            filters['type_decoding_policy'] = objc_types.POLICY
         if getattr(a,'class_slot',None) is not None:
             slot = metadata.hex_address(a.class_slot,'Objective-C class list slot')
             records,gaps = objc.selected_methods(raw,image,slot)
@@ -1787,6 +1791,16 @@ def execute_command(a, address_selection=None):
         records.sort(key=lambda row:(row['name'] or '',row.get('class_name') or '',
                                     int(row.get('record_va',row.get('class_va')),16)))
         rows,cov=page(records,a,image['image_id'],p.project_id,filters,order='objc-name/address/v1')
+        if getattr(a,'decode_types',False):
+            rows = [objc_types.decode_row(row,a.action) for row in rows]
+            incomplete = sum(row['decoded_types']['status'] != 'decoded' for row in rows)
+            diagnostics.append('Decoded types describe recorded metadata, not verified implementation ABI or recovered source. '
+                               'Method argN labels are generated; encoded offsets are not inferred register or object layouts. '
+                               'Block signatures and opaque aggregate layouts remain unavailable. '
+                               'Pseudocode and saved evidence are unchanged.')
+            if incomplete:
+                diagnostics.append(f'Type decoding incomplete for {incomplete} of {len(rows)} rows on this page; '
+                                   'see decoded_types.status and diagnostics. Inventory coverage is reported separately.')
         cov['scope'] = ('selected Objective-C class declaration methods' if 'class_slot' in filters
                         else 'selected image Objective-C '+a.action)
         if gaps:
