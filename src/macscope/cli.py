@@ -294,6 +294,7 @@ def parser():
     s.add_argument('--reference-links',action='store_true',help='Attach compact selected saved-receipt reference links and safe xrefs hints')
     s.add_argument('--link-imports',action='store_true',help='Verify declared calls into pinned embedded libraries')
     s.add_argument('--link-focused',action='store_true',help='Verify direct calls between selected focused receipts')
+    s.add_argument('--objc-sends',action='store_true',help='Attach bounded selected ARM64 selector-stub facts; runtime dispatch remains unknown')
     s.add_argument('--objc-types',action='store_true',help='Attach exact Objective-C declarations and conditional ABI register roles')
     s=sub.add_parser('diff');common(s);pagination(s)
     s.add_argument('left',help='Left JSON export or evidence handoff')
@@ -1848,8 +1849,11 @@ def execute_command(a, address_selection=None):
         if a.reference_links or a.format == 'links':
             from . import selected_reference_links
             report['selected_reference_links']=selected_reference_links.build(p,report)
+        if a.objc_sends:
+            from . import objc_send_context
+            report['objc_send_context'] = objc_send_context.redact(objc_send_context.build(p, report), redact)
         count = len(report['leads'])
-        partial = any(row['status'] != 'resolved' for row in report['leads']) or 'selected_reference_links' in report
+        partial = any(row['status'] != 'resolved' for row in report['leads']) or 'selected_reference_links' in report or 'objc_send_context' in report
         return envelope(command,report,status='partial' if partial else 'complete',
                         cov=coverage('reviewer-selected evidence leads',count,count,partial,
                                      reason='lead_evidence_incomplete' if partial else None))

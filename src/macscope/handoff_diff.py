@@ -200,6 +200,8 @@ def read_handoff(path, side):
                 raise ValueError("Invalid handoff image pin")
             images[image["image_id"]] = image
         facts = {}
+        if 'objc_send_context' in data:
+            raise Error('evidence_diff_unsupported', 'Selector-stub sidecar diff is not supported; compare baseline handoffs without --objc-sends', 2)
         type_sidecars = objc_type_evidence.validate(data)
         for row in data["leads"]:
             lead = row["lead"]
@@ -231,6 +233,8 @@ def read_handoff(path, side):
         descriptor = {"export_sha256": hashlib.sha256(raw).hexdigest(), "manifest_sha256": data["manifest_sha256"],
                       "status": envelope["status"], "lead_count": len(facts)}
     except (Error, AttributeError, ValueError, KeyError, TypeError, RecursionError) as error:
+        if isinstance(error, Error) and error.code == "evidence_diff_unsupported":
+            raise
         raise Error("diff_evidence", f"{side} must be a valid MacDisassembler evidence handoff", 2) from error
     return descriptor, facts
 
