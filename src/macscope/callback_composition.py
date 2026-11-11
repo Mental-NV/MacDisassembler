@@ -70,10 +70,13 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
     thunk = result['data']['callback_evidence']
     assign = replay(project, image, raw, assignment, abi=abi, provenance=provenance)
     invoke = replay(project, image, raw, invocation, abi=abi, provenance=provenance, fallthrough=invocation_fallthrough)
-    link = thunk.get('destination_link', {})
+    route = thunk.get('two_hop_chain')
+    link = route['edges'][1] if route else thunk.get('destination_link', {})
     writer = link.get('destination_evidence', {})
     roles = {'assignment': assign, 'invocation': invoke, 'thunk': thunk, 'writer': writer}
-    view = {'policy': POLICY, 'status': 'inconclusive',
+    if route:
+        roles['inner_thunk'] = route['edges'][0]['destination_evidence']
+    view = {'policy': 'macscope-callback-composition/4' if route else POLICY, 'status': 'inconclusive',
             'destination_effects': copy.deepcopy(link.get('destination_effects', {})), 'candidate_status': 'gap',
             'facts': {}, 'conditional_register_bindings': [], 'assumptions': [], 'gaps': [],
             'invocation_context_mode': 'explicit_register' if context_register else 'paired_load',
@@ -87,6 +90,10 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
             'receipts': {'assignment': assignment, 'invocation': invocation,
                          'writer': link.get('destination_receipt')},
             'independent_evidence': {'assignment': assign, 'invocation': invoke}}
+    if route:
+        view['route_kind'] = 'two_exact_B_thunks'
+        view['receipts']['inner_thunk'] = route['receipts']['inner']
+        view['conditional_writer_entry_bindings'] = []
     view['assignment_diagnostic'] = assignment_diagnostic(assign, thunk['selection']['start_va'])
     if writer_calls:
         proof = writer_call_obligations.project(link, roles)
@@ -108,12 +115,22 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
     def gap(reason):
         view['gaps'].append({'reason': reason})
     # The exact byte-decoded target is a fact, not the dynamic invocation target.
-    try:
-        extent, _ = focused.extent(raw, image, thunk['selection']['start_va'], policy='macscope-focused-import/1')
-        if int(thunk['selection']['end_va'],16) > int(extent['end_va_exclusive'],16):
-            gap('thunk_selection_exceeds_linker_extent')
-    except Error:
-        gap('thunk_linker_extent_unavailable')
+    if route:
+        if (route['link_status'] != 'verified_two_hop_entry_links' or route['gaps']
+                or route['register_forwarding']['status'] != 'verified_static_register_forwarding'):
+            gap('verified_two_thunk_forwarding_missing')
+        else:
+            view['facts']['forwarding_route'] = copy.deepcopy(route['register_forwarding'])
+        ranges = [(role,int(r['selection']['start_va'],16),int(r['selection']['end_va'],16)) for role,r in roles.items()]
+        if any(lo<hi2 and lo2<hi for i,(_,lo,hi) in enumerate(ranges) for _,lo2,hi2 in ranges[i+1:]):
+            gap('overlapping_composition_roles')
+    else:
+        try:
+            extent, _ = focused.extent(raw, image, thunk['selection']['start_va'], policy='macscope-focused-import/1')
+            if int(thunk['selection']['end_va'],16) > int(extent['end_va_exclusive'],16):
+                gap('thunk_selection_exceeds_linker_extent')
+        except Error:
+            gap('thunk_linker_extent_unavailable')
     stores = [s for s in assign['sites'] if s['kind'] == 'memory_store']
     targets = [s for s in stores if s['value'].get('kind') == 'address'
                and s['value'].get('value') == thunk['selection']['start_va']]
@@ -181,7 +198,7 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
     elif writer.get('selection', {}).get('start_va') == thunk['selection']['start_va']:
         gap('direct_link_cycle')
     else:
-        view['facts']['direct_destination'] = copy.deepcopy(link['transfer'])
+        view['facts']['inner_direct_destination' if route else 'direct_destination'] = copy.deepcopy(link['transfer'])
         relations = link.get('store_relations', [])
         if relations:
             view['facts']['writer_stores'] = copy.deepcopy(relations)
@@ -189,7 +206,7 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
             gap('writer_store_not_proven')
     # A byte-proven back edge is a cycle, not permission to recurse.
     intervals = [(int(r['selection']['start_va'],16), int(r['selection']['end_va'],16))
-                 for r in (thunk, writer) if r.get('selection')]
+                 for r in ((thunk, roles['inner_thunk'], writer) if route else (thunk, writer)) if r.get('selection')]
     if any(s['kind'] in ('direct_branch','direct_call') and
            any(start <= int(s['target_va'],16) < end for start,end in intervals)
            for s in writer.get('sites', [])):
@@ -228,6 +245,14 @@ def attach(project, image, raw, response, assignment, invocation, *, abi=None, p
                 'requires_branch_conditions': [p['evidence']['instruction_va'] for p in view['path_obligations']],
                 'requires_call_conditions': [c['evidence']['instruction_va'] for c in view['call_obligations'] if c['role'] == 'invocation'],
                 'status': 'conditional_not_applied_to_facts'})
+    if route and view['candidate_status'] == 'conditional_candidate':
+        for forwarding in route['register_forwarding']['bindings']:
+            matches = [b for b in view['conditional_register_bindings'] if b['destination'] == forwarding['source']]
+            if len(matches) == 1:
+                binding = copy.deepcopy(matches[0])
+                binding['destination'] = copy.deepcopy(forwarding['destination'])
+                binding['via_static_forwarding'] = copy.deepcopy(forwarding)
+                view['conditional_writer_entry_bindings'].append(binding)
     if view['path_obligations']:
         view['unknowns'].append('alternate_branch_paths_not_analyzed')
     thunk['composition'] = view
