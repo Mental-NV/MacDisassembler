@@ -189,7 +189,10 @@ def project(response, *, abi=None, provenance=False):
                 report['gaps'].append(dict(site, reason='direct_transfer_boundary'))
                 break
         elif word & 0xfffffc1f == 0xd63f0000:  # BLR
-            report['sites'].append(dict(site, kind='indirect_invocation', operand=get(rn), register=f'x{rn}'))
+            invocation = dict(site, kind='indirect_invocation', operand=get(rn), register=f'x{rn}')
+            if tracing:
+                invocation['register_inputs'] = {f'x{reg}': get(reg) for reg in (*range(8), *range(19, 30))}
+            report['sites'].append(invocation)
             report['gaps'].append(dict(site, reason='invocation_boundary'))
             report['stop_reason'] = 'invocation_boundary'
             break
