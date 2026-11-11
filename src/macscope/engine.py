@@ -738,7 +738,11 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                 imported_engine.get('ghidra_tree_sha256') != deps['ghidra_tree_sha256'] or
                 not matches_auxiliary_jdk(imported_engine, deps)):
             raise Error('focused_import_engine', 'Focused query requires a committed import from the selected runtime', 4)
-        proof, payload = focused.select(project, image, entry)
+        focused_policy = focused.POLICY
+        if resumed_from is not None:
+            recorded = jobs.focused_record(jobs.get(project, resumed_from)[1])
+            focused_policy = (recorded or {}).get('extent', {}).get('policy')
+        proof, payload = focused.select(project, image, entry, policy=focused_policy)
         source = import_program_path(project,image)
         source_digest = image.get('engine_baseline_sha256')
         if (not source_digest or source.parent.is_symlink() or source.is_symlink() or not source.is_dir()

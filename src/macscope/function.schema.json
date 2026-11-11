@@ -30,8 +30,9 @@
    "properties":{"evidence":{
     "type":"object","required":["policy","function","location","classification"],
     "properties":{
-     "policy":{"const":"macscope-control-flow-gap-evidence/1"},
+     "policy":{"enum":["macscope-control-flow-gap-evidence/1","macscope-control-flow-gap-evidence/2","macscope-analyzed-flow-gap-evidence/1"]},
      "function":{"type":"object"},
+     "derivation":{"enum":["saved_snapshot","fresh_query_with_saved_flow"]},
      "location":{"type":"object"},
      "classification":{"type":"object"}
     },

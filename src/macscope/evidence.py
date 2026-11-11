@@ -2,7 +2,7 @@
 from collections import defaultdict
 import re
 
-from . import address_xrefs, body_ownership, calls, dyld, flow_evidence, focused, import_links, jobs, metadata, objc, search
+from . import address_xrefs, body_ownership, calls, dyld, flow_evidence, focused, import_links, jobs, metadata, saved_flow_gap_evidence, objc, search
 from .errors import Error
 from .macho import read_regular, thin
 from .schema import validate_envelope
@@ -29,7 +29,7 @@ FUNCTION_FIELDS = (
     "is_external", "is_thunk", "thunk_target", "instructions", "instruction_bytes_sha256",
     "pseudocode", "decompile_status", "decompile_error", "pseudocode_truncated", "address_spans",
     "facets", "coverage", "origin", "control_flow_review", "control_flow_gaps", "body_overlap",
-    "tail_call_recovery", "native_scope", "control_flow_traps", "engine_decompile_status",
+    "tail_call_recovery", "native_scope", "control_flow_traps", "engine_decompile_status", "flow_gap_sources",
 )
 
 
@@ -239,7 +239,9 @@ def query_view(project, job_id, pin, source, function):
         validate_envelope(result)
         return {"status": result["status"], "coverage": result["coverage"],
                 **{key: result["data"][key] for key in ("origin", "pseudocode", "decompile_status",
-                                                        "address_spans", "address_span_coverage")}}
+                                                        "address_spans", "address_span_coverage")},
+                **{key: result["data"][key] for key in ("control_flow_gaps", "control_flow_review",
+                      "engine_decompile_status", "native_scope", "flow_gap_sources") if key in result["data"]}}
     except (KeyError, ValueError) as error:
         raise Error("query_receipt", "Invalid saved query evidence", 3) from error
 
@@ -255,7 +257,7 @@ def lead_view(project, pin, source, snapshot, lead, selector_rows):
         reason = ("lead_ambiguous" if candidates else "lead_resolution_incomplete" if gaps
                   else "lead_no_function" if matches else "lead_not_found")
         return dict(row, status="unresolved", reason=reason, gaps=sorted(set(gaps)))
-    function = candidates[0]
+    function = saved_flow_gap_evidence.annotate_selected(project,snapshot["image"],snapshot,source,candidates[0])
     row["function"], function_gaps = function_view(snapshot, function)
     gaps = [*gaps, *function_gaps]
     if "query_job" in lead:

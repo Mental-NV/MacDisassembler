@@ -2,6 +2,9 @@
 
 Implementation plan and first-slice contract, 10 November 2026.
 
+This document records the historical PR #5 first-slice checkpoint. The current
+follow-up contract is [flow-gap-evidence-v2.md](flow-gap-evidence-v2.md).
+
 The implementation base is merged main
 `c1e5f2062440709630bd56206e93ec408268d603`, tree
 `a37e29b131d3626186ebadd960422cfb23192094`. All 254 tracked blobs were

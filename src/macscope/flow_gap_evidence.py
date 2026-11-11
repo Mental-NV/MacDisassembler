@@ -1,17 +1,17 @@
 """Add independently located evidence to newly captured focused flow gaps.
 
-This first contract deliberately leaves linkage/internal classification unknown.
-It never parses an address from a printer warning, and never rewrites a saved
-receipt to add evidence that was not captured with it.
+Policy 1 remains unclassified. Policy 2 uses request-bound source proofs.
+Neither parses an address from a printer warning or rewrites a saved receipt.
 """
 import re
 
-from . import focused_tailcalls
+from . import flow_gap_classification, focused_tailcalls
 from .metadata import VA
 from .storage import is_digest
 
 
-POLICY = "macscope-control-flow-gap-evidence/1"
+LEGACY_POLICY = "macscope-control-flow-gap-evidence/1"
+POLICY = "macscope-control-flow-gap-evidence/2"
 MAX_INSTRUCTIONS = 2000
 MAX_BLOCKS = 500
 MAX_EDGES = 500
@@ -51,7 +51,7 @@ def instruction_index(function):
     return indexed, None
 
 
-def identity(function):
+def identity(function, policy):
     origin = function.get("origin")
     proof = origin.get("extent") if isinstance(origin, dict) else None
     if not isinstance(proof, dict) or origin.get("mode") != "focused_readonly_import":
@@ -61,7 +61,8 @@ def identity(function):
     selected.update(extent_sha256=proof["extent_sha256"], program_sha256=proof["program_sha256"])
     if (selected["arch"] not in ("arm64", "x86_64") or address(selected["entry_va"]) is None
             or any(not is_digest(value) for key, value in selected.items() if key not in ("arch", "entry_va"))
-            or proof.get("policy") != "macscope-focused-import/2"
+            or proof.get("policy") != ("macscope-focused-import/2" if policy == LEGACY_POLICY
+                                       else "macscope-focused-import/3")
             or proof.get("entry_va") != selected["entry_va"]):
         raise ValueError("Invalid focused gap identity")
     return selected
@@ -117,18 +118,26 @@ def location(gap, function, indexed, index_reason):
         "capture_incomplete" if reason == "focused_control_flow_incomplete" else "source_site_not_captured")}
 
 
-def annotate(function):
+def annotate(function, *, policy=None):
     """Call only after focused.verify has checked instructions against the slice."""
     gaps = function.get("control_flow_gaps")
     if not gaps:
         return function
-    selected = identity(function)
+    proof = function.get("origin", {}).get("extent", {})
+    policy = policy or (POLICY if proof.get("policy") == "macscope-focused-import/3" else LEGACY_POLICY)
+    if policy not in (LEGACY_POLICY, POLICY):
+        raise ValueError("Unsupported flow gap evidence policy")
+    selected = identity(function, policy)
     indexed, unavailable = instruction_index(function)
     enriched = []
     for gap in gaps:
-        evidence = {"policy": POLICY, "function": selected,
-                    "location": location(gap, function, indexed, unavailable),
-                    "classification": {"kind": "unclassified", "reason": "classification_not_evaluated"}}
+        site = location(gap, function, indexed, unavailable)
+        classification = {"kind": "unclassified", "reason": "classification_not_evaluated"}
+        if policy == POLICY:
+            classification = flow_gap_classification.classification(function, gap, site,
+                                                                     proof["flow_gap_classification"])
+        evidence = {"policy": policy, "function": selected, "location": site,
+                    "classification": classification}
         enriched.append(dict(gap, evidence=evidence))
     return dict(function, control_flow_gaps=enriched)
 
@@ -171,17 +180,25 @@ def validate_sources(function):
 
 def validate(function, proof):
     """Validate present new fields; leave legacy receipt contents unchanged."""
-    gaps = function.get("control_flow_gaps", ())
+    gaps = function.get("control_flow_gaps", [])
     if not isinstance(gaps, (list, tuple)):
         raise ValueError("Invalid control-flow gap collection")
     present = [isinstance(gap, dict) and "evidence" in gap for gap in gaps]
-    if not any(present):
+    current = proof.get("policy") == "macscope-focused-import/3"
+    if not any(present) and not current:
         return
-    if not all(present) or function.get("decompile_status") == "complete":
+    if not all(present) or gaps and function.get("decompile_status") == "complete":
         raise ValueError("Incomplete or inconsistent flow gap evidence")
     if function.get("origin", {}).get("extent") != proof:
         raise ValueError("Flow gap extent differs from the focused request")
     validate_sources(function)
+    policy = POLICY if current else LEGACY_POLICY
+    if any(gap["evidence"].get("policy") != policy for gap in gaps):
+        raise ValueError("Flow gap evidence policy differs from its capture")
+    if current:
+        flow_gap_classification.validate_plan(proof["flow_gap_classification"])
+        if proof["flow_gap_classification"]["arch"] != function["arch"]:
+            raise ValueError("Flow classification architecture differs from its capture")
     from . import flow_evidence
 
     raw = dict(function, control_flow_gaps=[{key: value for key, value in gap.items() if key != "evidence"}
@@ -190,8 +207,8 @@ def validate(function, proof):
     # edge, or block. A recomputed receipt digest is not semantic validation.
     detected = flow_evidence.review({key: value for key, value in raw.items() if key != "control_flow_gaps"},
                                     arch=function["arch"], focused_extent=proof)
-    if detected.get("control_flow_gaps") != raw["control_flow_gaps"]:
+    if detected.get("control_flow_gaps", []) != raw["control_flow_gaps"]:
         raise ValueError("Flow gaps differ from captured instruction and CFG evidence")
-    expected = annotate(raw)
+    expected = annotate(raw, policy=policy)
     if expected["control_flow_gaps"] != gaps:
         raise ValueError("Invalid or unsupported control-flow gap evidence")

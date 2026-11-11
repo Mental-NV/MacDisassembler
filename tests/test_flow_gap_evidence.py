@@ -16,7 +16,7 @@ class GapLocationTests(unittest.TestCase):
         function = {
             "function_id": "a" * 64, "image_id": "b" * 64, "slice_sha256": "c" * 64,
             "arch": arch, "entry_va": entry, "body_ranges": [[entry, end]],
-            "origin": {"mode": "focused_readonly_import", "extent": {"policy": focused.POLICY, "entry_va": entry,
+            "origin": {"mode": "focused_readonly_import", "extent": {"policy": "macscope-focused-import/2", "entry_va": entry,
                                   "extent_sha256": "d" * 64, "program_sha256": "e" * 64}},
             "instructions": [{"addr": entry, "bytes": encoded, "flow": "COMPUTED_JUMP", "fallthrough": None}],
             "blocks": [{"min": entry, "max": end, "flow": "COMPUTED_JUMP", "dsts": [], "edges_truncated": False}],
@@ -194,6 +194,11 @@ class GapReceiptTests(test_query_resume.FocusedResumeTests):
                 self.assertEqual(path.read_bytes(), before)
 
     def test_legacy_v2_receipt_is_not_augmented_or_rewritten(self):
+        self.proof, _ = focused.select(self.workspace, self.image, self.entry, policy="macscope-focused-import/2")
+        self.proof["program_sha256"] = self.image["engine_baseline_sha256"]
+        self.request = jobs.focused_request(self.workspace, self.image, self.proof)
+        self.record.update(focused_import=self.proof, focused_request=self.request)
+        self.write_job(self.original, self.record)
         self.capture()
         path = self.workspace.path / "jobs" / self.original / "query-result.json"
         receipt = json.loads(path.read_bytes())
