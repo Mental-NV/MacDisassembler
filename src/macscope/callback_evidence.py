@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 
-POLICY = 'macscope-callback-sites/6'
+POLICY = 'macscope-callback-sites/7'
 MAX_INSTRUCTIONS = 1024
 MASK = (1 << 64) - 1
 
@@ -13,13 +13,15 @@ def signed(value, bits):
     return value - (1 << bits) if value & (1 << (bits-1)) else value
 
 
-def project(response, *, abi=None, provenance=False, fallthrough=False):
+def project(response, *, abi=None, provenance=False, fallthrough=False, checked_add=False):
     """Annotate a validated import disassembly without mutating its receipt."""
     if abi not in (None, 'aapcs64'):
         raise ValueError('Unsupported callback ABI hypothesis')
     tracing = provenance or abi is not None
     if fallthrough and not tracing:
         raise ValueError('Fallthrough obligations require register provenance')
+    if checked_add and not tracing:
+        raise ValueError('Checked-add guards require register provenance')
     result = copy.deepcopy(response)
     data = result['data']
     proof = data['selection']
@@ -27,7 +29,10 @@ def project(response, *, abi=None, provenance=False, fallthrough=False):
               'source_envelope_sha256': hashlib.sha256(json.dumps(response, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')).hexdigest(),
               'selection': copy.deepcopy(proof),
               'status': 'inconclusive', 'sites': [], 'gaps': [],
-              'path_mode': 'explicit_fallthrough' if fallthrough else 'no_conditional_paths',
+              'path_mode': ('explicit_fallthrough_and_checked_add' if fallthrough and checked_add else
+                            'explicit_fallthrough' if fallthrough else
+                            'explicit_checked_add_guards' if checked_add else 'no_conditional_paths'),
+              'checked_add_mode': 'explicit_adjacent_overflow_guard' if checked_add else 'disabled',
               'path_obligations': [],
               'provenance_mode': 'aapcs64_conditional' if abi else ('register_inputs' if provenance else 'strict'),
               'assumptions': ['selected-range input registers are symbolic',
@@ -60,7 +65,10 @@ def project(response, *, abi=None, provenance=False, fallthrough=False):
     conditions = []
     branch_conditions = []
     report['stop_reason'] = 'selected_prefix_end'
-    for row in rows:
+    skipped_guard = None
+    for index, row in enumerate(rows):
+        if index == skipped_guard:
+            continue
         va = int(row['addr'], 16)
         word = int.from_bytes(bytes.fromhex(row['bytes']), 'little')
         rd, rn = word & 31, (word >> 5) & 31
@@ -82,6 +90,70 @@ def project(response, *, abi=None, provenance=False, fallthrough=False):
             imm = signed(((word >> 5) & 0x7ffff) << 2 | ((word >> 29) & 3), 21)
             address = ((va & ~0xfff) + (imm << 12)) if word >> 31 else va + imm
             put(rd, {'kind': 'address', 'value': hex(address & MASK), 'origin_va': row['addr']})
+        elif checked_add and word & 0xff800000 == 0xb1000000:
+            following = rows[index+1] if index+1 < len(rows) else None
+            branch_word = int.from_bytes(bytes.fromhex(following['bytes']), 'little') if following else 0
+            condition = branch_word & 0xff00001f
+            if rn == 31 or condition not in (0x54000006, 0x54000007):
+                report['gaps'].append(dict(site, reason='unsupported_checked_add_guard'))
+                report['interpreted_end_va'] = hex(va)
+                report['stop_reason'] = 'unsupported_instruction_boundary'
+                break
+            left = get(rn)
+            immediate = ((word >> 10) & 0xfff) << (12 if word & (1 << 22) else 0)
+            overflow = None
+            if left['kind'] in ('address', 'integer_constant'):
+                operand = int(left['value'], 16) & MASK
+                value = {'kind': 'integer_constant', 'value': hex((operand+immediate) & MASK), 'origin_va': row['addr']}
+                overflow = not (-(1 << 63) <= signed(operand,64)+immediate < (1 << 63))
+            else:
+                value = {'kind': 'checked_add_result', 'origin_va': row['addr'], 'width': 64,
+                         'selection_start_va': proof['start_va'], 'source_envelope_sha256': report['source_envelope_sha256']}
+            # Zero cannot overflow; W shifted-ADD results are zero-extended and
+            # remain below signed64 maximum even with the largest immediate.
+            if immediate == 0 or (left['kind'] == 'register_add_result' and left.get('width') == 32):
+                overflow = False
+            flag = {'kind': 'signed_overflow_flag', 'origin_va': row['addr'],
+                    'selection_start_va': proof['start_va'], 'source_envelope_sha256': report['source_envelope_sha256'],
+                    'value': overflow}
+            report['sites'].append(dict(site, kind='checked_add', width=64, left=left,
+                immediate=immediate, result=copy.deepcopy(value), overflow_flag=copy.deepcopy(flag),
+                destination_register=f'x{rd}' if rd != 31 else 'zr', discarded_write=rd == 31))
+            put(rd,value)
+            branch_va = va+4
+            target = (branch_va + signed((branch_word >> 5) & 0x7ffff,19)*4) & MASK
+            requires_overflow = condition == 0x54000007
+            branch = dict(site, instruction_va=following['addr'], instruction_bytes=following['bytes'],
+                kind='conditional_branch', branch='b.vc' if requires_overflow else 'b.vs',
+                target_va=hex(target), fallthrough_va=hex(va+8), width=64, tested_value=flag,
+                checked_add_operand=copy.deepcopy(left), checked_add_immediate=immediate,
+                fallthrough_predicate='signed_overflow' if requires_overflow else 'no_signed_overflow',
+                predicate_status='unverified', taken_path='not_analyzed')
+            report['sites'].append(branch)
+            report['interpreted_end_va'] = hex(va+8)
+            identity_bearing = left['kind'] in ('range_input_register','memory_read','register_add_result',
+                'checked_add_result','call_clobbered','unknown_arithmetic','stack_pointer_relative') or 'value_identity' in left
+            conflicts = [prior['instruction_va'] for prior in report['path_obligations']
+                         if identity_bearing and prior.get('checked_add_operand') == left
+                         and prior.get('checked_add_immediate') == immediate
+                         and prior['fallthrough_predicate'] != branch['fallthrough_predicate']]
+            if conflicts:
+                branch['contradictory_with'] = conflicts
+            reason = ('conditional_backedge_or_cycle' if target <= branch_va else
+                      'branch_condition_budget' if len(branch_conditions) >= 16 else
+                      'impossible_fallthrough_predicate' if overflow is not None and overflow != requires_overflow else
+                      'contradictory_fallthrough_predicates' if conflicts else None)
+            if reason:
+                report['gaps'].append({'instruction_va': following['addr'], 'reason': reason})
+                report['stop_reason'] = reason
+                break
+            if overflow is not None:
+                branch['predicate_status'] = 'statically_satisfied'
+            report['path_obligations'].append(copy.deepcopy(branch))
+            branch_conditions.append(following['addr'])
+            if 'alternate_branch_paths_not_analyzed' not in report['missing_evidence']:
+                report['missing_evidence'].append('alternate_branch_paths_not_analyzed')
+            skipped_guard = index+1
         elif tracing and word & 0x7f200000 == 0x0b000000:
             width = 64 if word & 0x80000000 else 32
             shift_kind, shift_amount = (word >> 22) & 3, (word >> 10) & 63
