@@ -199,6 +199,8 @@ def parser():
             s.add_argument('--callback-target-receipt',help='Link exactly one saved destination receipt; requires --callback-evidence')
             selections.add_argument('--range',dest='va_range',metavar='START:END',
                                     help='Show saved instructions in an unslid VA range (exclusive end)')
+        if c=='xrefs':
+            s.add_argument('--query-job',help='Read recorded references from one saved import-focused query; requires exact --address, never starts an engine')
         if c=='decompile':
             pagination(s);budgets(s)
             source = s.add_mutually_exclusive_group()
@@ -1663,6 +1665,10 @@ def execute_command(a, address_selection=None):
             xref_address = hex(metadata.hex_address(target if target is not None else source,'Unslid virtual address'))
         else:
             a.direction = a.direction or 'both'
+    if a.command == 'xrefs' and a.query_job:
+        if (not jobs.JOB_ID.fullmatch(a.query_job) or not a.address or xref_address is not None
+                or a.function_id or a.name or getattr(a,'rva',None) or getattr(a,'file_offset',None) or getattr(a,'runtime_address',None)):
+            raise Error('xref_query_scope','Saved focused references require a canonical --query-job and exact --address only',2)
     va_range = getattr(a,'va_range',None) if a.command == 'disasm' else None
     if va_range is not None:
         va_range = disassembly.parse_range(va_range)
@@ -1934,6 +1940,20 @@ def execute_command(a, address_selection=None):
         return dyld_exports(a,p,image)
     if a.command == 'symbols' and a.source != 'ghidra':
         return file_symbols(a,p,image)
+    if a.command == 'xrefs' and a.query_job:
+        from . import focused_references
+        entry=hex(metadata.hex_address(a.address,'Focused query entry'))
+        data,rows=focused_references.query(p,image,entry,a.query_job,a.direction)
+        paging=argparse.Namespace(limit=a.limit or 100,cursor=a.cursor)
+        selected,cov=page(rows,paging,data['source_envelope_sha256'],p.project_id,
+            {'entry':entry,'direction':a.direction,'job_id':a.query_job},order=focused_references.POLICY)
+        for key,row in selected:data[key].append(row)
+        cov['scope']='saved focused-query references; selected function only'
+        gaps=data['gaps']
+        if gaps:
+            cov.update(status='partial',known_total=None,truncation_reason=';'.join(gaps+(['page_limit'] if cov['next_cursor'] else [])))
+        return envelope(command,data,status='partial' if gaps or cov['next_cursor'] else 'complete',cov=cov,
+            diagnostics=['Recorded references only, not runtime calls or a global caller inventory. No engine or full analysis was used.'])
     snapshot,record=p.snapshot(image)
     if a.command in metadata.ENGINE_LISTS:
         return metadata_collection(a,p,image,snapshot)
