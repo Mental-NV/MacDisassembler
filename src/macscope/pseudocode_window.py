@@ -66,7 +66,17 @@ def render(result, *, token_start=None, address=None):
     if not matches: return finish('Window unavailable: no exact recorded anchor match.')
     if len(matches) != 1:
         output.append('Matching UTF-16 token starts: ' + ', '.join(str(s['text_start']) for s in matches[:8]))
-        return finish(f'Window ambiguous: {len(matches)} recorded spans match; token starts omitted: {max(0,len(matches)-8)}. Select --window-token-start explicitly.')
+        utf16 = code.encode('utf-16-le', errors='surrogatepass')
+        size = len(('\n'.join(output)+'\n').encode('utf-8'))
+        shown = 0
+        for candidate in matches[:8]:
+            token = utf16[candidate['text_start']*2:candidate['text_end']*2].decode('utf-16-le', errors='surrogatepass')
+            preview = terminal.safe(token[:80]) + (' [clipped]' if len(token) > 80 else '')
+            line = f"Candidate UTF-16 [{candidate['text_start']}, {candidate['text_end']}): {preview}"
+            cost = len((line+'\n').encode('utf-8'))
+            if size + cost > MAX_BYTES - 1024: break
+            output.append(line); size += cost; shown += 1
+        return finish(f'Window ambiguous: {len(matches)} recorded spans match; token starts omitted: {max(0,len(matches)-8)}; previews omitted: {len(matches)-shown}. Select --window-token-start explicitly.')
     anchor = matches[0]
     code_lines = code.split('\n');starts = [];offset = 0
     for line in code_lines:

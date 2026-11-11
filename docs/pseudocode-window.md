@@ -63,3 +63,49 @@ receipt exit0, showed source job and exact token coordinates, and changed no
 project file hashes. No fresh native capture, native full-suite run, inspected app
 execution, system CLI installation or Taskovsky session was performed in this
 presentation slice. Existing raw JSON and receipt contracts were not changed.
+
+## Ambiguous-anchor candidate previews
+
+A saved-receipt workflow exposed a concrete navigation cost: an address can map
+separately to a call name, arguments and punctuation, but numeric token starts
+alone require manual extraction from the full JSON to choose a token. Add text
+previews only to the existing ambiguous-window presentation, after full mapping
+validation. Preserve the first eight matching spans in existing recorded order,
+exact UTF-16 half-open start/end and total/omitted counts. For each display at most
+80 Unicode code points of the exact recorded token, terminal-escaped, with an
+explicit clipping marker. Do not trim or reconstruct token text. Newlines and
+controls must stay on one escaped presentation line. Preserve the 16 KiB total
+window bound by stopping previews before the escaped header plus preview bytes
+exceed 15 KiB, reserving 1 KiB for fixed footer/omission text. Report preview
+omissions separately from omitted numeric starts. Preserve raw JSON, receipts,
+ambiguity status and inherited command exit.
+
+Do not automatically select a candidate, rank meaning, infer line ownership,
+interpret punctuation or follow a target. An explicit start still uses the same
+validator; invalid duplicate/overlapping starts remain rejected rather than resolved. No new command,
+engine job or semantic claim. Acceptance: independently authored tokens sharing
+an address (including punctuation, non-BMP, multiline/control and long text),
+more than eight candidates, invalid-map refusal, deterministic output, unchanged
+input, output budget and existing explicit-anchor behavior; independent review,
+full suites and isolated installed offline replay. No private code in tests/docs.
+
+### Candidate-preview validation
+
+973 primary and 115 analysis tests passed in the cloud. Independent review caught
+and corrected a combined escaped-metadata/preview byte-budget overflow; the
+regression now verifies explicit omissions within 16 KiB. All 12 focused window
+tests passed independently. Generic owned fixtures cover non-BMP coordinates,
+controls, punctuation, clipping, candidate caps and invalid-map refusal.
+
+An isolated installed wheel repeated a private saved-receipt replay with engine
+paths unavailable. The ambiguous view now exposes bounded candidate text while
+remaining ambiguous and requiring explicit selection. Existing dossier, links,
+JSON and explicit-token window stayed byte-identical to their pre-change outputs;
+partial evidence exits remained partial. Project file hashes and existing job
+inventory stayed unchanged after separately recorded transfer/setup. No new
+capture, app execution, system installation, Taskovsky session, fresh full Mac
+suite or general pseudocode-accuracy claim is made. Private evidence is not part
+of the repository or these independently authored tests.
+An independent reader compared the saved before/after view and confirmed that
+candidate text removes manual token extraction while preserving explicit
+selection and ambiguity. That is a scoped navigation assessment, not live use.
