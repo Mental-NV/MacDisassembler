@@ -16,6 +16,7 @@ supersedes older ownership-only wording in historical CLI documentation.
 The broad specification is a roadmap, not a completion claim.
 
 - [CLI installation, examples, safety boundaries and validation](docs/cli.md)
+- [Current improvement priorities: bulk export, grouping and strings](docs/export-readability-roadmap.md)
 - [Current status and remaining gates](docs/current-status.md)
 - [Detailed specification](docs/specification.md)
 - [Phase-1 findings](docs/phase1-findings.md)
