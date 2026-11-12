@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "id": "benchmark-harness-v1",
+  "task_id": "benchmark-harness",
+  "title": "Add reproducible export benchmark harness",
+  "base_sha": "81a80dd1b472a2525fa2596555b07f90920b9b09",
+  "branch": "muse/benchmark-harness",
+  "session_id": "d56e944a-753b-5e00-b788-6f474fbd9da1",
+  "prompt": "prompt.md",
+  "allowed_paths": [
+    "scripts/export_benchmark.py",
+    "tests/test_export_benchmark.py",
+    "docs/export-benchmark-harness.md"
+  ],
+  "tests": [
+    [
+      "python3",
+      "-c",
+      "import sys,unittest; s=unittest.defaultTestLoader.discover('tests',pattern='test_export_benchmark.py'); assert s.countTestCases()>0, 'No tests discovered'; sys.exit(not unittest.TextTestRunner(verbosity=2).run(s).wasSuccessful())"
+    ],
+    [
+      "python3",
+      "-m",
+      "compileall",
+      "-q",
+      "src/macscope"
+    ]
+  ],
+  "resource_locks": [],
+  "depends_on": [],
+  "timeout_seconds": 3600,
+  "required_files": [
+    "scripts/export_benchmark.py",
+    "tests/test_export_benchmark.py",
+    "docs/export-benchmark-harness.md"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "id": "string-sidecars-v1",
+  "task_id": "string-sidecars",
+  "title": "Add string reference sidecar builder",
+  "base_sha": "81a80dd1b472a2525fa2596555b07f90920b9b09",
+  "branch": "muse/string-sidecars",
+  "session_id": "13547fdb-caba-5361-8dbc-33a6bf4e4b13",
+  "prompt": "prompt.md",
+  "allowed_paths": [
+    "src/macscope/string_sidecars.py",
+    "tests/test_string_sidecars.py",
+    "docs/string-sidecars.md"
+  ],
+  "tests": [
+    [
+      "python3",
+      "-c",
+      "import sys,unittest; s=unittest.defaultTestLoader.discover('tests',pattern='test_string_sidecars.py'); assert s.countTestCases()>0, 'No tests discovered'; sys.exit(not unittest.TextTestRunner(verbosity=2).run(s).wasSuccessful())"
+    ],
+    [
+      "python3",
+      "-m",
+      "compileall",
+      "-q",
+      "src/macscope"
+    ]
+  ],
+  "resource_locks": [],
+  "depends_on": [],
+  "timeout_seconds": 3600,
+  "required_files": [
+    "src/macscope/string_sidecars.py",
+    "tests/test_string_sidecars.py",
+    "docs/string-sidecars.md"
+  ]
+}

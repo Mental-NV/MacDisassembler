@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "id": "swift-type-index-v1",
+  "task_id": "swift-type-index",
+  "title": "Add conservative Swift nominal type index",
+  "base_sha": "81a80dd1b472a2525fa2596555b07f90920b9b09",
+  "branch": "muse/swift-type-index",
+  "session_id": "0aaafce6-7aae-55ce-8ced-9d2989335fd2",
+  "prompt": "prompt.md",
+  "allowed_paths": [
+    "src/macscope/swift_type_index.py",
+    "tests/test_swift_type_index.py",
+    "docs/swift-type-index.md"
+  ],
+  "tests": [
+    [
+      "python3",
+      "-c",
+      "import sys,unittest; s=unittest.defaultTestLoader.discover('tests',pattern='test_swift_type_index.py'); assert s.countTestCases()>0, 'No tests discovered'; sys.exit(not unittest.TextTestRunner(verbosity=2).run(s).wasSuccessful())"
+    ],
+    [
+      "python3",
+      "-m",
+      "compileall",
+      "-q",
+      "src/macscope"
+    ]
+  ],
+  "resource_locks": [],
+  "depends_on": [
+    "objc-class-index-v1"
+  ],
+  "timeout_seconds": 3600,
+  "required_files": [
+    "src/macscope/swift_type_index.py",
+    "tests/test_swift_type_index.py",
+    "docs/swift-type-index.md"
+  ]
+}
