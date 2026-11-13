@@ -685,9 +685,22 @@ def validate_bridge_shape(result, max_functions, *, full_functions):
             raise error
 
 
+BULK_SEMANTICS = 'shared-program-session/1'
+MAX_BULK_ENTRIES = 128
+
+
+def validate_bulk_entries(entries):
+    """Canonical deterministic selections only; never silently reorder caller input."""
+    if (not isinstance(entries, list) or not 1 <= len(entries) <= MAX_BULK_ENTRIES
+            or any(not isinstance(e, str) or not re.fullmatch(r'0x(?:0|[1-9a-f][0-9a-f]{0,15})', e)
+                   for e in entries)
+            or entries != sorted(set(entries), key=lambda e: int(e, 16))):
+        raise Error('bulk_selection', 'Bulk query requires 1–128 unique canonical entries in ascending address order', 2)
+
+
 def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_request=None,
         import_request=None, query_request=None, resumed_from=None, boundary_request=None, signature_plan=None,
-        manual_request=None, from_import=False):
+        manual_request=None, from_import=False, bulk_entries=None):
     # Recheck at the worker boundary, including callers supplying old dependency
     # dictionaries. Static reports and cached records never authorize a host.
     require_worker_host()
@@ -703,6 +716,12 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         raise Error('hard_memory_unsupported', 'A hard process-memory budget cannot be enforced here. --heap-mib caps only the Java heap.', 3)
     if entry is not None and (mode != 'query' or not re.fullmatch(r'0x[0-9a-f]{1,16}', entry)):
         raise Error('query_entry', 'Selected query requires an exact saved RAM function entry', 2)
+    if bulk_entries is not None:
+        validate_bulk_entries(bulk_entries)
+        if (mode != 'query' or from_import or any(value is not None for value in
+                (entry, hints, analysis_request, import_request, query_request, resumed_from,
+                 boundary_request, signature_plan, manual_request))):
+            raise Error('bulk_scope', 'Bulk query requires an analyzed image without selected-query mutations or recovery options', 2)
     if from_import and (mode != 'query' or entry is None or any(value is not None for value in
             (hints, query_request, signature_plan))):
         raise Error('focused_scope', 'Focused import requires one exact entry without saved-analysis options', 2)
@@ -756,7 +775,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     elif mode == 'query':
         saved_snapshot, active = project.snapshot(image)
         requested_profile = profile_for_snapshot(saved_snapshot)
-        if entry is not None:
+        if entry is not None or bulk_entries is not None:
             saved_engine = saved_snapshot['identity'].get('engine', {})
             saved_digest = saved_engine.get('ghidra_tree_sha256')
             if (not saved_digest or saved_digest != deps.get('ghidra_tree_sha256')
@@ -815,7 +834,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             argv += ['-preScript', 'MacscopeProfile.java']
             if requested_profile['name'] != 'baseline':
                 argv += [requested_profile['name']]
-    max_functions = 1 if entry is not None else args.max_functions
+    max_functions = len(bulk_entries) if bulk_entries is not None else (1 if entry is not None else args.max_functions)
     argv += ['-scriptPath', str(BRIDGE.resolve()), '-postScript', 'MacscopeBridge.java',
              str(outfile), mode, str(max_functions), str(args.function_timeout)]
     if boundary_request is not None:
@@ -826,6 +845,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         boundaries = job/'manual-boundaries.json'
         write_json(boundaries,manual_request,mode=0o400)
         argv.append(str(boundaries))
+    if bulk_entries is not None:
+        selection = job/'bulk-selection.json'
+        write_json(selection, {'schema':'macscope-bulk-selection/1', 'entries':bulk_entries}, mode=0o400)
+        argv += ['--bulk-entries', str(selection)]
     if entry is not None:
         argv.append(entry)
     if from_import:
@@ -856,6 +879,9 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         manifest[recovery_field] = recovery_identity
     if resumed_from is not None:
         manifest['resumed_from'] = resumed_from
+    if bulk_entries is not None:
+        manifest.update(bulk_entries=bulk_entries, bulk_semantics=BULK_SEMANTICS,
+                        source_analysis_id=image['active_analysis'], source_program_sha256=source_digest)
     if entry is not None:
         manifest.update(selected_entry=entry, source_analysis_id=None if from_import else image['active_analysis'])
     if from_import:
@@ -905,7 +931,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
                 or result.get('ghidra_version') != engine_checks.GHIDRA_VERSION
                 or result.get('bridge_version') != BRIDGE_VERSION):
             raise Error('bridge_contract', 'Bridge result version or mode mismatch', 4)
-        validate_bridge_shape(result,max_functions,full_functions=entry is None or from_import)
+        validate_bridge_shape(result,max_functions,full_functions=(entry is None and bulk_entries is None) or from_import)
         runtime = result.pop('java_runtime', None)
         engine_checks.verify_runtime(runtime,deps['java_home'])
         verify_auxiliary_jdk(deps)
@@ -923,6 +949,14 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             validate_analysis_profile(result, requested_profile, mode)
         flow_boundaries.verify_recovery(result,boundary_request)
         manual_boundaries.verify(result,manual_request)
+        if bulk_entries is not None:
+            rows = result.get('functions', [])
+            if (result.get('bulk_entries') != bulk_entries
+                    or result.get('bulk_semantics') != BULK_SEMANTICS
+                    or [row.get('entry_va') for row in rows] != bulk_entries):
+                raise Error('bulk_result_mismatch', 'Worker did not return the exact bulk selection and shared-session semantics', 10)
+            if tree_digest(source) != source_digest:
+                raise Error('analysis_program_integrity', 'Bulk query changed its saved source Program', 10)
         if entry is not None:
             rows = result.get('functions', [])
             if (result.get('selected_entry') != entry or len(rows) != 1

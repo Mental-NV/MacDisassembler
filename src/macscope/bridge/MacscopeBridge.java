@@ -139,7 +139,7 @@ public class MacscopeBridge extends HeadlessScript {
     public void run() throws Exception {
         String[] args = getScriptArgs();
         if (args.length < 4 || args.length > 6) {
-            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [BOUNDARY_REQUEST | QUERY_ENTRY [TYPE_HINTS | --from-import]]");
+            throw new IllegalArgumentException("Usage: MacscopeBridge.java OUTPUT import|analyze|query MAXFUNCS FUNCTION_TIMEOUT [BOUNDARY_REQUEST | QUERY_ENTRY [TYPE_HINTS | --from-import] | --bulk-entries SELECTION_JSON]");
         }
         mode = args[1];
         if (!mode.equals("import") && !mode.equals("analyze") && !mode.equals("query")) {
@@ -148,10 +148,13 @@ public class MacscopeBridge extends HeadlessScript {
         int maxFunctions = boundedInt(args[2], 1, 10000, "MAXFUNCS");
         int timeout = boundedInt(args[3], 1, 300, "FUNCTION_TIMEOUT");
         Path boundaries = mode.equals("analyze") && args.length == 5 ? Path.of(args[4]) : null;
-        String entry = args.length >= 5 && boundaries == null ? args[4] : null;
-        boolean fromImport = args.length == 6 && "--from-import".equals(args[5]);
+        boolean bulk = args.length == 6 && "--bulk-entries".equals(args[4]);
+        if (bulk && !mode.equals("query")) throw new IllegalArgumentException("Bulk export requires query mode");
+        List<String> bulkEntries = bulk ? readBulkEntries(Path.of(args[5]), maxFunctions) : null;
+        String entry = args.length >= 5 && boundaries == null && !bulk ? args[4] : null;
+        boolean fromImport = args.length == 6 && !bulk && "--from-import".equals(args[5]);
         focusedQuery = fromImport;
-        Path typeHints = args.length == 6 && !fromImport ? Path.of(args[5]) : null;
+        Path typeHints = args.length == 6 && !fromImport && !bulk ? Path.of(args[5]) : null;
         if (entry != null && (!mode.equals("query") || maxFunctions != 1 || !entry.matches("0x[0-9a-f]{1,16}"))) {
             throw new IllegalArgumentException("Selected decompilation requires query mode and one RAM entry");
         }
@@ -160,6 +163,12 @@ public class MacscopeBridge extends HeadlessScript {
         root.addProperty("bridge_version", VERSION);
         root.addProperty("mode", mode);
         if (entry != null) root.addProperty("selected_entry", entry);
+        if (bulk) {
+            JsonArray selected = new JsonArray();
+            for (String selectedEntry : bulkEntries) selected.add(selectedEntry);
+            root.add("bulk_entries", selected);
+            root.addProperty("bulk_semantics", "shared-program-session/1");
+        }
         root.addProperty("ghidra_version", getGhidraVersion());
         JsonObject runtime = new JsonObject();
         put(runtime, "home", System.getProperty("java.home"));
@@ -215,7 +224,7 @@ public class MacscopeBridge extends HeadlessScript {
             describeOptions();
             verifyMode();
             if (!fatal && boundaries != null) recoverBoundaries(boundaries);
-            if (entry == null) {
+            if (entry == null && !bulk) {
                 sections();
                 symbols();
                 imports();
@@ -223,7 +232,7 @@ public class MacscopeBridge extends HeadlessScript {
                 strings();
             }
             if (!fatal && !mode.equals("import")) {
-                if (typeHints == null) functions(maxFunctions, timeout, entry, fromImport);
+                if (typeHints == null) functions(maxFunctions, timeout, entry, fromImport, bulkEntries);
                 else hintedDecompile(timeout, entry, typeHints);
             }
             else coverage.add("functions", facet(0, 0, false, null,
@@ -819,7 +828,41 @@ public class MacscopeBridge extends HeadlessScript {
         return value.substring(0, end);
     }
 
+    // Bounded, explicit selection: never reinterpret a malformed request as all functions.
+    List<String> readBulkEntries(Path path, int limit) throws Exception {
+        byte[] bytes;
+        try (InputStream input = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
+            bytes = input.readNBytes(16385);
+        }
+        if (bytes.length > 16384) throw new IllegalArgumentException("Bulk selection exceeds its bound");
+        JsonObject request = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject();
+        if (request.size() != 2 || !request.has("schema") || !request.has("entries") ||
+            !"macscope-bulk-selection/1".equals(request.get("schema").getAsString()))
+            throw new IllegalArgumentException("Invalid bulk selection schema");
+        JsonArray entries = request.getAsJsonArray("entries");
+        if (entries.size() < 1 || entries.size() > 128 || entries.size() > limit)
+            throw new IllegalArgumentException("Bulk selection must contain 1..128 entries within MAXFUNCS");
+        List<String> result = new ArrayList<>();
+        long previous = 0;
+        for (JsonElement element : entries) {
+            if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString())
+                throw new IllegalArgumentException("Bulk entries must be strings");
+            String value = element.getAsString();
+            if (!value.matches("0x(?:0|[1-9a-f][0-9a-f]{0,15})"))
+                throw new IllegalArgumentException("Bulk entries must be canonical lowercase RAM addresses");
+            long current = Long.parseUnsignedLong(value.substring(2), 16);
+            if (!result.isEmpty() && Long.compareUnsigned(previous, current) >= 0)
+                throw new IllegalArgumentException("Bulk entries must be unique and ascending");
+            result.add(value); previous = current;
+        }
+        return result;
+    }
+
     void functions(int limit, int timeout, String entry, boolean fromImport) {
+        functions(limit, timeout, entry, fromImport, null);
+    }
+
+    void functions(int limit, int timeout, String entry, boolean fromImport, List<String> bulkEntries) {
         JsonArray out = root.getAsJsonArray("functions");
         DecompInterface decomp = new DecompInterface();
         String err = null; boolean trunc = false; int visited = 0;
@@ -841,7 +884,23 @@ public class MacscopeBridge extends HeadlessScript {
                 decompilerTiming.add("open_program", timing);
             }
             if (!opened) { decompilerError = clipped(decomp.getLastMessage(), MAX_TEXT); partial = true; }
-            if (entry == null) {
+            if (bulkEntries != null) {
+                if (!opened) throw new IllegalStateException("Bulk decompiler failed to open Program: " + decompilerError);
+                for (String selected : bulkEntries) {
+                    monitor.checkCancelled();
+                    Function f = functionAt(selected);
+                    visited++;
+                    JsonObject item = new JsonObject();
+                    JsonObject facets = new JsonObject();
+                    item.add("coverage", facets);
+                    put(item, "entry_va", address(f.getEntryPoint()));
+                    decompile(f, decomp, timeout, item, facets);
+                    if (!append(out, item, false)) { trunc = true; break; }
+                    String status = item.get("decompile_status").getAsString();
+                    if (!status.equals("complete") && !status.equals("not_requested"))
+                        throw new IllegalStateException("Bulk decompilation stopped at " + selected + ": " + status);
+                }
+            } else if (entry == null) {
                 BasicBlockModel model = new BasicBlockModel(currentProgram);
                 FunctionIterator it = currentProgram.getFunctionManager().getFunctions(true);
                 FunctionIterator external = currentProgram.getFunctionManager().getExternalFunctions();
@@ -879,7 +938,9 @@ public class MacscopeBridge extends HeadlessScript {
         root.addProperty("function_count_enumerated", out.size());
         root.addProperty("functions_truncated", trunc);
         root.addProperty("function_count_attempted", visited);
-        int total = entry == null ? currentProgram.getFunctionManager().getFunctionCount() : 1;
+        if (bulkEntries != null && err != null) { fatal = true; errors.add(err); }
+        int total = bulkEntries != null ? bulkEntries.size() :
+            (entry == null ? currentProgram.getFunctionManager().getFunctionCount() : 1);
         coverage.add("functions", facet(out.size(), total, trunc, err, "complete"));
     }
 
