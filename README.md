@@ -70,3 +70,19 @@ plan is not an executable sandbox: executable-path confinement, runtime
 library pinning and live isolation checks remain required. macOS arm64 keeps
 its existing runtime pin and Seatbelt worker policy. See
 [Linux readiness and remaining gates](docs/linux-host-readiness.md).
+
+### Bounded batch export (analyzed images)
+
+```sh
+macscope batch-export --project ./workspace --image IMAGE_ID --batch-size 32 --trust-input
+# Verify existing records and resume an interrupted export with identical options:
+macscope batch-export --project ./workspace --image IMAGE_ID --batch-size 32 --trust-input --resume
+```
+
+Writes raw function records and a hashed index under the workspace’s
+`batch-exports/`. One read-only Ghidra Program/session serves each chunk, and its
+throwaway Program copy is removed after durable validated results. This selects
+only functions captured by a committed analysis; it is **not** exhaustive binary
+discovery or a drop-in replacement for focused `--from-import` exports. Exit 6
+explicitly reports that coverage limitation. See [batch scope and resource
+limits](docs/bulk-export-plan.md#first-implementation-checkpoint-analyzed-image-finite-batches).

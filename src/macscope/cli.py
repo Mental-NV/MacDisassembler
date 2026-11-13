@@ -127,6 +127,11 @@ def parser():
     boundaries=s.add_mutually_exclusive_group()
     boundaries.add_argument('--repair-split-boundaries',action='store_true',help='Apply guarded linker-derived function joins to this analysis copy')
     boundaries.add_argument('--with-boundary-edits',action='store_true',help='Apply explicitly accepted function bodies to this analysis copy')
+    s=sub.add_parser('batch-export',help='Bounded shared-session export of captured analyzed functions');project(s);common(s);budgets(s)
+    s.add_argument('--entry',action='append',help='Select a captured unslid entry; repeat, or omit for captured RAM inventory')
+    s.add_argument('--batch-size',type=int,default=32)
+    s.add_argument('--reserve-mib',type=int,default=1024)
+    s.add_argument('--resume',action='store_true')
     s=sub.add_parser('status');project(s);common(s)
     s.add_argument('--verify-programs',action='store_true',
                    help='Check saved import and analysis Program digests without starting Ghidra')
@@ -1856,6 +1861,14 @@ def execute_command(a, address_selection=None):
     if a.command=='fixups' and a.input is not None:
         return file_fixups(a)
     p=Project(a.project)
+    if a.command == 'batch-export':
+        from . import batch_export
+        check_engine_access(a,p)
+        with p.writer():
+            jobs.verify_engine_writer_stopped(p)
+            deps=engine.dependencies(a.ghidra,a.java_home,full=True)
+            data=batch_export.export(p,p.select(a.image,a.arch),a,deps)
+        return envelope(command,data,status='partial',cov=coverage('captured analysis inventory',data['record_count'],None,True,reason='discovery_not_exhaustive'))
     if a.command == 'register-relations':
         from . import register_relations
         report = register_relations.query(p,a.query_job,a.register_range,a.abi,bit_test_fallthrough=a.bit_test_fallthrough)

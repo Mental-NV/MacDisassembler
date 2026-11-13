@@ -145,3 +145,32 @@ Profile → review separate bulk-session contract → streaming batch prototype 
 failure/resume hardening → class indexes → evaluate concurrency. String discovery/annotation is a requested roadmap workstream; inclusion in an
 individual bulk run remains optional. Use evidence-backed annotations, never
 regex replacement of unknown addresses in raw pseudocode.
+
+## First implementation checkpoint: analyzed-image finite batches
+
+`macscope batch-export --project PATH --image IMAGE --trust-input --batch-size 32`
+uses one read-only disposable analyzed Program and one decompiler interface per
+bounded selection chunk (1–128 entries). `--entry 0x...` is repeatable; omitting it
+selects the captured RAM functions in the committed analysis, **not every function
+in the binary**. Exports live under the project’s `batch-exports/<identity>/`;
+`functions/0x….json` retains raw engine pseudocode, status, job and shared-session
+provenance. `index.json` binds records to hashes. `--resume` verifies frozen
+analysis/runtime/options and hashes before reusing committed chunks. A partially
+interrupted chunk is replayed as the same original selection rather than changing
+its shared-session semantics.
+
+This is not an isolated `decompile --from-import` replacement. The existing
+TickTick per-function focused-import exporter cannot simply switch to this command:
+it needs a committed analysis first, and its linker-bounded focused results have
+different semantics. Collective import preparation, exhaustive inventory and
+bounded within-chunk candidate streaming remain follow-up milestones. The first
+checkpoint retains the existing 64 MiB chunk response ceiling and per-job resource
+limits. It must not be advertised as a full-image streaming exporter or a measured
+TickTick speedup.
+
+`--reserve-mib` defaults to 1024: before each chunk the coordinator checks free
+space for the baseline Program copy, the reserve and bounded response allowance.
+Successful validated chunks commit records before deleting only their own
+throwaway Program copy; the reusable analyzed baseline and receipts remain.
+Failed workers retain diagnostics. Native validation and performance measurements
+are required before this checkpoint can be called ready.
