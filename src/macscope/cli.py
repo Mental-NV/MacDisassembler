@@ -132,6 +132,8 @@ def parser():
     s.add_argument('--batch-size',type=int,default=32)
     s.add_argument('--reserve-mib',type=int,default=1024)
     s.add_argument('--resume',action='store_true')
+    s=sub.add_parser('batch-status',help='Read saved batch progress without starting a worker');s.add_argument('--project',required=True);common(s)
+    s.add_argument('--export-id',required=True,help='Exact batch export identity from batch-export output')
     s=sub.add_parser('status');project(s);common(s)
     s.add_argument('--verify-programs',action='store_true',
                    help='Check saved import and analysis Program digests without starting Ghidra')
@@ -1861,6 +1863,10 @@ def execute_command(a, address_selection=None):
     if a.command=='fixups' and a.input is not None:
         return file_fixups(a)
     p=Project(a.project)
+    if a.command == 'batch-status':
+        from . import batch_export
+        data=batch_export.status(p,a.export_id)
+        return envelope(command,data,cov=coverage('saved batch progress index'))
     if a.command == 'batch-export':
         from . import batch_export
         check_engine_access(a,p)

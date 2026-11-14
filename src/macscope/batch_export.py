@@ -5,7 +5,7 @@ from pathlib import Path
 from . import engine, jobs
 from .errors import Error
 from .macho import read_regular
-from .storage import identity, write_json, json_object
+from .storage import identity, is_digest, write_json, json_object
 
 SEMANTICS = 'shared-program-session/1'
 COORDINATOR_POLICY = 'whole-chunk-index/1'
@@ -141,3 +141,65 @@ def export(project, image, args, deps):
             'coverage_scope':'captured analysis RAM inventory, not all binary functions',
             'outcomes':{status:sum(r['status']==status for r in complete.values())
                         for status in sorted({r['status'] for r in complete.values()})}}
+
+
+def status(project, export_id):
+    """Read one atomic progress index, not worker liveness or record integrity."""
+    if not is_digest(export_id):
+        raise Error('batch_identity', 'Export ID must be a lowercase SHA-256 digest', 2)
+    destination = project.path/'batch-exports'/export_id
+    binding = json_object(read_regular(destination/'manifest.json', 64*1024*1024),
+                          'batch_manifest', 'Invalid export manifest')
+    if identity(binding) != export_id:
+        raise Error('batch_identity', 'Export manifest identity mismatch')
+    entries, size = binding.get('entries'), binding.get('batch_size')
+    if (binding.get('schema') != 'macscope-batch-export/1'
+            or binding.get('semantics') != SEMANTICS
+            or binding.get('coordinator_policy') != COORDINATOR_POLICY
+            or not is_digest(binding.get('image_id'))
+            or not is_digest(binding.get('analysis_id'))
+            or type(size) is not int or not 1 <= size <= 128
+            or not isinstance(entries, list) or not 1 <= len(entries) <= 10000
+            or any(not isinstance(e, str) or not 3 <= len(e) <= 18
+                   or not e.startswith('0x') or any(c not in '0123456789abcdef' for c in e[2:])
+                   or e != hex(int(e, 16)) for e in entries)):
+        raise Error('batch_manifest', 'Unsupported or invalid batch progress manifest')
+    if entries != sorted(set(entries), key=lambda e: int(e, 16)):
+        raise Error('batch_manifest', 'Batch entries must be unique and numerically sorted')
+    index_path = destination/'index.json'
+    try:
+        index_path.lstat()
+    except FileNotFoundError:
+        index = None
+    else:
+        index = json_object(read_regular(index_path, 64*1024*1024),
+                            'batch_index', 'Invalid export index')
+    records = {} if index is None else index.get('records')
+    if index is not None and index.get('export_id') != export_id:
+        raise Error('batch_identity', 'Export index identity mismatch')
+    if not isinstance(records, dict) or not records.keys() <= set(entries):
+        raise Error('batch_index', 'Invalid export record index')
+    outcomes = {}
+    for receipt in records.values():
+        if (not isinstance(receipt, dict) or not is_digest(receipt.get('sha256'))
+                or not isinstance(receipt.get('status'), str)
+                or receipt['status'] not in {'complete', 'not_requested'}):
+            raise Error('batch_index', 'Invalid completed export record')
+        outcomes[receipt['status']] = outcomes.get(receipt['status'], 0) + 1
+    chunks = [entries[offset:offset+size] for offset in range(0, len(entries), size)]
+    counts = [sum(entry in records for entry in chunk) for chunk in chunks]
+    if any(count not in (0, len(chunk)) for count, chunk in zip(counts, chunks)):
+        raise Error('batch_index', 'Export index contains an incomplete shared-session chunk')
+    return {'export_id': export_id, 'image_id': binding['image_id'],
+            'analysis_id': binding['analysis_id'], 'semantics': SEMANTICS,
+            'selected_count': len(entries), 'indexed_count': len(records),
+            'unindexed_count': len(entries)-len(records), 'chunk_count': len(chunks),
+            'indexed_chunk_count': sum(count > 0 for count in counts),
+            'index_present': index is not None,
+            'index_sha256': identity(index) if index is not None else None,
+            'indexed_outcomes': dict(sorted(outcomes.items())),
+            'record_integrity': 'not_checked', 'worker_state': 'not_checked',
+            'coverage_scope': 'frozen export selection, not all binary functions',
+            'limitations': ['Counts describe one saved index snapshot, not live worker state.',
+                            'Unindexed functions may be pending, running or failed.',
+                            'Function files and hashes are not verified; use batch-export --resume for validation.']}

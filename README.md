@@ -86,3 +86,12 @@ only functions captured by a committed analysis; it is **not** exhaustive binary
 discovery or a drop-in replacement for focused `--from-import` exports. Exit 6
 explicitly reports that coverage limitation. See [batch scope and resource
 limits](docs/bulk-export-plan.md#first-implementation-checkpoint-analyzed-image-finite-batches).
+
+Inspect saved batch progress without starting Ghidra:
+
+```sh
+macscope batch-status --project ./workspace --export-id EXPORT_DIGEST --json
+```
+
+This reports indexed/unindexed counts, not worker liveness or function-file
+integrity. See [saved batch progress](docs/batch-progress.md).
