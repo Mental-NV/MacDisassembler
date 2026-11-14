@@ -18,7 +18,8 @@ SHA256 = re.compile(r'[0-9a-f]{64}')
 UNSLID_VA = re.compile(r'0x[0-9a-fA-F]{1,16}')
 WORKSPACE_DIRECTORIES = ('inputs', 'engine', 'snapshots', 'jobs', 'home', 'tmp')
 WORKSPACE_RESERVED = frozenset((*WORKSPACE_DIRECTORIES, 'project.json', 'writer.lock',
-                                'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm'))
+                                'index.sqlite', 'index.sqlite-journal', 'index.sqlite-wal', 'index.sqlite-shm',
+                                'batch-exports'))
 CANONICAL_JSON = json.JSONEncoder(sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False)
 JSON_STRUCTURE = re.compile(rb'["\\{}\[\]]')
 MAX_JSON_DEPTH = 64

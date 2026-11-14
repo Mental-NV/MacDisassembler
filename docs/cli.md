@@ -2789,3 +2789,12 @@ and the existing bounded extent proof without an engine, trust prompt or new job
 Exit0 certifies only the static selection, not Program availability, decompilation
 or runtime behavior. JSON/text only. Ordinary captures are unchanged.
 See [the contract](focused-selection-preflight.md) for limits and validation.
+
+### Saved batch progress
+
+`macscope batch-status --project PATH --export-id EXPORT_DIGEST --json` reads a
+bounded manifest/index snapshot without starting Java or acquiring the writer
+lock. It reports indexed and unindexed counts, not live worker state, successful
+teardown, record integrity or full binary coverage. See
+[the progress contract](batch-progress.md). `batch-export --resume` still performs
+record validation before continuing an interrupted export.
