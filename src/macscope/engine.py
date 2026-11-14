@@ -16,6 +16,7 @@ import subprocess
 import time
 import uuid
 from copy import deepcopy
+from contextlib import contextmanager
 from . import callee_parameters, direct_signatures, dispatch_returns, engine_checks, flow_boundaries, forwarded_returns, jobs, manual_boundaries, scalar_signatures, switch_tables, worker_lifecycle
 from . import focused, host_platform, linux_isolation, loader_mapping
 from .annotations import MAX_TYPE_HINTS, structure_definitions
@@ -142,6 +143,22 @@ def digest(path):
 
 def bridge_digest():
     return identity({path.name: digest(path) for path in sorted(BRIDGE.glob('*.java'))})
+
+
+@contextmanager
+def focused_phase(timings, name):
+    """Supervisor-only diagnostics, never a request or result identity input."""
+    if timings is None:
+        yield
+        return
+    start = time.perf_counter_ns()
+    outcome = 'failed'
+    try:
+        yield
+        outcome = 'complete'
+    finally:
+        timings[name] = {'elapsed_ns': max(0, time.perf_counter_ns() - start),
+                         'outcome': outcome}
 
 
 def tree_digest(root, *, ignore=()):
@@ -749,6 +766,7 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             raise Error('signature_recovery_scope', 'Signature recovery requires its exact selected query', 2)
     elif bound_recoveries:
         raise Error('signature_recovery_scope', 'The selected query is missing its signature recovery plan', 2)
+    phase_timings = {} if from_import else None
     requested_profile = analysis_profile(getattr(args, 'profile', 'baseline')) if mode == 'analyze' else None
     if from_import:
         imported_engine = image.get('import_dependencies')
@@ -761,17 +779,19 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         if resumed_from is not None:
             recorded = jobs.focused_record(jobs.get(project, resumed_from)[1])
             focused_policy = (recorded or {}).get('extent', {}).get('policy')
-        proof, payload = focused.select(project, image, entry, policy=focused_policy)
-        source = import_program_path(project,image)
-        source_digest = image.get('engine_baseline_sha256')
-        if (not source_digest or source.parent.is_symlink() or source.is_symlink() or not source.is_dir()
-                or tree_digest(source) != source_digest):
-            raise Error('baseline_integrity', 'Saved import Program is missing or differs from its digest', 4)
-        proof = dict(proof, program_sha256=source_digest)
-        focus_request = jobs.focused_request(project,image,proof)
-        if resumed_from is not None and jobs.focused_record(jobs.get(project,resumed_from)[1]) != focus_request:
-            raise Error('job_resume_inputs', 'Focused retry differs from the original selected extent', 8)
-        program_content_digest = tree_digest(source, ignore=focused.PROJECT_BACKUPS)
+        with focused_phase(phase_timings, 'selection_proof'):
+            proof, payload = focused.select(project, image, entry, policy=focused_policy)
+        with focused_phase(phase_timings, 'baseline_verification_request'):
+            source = import_program_path(project,image)
+            source_digest = image.get('engine_baseline_sha256')
+            if (not source_digest or source.parent.is_symlink() or source.is_symlink() or not source.is_dir()
+                    or tree_digest(source) != source_digest):
+                raise Error('baseline_integrity', 'Saved import Program is missing or differs from its digest', 4)
+            proof = dict(proof, program_sha256=source_digest)
+            focus_request = jobs.focused_request(project,image,proof)
+            if resumed_from is not None and jobs.focused_record(jobs.get(project,resumed_from)[1]) != focus_request:
+                raise Error('job_resume_inputs', 'Focused retry differs from the original selected extent', 8)
+            program_content_digest = tree_digest(source, ignore=focused.PROJECT_BACKUPS)
     elif mode == 'query':
         saved_snapshot, active = project.snapshot(image)
         requested_profile = profile_for_snapshot(saved_snapshot)
@@ -887,20 +907,24 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
     if from_import:
         manifest['focused_import'] = proof
         manifest['focused_request'] = focus_request
+        manifest['focused_phase_timing'] = {'schema': 'macscope-focused-phase-timing/1',
+                                            'phases': phase_timings}
     if hints is not None:
         manifest.update(type_hint_view_id=identity({'source_analysis_id':image['active_analysis'],'hints':hints}),
                         type_hints_sha256=digest(request),type_hints=hints)
     if mode != 'import':
         integrity_error = 'baseline_integrity' if mode == 'analyze' or from_import else 'analysis_program_integrity'
         try:
-            copy_program(source, engine_dir, source_digest, integrity_error)
+            with focused_phase(phase_timings, 'program_copy_verification'):
+                copy_program(source, engine_dir, source_digest, integrity_error)
         except Error as error:
             manifest.update(status='failed', error={'code':error.code,'message':str(error)})
             write_json(job/'job.json',manifest)
             error.partial = {'job_id':jobid}
             raise
     try:
-        verify_auxiliary_jdk(deps)
+        with focused_phase(phase_timings, 'auxiliary_jdk_verification'):
+            verify_auxiliary_jdk(deps)
     except Error as error:
         jobs.fail(job/'job.json',manifest,error)
         error.partial = {'job_id':jobid}
@@ -913,9 +937,10 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
             error.partial = {'job_id':jobid}
         raise
     try:
-        if b'Skipping unsupported -loader-' in read_regular(job/'launcher.log',8*1024*1024):
-            raise Error('loader_option_unsupported','Pinned loader rejected a requested safety option',4)
-        result = read_worker_object(outfile,64*1024*1024)
+        with focused_phase(phase_timings, 'bridge_read'):
+            if b'Skipping unsupported -loader-' in read_regular(job/'launcher.log',8*1024*1024):
+                raise Error('loader_option_unsupported','Pinned loader rejected a requested safety option',4)
+            result = read_worker_object(outfile,64*1024*1024)
     except (ValueError, RecursionError, OSError, Error) as e:
         if isinstance(e,Error) and e.code=='loader_option_unsupported':
             manifest.update(status='failed',error={'code':e.code,'message':str(e)})
@@ -927,85 +952,86 @@ def run(project, image, mode, args, deps, *, entry=None, hints=None, analysis_re
         raise Error('bridge_result', 'Worker did not publish a valid bridge result; see private log', 10,
                     partial={'job_id':jobid}) from e
     try:
-        if (result.get('schema') != 'macscope-bridge/1' or result.get('mode') != mode
-                or result.get('ghidra_version') != engine_checks.GHIDRA_VERSION
-                or result.get('bridge_version') != BRIDGE_VERSION):
-            raise Error('bridge_contract', 'Bridge result version or mode mismatch', 4)
-        validate_bridge_shape(result,max_functions,full_functions=(entry is None and bulk_entries is None) or from_import)
-        runtime = result.pop('java_runtime', None)
-        engine_checks.verify_runtime(runtime,deps['java_home'])
-        verify_auxiliary_jdk(deps)
-        manifest['java_runtime'] = runtime
-        verify_macho_loader(result,image)
-        if result.get('status') == 'failed':
-            rejected = result.get('manual_boundary_rejection')
-            if manual_request is not None and isinstance(rejected,str):
-                raise Error('boundary_edit_rejected',rejected,3)
-            raise Error('bridge_failed', 'Bridge failed: '+str(result.get('errors')), 10)
-        timing = decompiler_timing(result,max_functions)
-        if timing is not None:
-            manifest['decompiler_timing'] = timing
-        if mode != 'import' and not from_import:
-            validate_analysis_profile(result, requested_profile, mode)
-        flow_boundaries.verify_recovery(result,boundary_request)
-        manual_boundaries.verify(result,manual_request)
-        if bulk_entries is not None:
-            rows = result.get('functions', [])
-            if (result.get('bulk_entries') != bulk_entries
-                    or result.get('bulk_semantics') != BULK_SEMANTICS
-                    or [row.get('entry_va') for row in rows] != bulk_entries):
-                raise Error('bulk_result_mismatch', 'Worker did not return the exact bulk selection and shared-session semantics', 10)
-            if tree_digest(source) != source_digest:
-                raise Error('analysis_program_integrity', 'Bulk query changed its saved source Program', 10)
-        if entry is not None:
-            rows = result.get('functions', [])
-            if (result.get('selected_entry') != entry or len(rows) != 1
-                    or rows[0].get('entry_va') != entry):
-                raise Error('query_result_mismatch', 'Worker did not return the exact selected function', 10)
-        if from_import:
-            if result.get('validation', {}).get('headless_analysis_enabled') is not False:
-                raise Error('query_analysis', 'Focused query unexpectedly enabled autoanalysis', 10)
-            try:
-                report = read_worker_object(focus_report, 16 * 1024)
-            except (ValueError, RecursionError, OSError, Error) as error:
-                raise Error('focused_worker_proof', 'Worker did not publish the selected range proof', 10) from error
-            focused.verify(proof, payload, report, rows[0])
-            if (tree_digest(source) != source_digest or
-                    tree_digest(engine_dir, ignore=focused.PROJECT_BACKUPS) != program_content_digest):
-                raise Error('baseline_integrity', 'Focused query changed a saved Program database', 10)
-        applied = result.get('applied_type_hints', [])
-        if not isinstance(applied,list) or any(not isinstance(row,dict) for row in applied):
-            raise Error('type_hint_result_mismatch','Worker returned malformed type-hint provenance',10)
-        if hints is not None:
-            hint_fields = ('entry_va','return_type','parameter_types','revision')
-            received = [{key:row[key] for key in hint_fields if key in row} for row in applied]
-            if received != hints:
-                raise Error('type_hint_result_mismatch','Worker did not apply the exact accepted hints',10)
-        elif applied:
-            raise Error('type_hint_result_mismatch','Worker applied unrequested type hints',10)
-        types = (value for hint in hints or ()
-                 for value in ([hint['return_type']] if 'return_type' in hint else hint['parameter_types']))
-        definitions = {f'struct {name}{{{fields}}}' for name,fields in structure_definitions(types).items()}
-        layouts = result.get('aggregate_type_layouts',[])
-        if (not isinstance(layouts,list) or len(layouts) != len(definitions)
-                or any(not isinstance(row,dict) or not isinstance(row.get('definition'),str) for row in layouts)
-                or {row['definition'] for row in layouts} != definitions):
-            raise Error('type_hint_result_mismatch','Worker returned different aggregate type definitions',10)
-        if hints is not None or signature_plan is not None:
-            if any(tree_digest(path) != active['analysis_program_sha256'] for path in (source, engine_dir)):
-                raise Error('analysis_program_integrity', 'Fresh query changed a Program on disk', 10)
-        if signature_plan is not None:
-            report = None
-            if signature_plan['requests'] or recovery_report.exists():
+        with focused_phase(phase_timings, 'result_validation'):
+            if (result.get('schema') != 'macscope-bridge/1' or result.get('mode') != mode
+                    or result.get('ghidra_version') != engine_checks.GHIDRA_VERSION
+                    or result.get('bridge_version') != BRIDGE_VERSION):
+                raise Error('bridge_contract', 'Bridge result version or mode mismatch', 4)
+            validate_bridge_shape(result,max_functions,full_functions=(entry is None and bulk_entries is None) or from_import)
+            runtime = result.pop('java_runtime', None)
+            engine_checks.verify_runtime(runtime,deps['java_home'])
+            verify_auxiliary_jdk(deps)
+            manifest['java_runtime'] = runtime
+            verify_macho_loader(result,image)
+            if result.get('status') == 'failed':
+                rejected = result.get('manual_boundary_rejection')
+                if manual_request is not None and isinstance(rejected,str):
+                    raise Error('boundary_edit_rejected',rejected,3)
+                raise Error('bridge_failed', 'Bridge failed: '+str(result.get('errors')), 10)
+            timing = decompiler_timing(result,max_functions)
+            if timing is not None:
+                manifest['decompiler_timing'] = timing
+            if mode != 'import' and not from_import:
+                validate_analysis_profile(result, requested_profile, mode)
+            flow_boundaries.verify_recovery(result,boundary_request)
+            manual_boundaries.verify(result,manual_request)
+            if bulk_entries is not None:
+                rows = result.get('functions', [])
+                if (result.get('bulk_entries') != bulk_entries
+                        or result.get('bulk_semantics') != BULK_SEMANTICS
+                        or [row.get('entry_va') for row in rows] != bulk_entries):
+                    raise Error('bulk_result_mismatch', 'Worker did not return the exact bulk selection and shared-session semantics', 10)
+                if tree_digest(source) != source_digest:
+                    raise Error('analysis_program_integrity', 'Bulk query changed its saved source Program', 10)
+            if entry is not None:
+                rows = result.get('functions', [])
+                if (result.get('selected_entry') != entry or len(rows) != 1
+                        or rows[0].get('entry_va') != entry):
+                    raise Error('query_result_mismatch', 'Worker did not return the exact selected function', 10)
+            if from_import:
+                if result.get('validation', {}).get('headless_analysis_enabled') is not False:
+                    raise Error('query_analysis', 'Focused query unexpectedly enabled autoanalysis', 10)
                 try:
-                    report = read_worker_object(recovery_report,64*1024)
-                except (Error, ValueError, RecursionError, OSError) as error:
-                    raise Error('signature_recovery_result', 'Worker did not publish a valid signature decision', 10) from error
-            result[recovery_field] = dict(recovery_identity, **recovery_policy.decision(signature_plan,report))
-        if mode == 'import':
-            if result['validation'].get('headless_analysis_enabled') is not False:
-                raise Error('import_analysis','Import did not disable autoanalysis',10)
-            manifest['loader_mapping'] = loader_mapping.verify(result,image)
+                    report = read_worker_object(focus_report, 16 * 1024)
+                except (ValueError, RecursionError, OSError, Error) as error:
+                    raise Error('focused_worker_proof', 'Worker did not publish the selected range proof', 10) from error
+                focused.verify(proof, payload, report, rows[0])
+                if (tree_digest(source) != source_digest or
+                        tree_digest(engine_dir, ignore=focused.PROJECT_BACKUPS) != program_content_digest):
+                    raise Error('baseline_integrity', 'Focused query changed a saved Program database', 10)
+            applied = result.get('applied_type_hints', [])
+            if not isinstance(applied,list) or any(not isinstance(row,dict) for row in applied):
+                raise Error('type_hint_result_mismatch','Worker returned malformed type-hint provenance',10)
+            if hints is not None:
+                hint_fields = ('entry_va','return_type','parameter_types','revision')
+                received = [{key:row[key] for key in hint_fields if key in row} for row in applied]
+                if received != hints:
+                    raise Error('type_hint_result_mismatch','Worker did not apply the exact accepted hints',10)
+            elif applied:
+                raise Error('type_hint_result_mismatch','Worker applied unrequested type hints',10)
+            types = (value for hint in hints or ()
+                     for value in ([hint['return_type']] if 'return_type' in hint else hint['parameter_types']))
+            definitions = {f'struct {name}{{{fields}}}' for name,fields in structure_definitions(types).items()}
+            layouts = result.get('aggregate_type_layouts',[])
+            if (not isinstance(layouts,list) or len(layouts) != len(definitions)
+                    or any(not isinstance(row,dict) or not isinstance(row.get('definition'),str) for row in layouts)
+                    or {row['definition'] for row in layouts} != definitions):
+                raise Error('type_hint_result_mismatch','Worker returned different aggregate type definitions',10)
+            if hints is not None or signature_plan is not None:
+                if any(tree_digest(path) != active['analysis_program_sha256'] for path in (source, engine_dir)):
+                    raise Error('analysis_program_integrity', 'Fresh query changed a Program on disk', 10)
+            if signature_plan is not None:
+                report = None
+                if signature_plan['requests'] or recovery_report.exists():
+                    try:
+                        report = read_worker_object(recovery_report,64*1024)
+                    except (Error, ValueError, RecursionError, OSError) as error:
+                        raise Error('signature_recovery_result', 'Worker did not publish a valid signature decision', 10) from error
+                result[recovery_field] = dict(recovery_identity, **recovery_policy.decision(signature_plan,report))
+            if mode == 'import':
+                if result['validation'].get('headless_analysis_enabled') is not False:
+                    raise Error('import_analysis','Import did not disable autoanalysis',10)
+                manifest['loader_mapping'] = loader_mapping.verify(result,image)
         write_json(job/'job.json',manifest,force=True)
         if mode == 'import' and import_request is None:
             destination = project.path/'engine'/image['image_id']

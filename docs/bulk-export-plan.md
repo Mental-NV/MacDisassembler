@@ -185,3 +185,5 @@ A bounded [owned native comparison](owned-batch-comparison.md) now verifies
 identical records for three selected functions across size-1/size-3 runs and
 measures warm setup amortization. It does not establish TickTick throughput,
 focused-export acceleration, or the broader acceptance gates above.
+
+Focused-query supervisor diagnostics are described in [focused phase timing](focused-phase-timing.md); they do not change execution or receipt identities.
