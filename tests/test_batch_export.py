@@ -1,4 +1,5 @@
 """Coordinator durability/resource tests with a mocked native worker."""
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -116,3 +117,88 @@ class BatchExportTests(TestCase):
         self.run.side_effect=None
         with self.assertRaises(Error) as caught:self.export()
         self.assertEqual(caught.exception.code,'batch_result')
+
+    def rewrite_record(self, destination, entry, mutate):
+        """Model a corrupt assembled export whose index hash is self-consistent."""
+        path = destination/'functions'/(entry+'.json')
+        record = json.loads(path.read_text())
+        changed = mutate(record)
+        path.write_text(json.dumps(record if changed is None else changed))
+        index_path = destination/'index.json'
+        index = json.loads(index_path.read_text())
+        index['records'][entry]['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        index_path.write_text(json.dumps(index))
+
+    def test_rehashed_inconsistent_receipt_is_rejected_without_mutation(self):
+        mutations = {
+            'export': lambda r:r.update(export_id='different'),
+            'semantics': lambda r:r.update(semantics='isolated'),
+            'chunk_subset': lambda r:r.update(chunk_entries=['0x3','0x1']),
+            'chunk_type': lambda r:r.update(chunk_entries='0x3'),
+            'job_missing': lambda r:r.pop('job_id') and None,
+            'job_malformed': lambda r:r.update(job_id='../outside'),
+            'job_type': lambda r:r.update(job_id=[]),
+            'function_type': lambda r:r.update(function=[]),
+            'function_address': lambda r:r['function'].update(entry_va='0x1'),
+            'status': lambda r:r['function'].update(decompile_status='not_requested'),
+            'nonobject': lambda r:[],
+        }
+        result = self.export()
+        destination = Path(result['path'])
+        originals = {p:p.read_bytes() for p in destination.rglob('*.json')}
+        self.args.resume = True
+        for label, mutation in mutations.items():
+            with self.subTest(label=label):
+                for path, content in originals.items():path.write_bytes(content)
+                self.rewrite_record(destination, '0x3', mutation)
+                before = {p:p.read_bytes() for p in destination.rglob('*.json')}
+                self.run.reset_mock()
+                with self.assertRaises(Error) as caught:self.export()
+                self.assertEqual(caught.exception.code,'batch_record')
+                self.run.assert_not_called()
+                self.assertEqual(before,{p:p.read_bytes() for p in destination.rglob('*.json')})
+
+    def test_reordered_original_chunk_is_rejected(self):
+        destination = Path(self.export()['path'])
+        self.rewrite_record(destination,'0x1',lambda r:r.update(chunk_entries=['0x2','0x1']))
+        self.args.resume=True
+        self.run.reset_mock()
+        with self.assertRaises(Error) as caught:self.export()
+        self.assertEqual(caught.exception.code,'batch_record')
+        self.run.assert_not_called()
+
+    def test_same_chunk_cannot_combine_different_job_receipts(self):
+        destination = Path(self.export()['path'])
+        self.rewrite_record(destination,'0x2',lambda r:r.update(job_id='f'*32))
+        self.args.resume=True
+        self.run.reset_mock()
+        with self.assertRaises(Error) as caught:self.export()
+        self.assertEqual(caught.exception.code,'batch_record')
+        self.run.assert_not_called()
+
+    def test_not_requested_status_remains_resumable(self):
+        worker = self.worker
+        def no_pseudocode(*args,**kwargs):
+            result,job = worker(*args,**kwargs)
+            for function in result['functions']:
+                function.update(decompile_status='not_requested',pseudocode=None)
+            return result,job
+        self.run.side_effect=no_pseudocode
+        result=self.export()
+        self.assertEqual(result['outcomes'],{'not_requested':3})
+        self.args.resume=True
+        self.run.reset_mock()
+        self.assertEqual(self.export()['outcomes'],{'not_requested':3})
+        self.run.assert_not_called()
+
+    def test_invalid_index_status_type_has_structured_error(self):
+        destination = Path(self.export()['path'])
+        path = destination/'index.json'
+        index = json.loads(path.read_text())
+        index['records']['0x1']['status'] = []
+        path.write_text(json.dumps(index))
+        self.args.resume=True
+        self.run.reset_mock()
+        with self.assertRaises(Error) as caught:self.export()
+        self.assertEqual(caught.exception.code,'batch_index')
+        self.run.assert_not_called()

@@ -65,7 +65,11 @@ def export(project, image, args, deps):
             raise Error('batch_identity', 'Export identity mismatch')
     else:
         write_json(manifest, binding)
+    chunks = [entries[offset:offset+args.batch_size]
+              for offset in range(0, len(entries), args.batch_size)]
+    chunk_for_entry = {entry: chunk for chunk in chunks for entry in chunk}
     complete = {}
+    record_jobs = {}
     index_path = destination/'index.json'
     if index_path.exists():
         index = json_object(read_regular(index_path, 64*1024*1024), 'batch_index', 'Invalid export index')
@@ -74,23 +78,33 @@ def export(project, image, args, deps):
         if not isinstance(index.get('records'), dict):
             raise Error('batch_index', 'Invalid export record index')
         for entry, receipt in index['records'].items():
-            if entry not in entries or not isinstance(receipt, dict):
+            if entry not in chunk_for_entry or not isinstance(receipt, dict):
                 raise Error('batch_index', 'Invalid export record')
             data = read_regular(records/(entry+'.json'), 64*1024*1024)
             if hashlib.sha256(data).hexdigest() != receipt.get('sha256'):
                 raise Error('batch_integrity', 'Export record changed: '+entry)
-            if receipt.get('status') not in {'complete', 'not_requested'}:
+            if not isinstance(receipt.get('status'), str) or receipt['status'] not in {'complete', 'not_requested'}:
                 raise Error('batch_index', 'Invalid completed export record status')
+            record = json_object(data, 'batch_record', 'Invalid export record JSON')
+            function = record.get('function')
+            job_id = record.get('job_id')
+            if (record.get('export_id') != export_id or record.get('semantics') != SEMANTICS
+                    or record.get('chunk_entries') != chunk_for_entry[entry]
+                    or not isinstance(job_id, str) or not jobs.JOB_ID.fullmatch(job_id)
+                    or not isinstance(function, dict) or function.get('entry_va') != entry
+                    or function.get('decompile_status') != receipt['status']):
+                raise Error('batch_record', 'Export record provenance mismatch: '+entry)
+            record_jobs[entry] = job_id
             complete[entry] = receipt
     # Index commits complete original chunks only, never mix shared-session prefixes.
-    for offset in range(0, len(entries), args.batch_size):
-        chunk = entries[offset:offset+args.batch_size]
+    for chunk in chunks:
         count = sum(entry in complete for entry in chunk)
         if count not in (0, len(chunk)):
             raise Error('batch_index', 'Export index contains an incomplete shared-session chunk')
+        if count and len({record_jobs[entry] for entry in chunk}) != 1:
+            raise Error('batch_record', 'Export chunk combines records from different worker jobs')
     source_bytes = sum(path.stat().st_size for path in source.rglob('*') if path.is_file())
-    for offset in range(0, len(entries), args.batch_size):
-        chunk = entries[offset:offset+args.batch_size]
+    for chunk in chunks:
         if all(entry in complete for entry in chunk):
             continue
         # Replay the entire original chunk after interruption, preserving shared-session semantics.

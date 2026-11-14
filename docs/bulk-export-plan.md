@@ -174,3 +174,9 @@ Successful validated chunks commit records before deleting only their own
 throwaway Program copy; the reusable analyzed baseline and receipts remain.
 Failed workers retain diagnostics. Native validation and performance measurements
 are required before this checkpoint can be called ready.
+
+Resume hardening additionally validates each cached record's embedded export,
+function, original chunk and worker-session provenance, not only its index hash.
+See [batch resume validation](batch-resume-validation.md) for the bounded contract
+and corruption regression tests. This does not authenticate owner-editable files
+or change the export identity, engine semantics or cleanup policy.
