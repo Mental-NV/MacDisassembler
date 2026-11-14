@@ -187,3 +187,5 @@ measures warm setup amortization. It does not establish TickTick throughput,
 focused-export acceleration, or the broader acceptance gates above.
 
 Focused-query supervisor diagnostics are described in [focused phase timing](focused-phase-timing.md); they do not change execution or receipt identities.
+
+The next import-mode milestone is specified separately in [import-to-bulk preparation](import-bulk-preparation.md). It is design only and deliberately does not reuse isolated focused semantics.
